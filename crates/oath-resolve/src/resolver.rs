@@ -10,9 +10,10 @@ use std::sync::Arc;
 use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
+use node_semver::{Range, Version};
 use oath_fetch::{resolve_version, Packument, RegistryClient};
 
-use crate::graph::{DepGraph, DepNode};
+use crate::graph::{DepGraph, DepNode, PeerReport, PeerResolution};
 
 /// Check if a package is compatible with the current platform.
 /// os field uses npm convention: ["darwin", "linux"] = only these, ["!win32"] = all except win32
@@ -379,6 +380,16 @@ impl Resolver {
                     }
                 }
 
+                // Capture peer dependency declarations for the post-BFS pass
+                let peer_dependencies: std::collections::HashMap<String, String> =
+                    info.peer_dependencies.clone();
+                let optional_peers: std::collections::HashSet<String> = info
+                    .peer_dependencies_meta
+                    .iter()
+                    .filter(|(_, meta)| meta.optional)
+                    .map(|(name, _)| name.clone())
+                    .collect();
+
                 // Insert node into graph
                 graph.nodes.insert(
                     key,
@@ -392,6 +403,9 @@ impl Resolver {
                         has_install_script: info.has_install_script,
                         dev: pending.dev,
                         optional: pending.optional,
+                        peer_dependencies,
+                        optional_peers,
+                        resolved_peers: std::collections::HashMap::new(),
                     },
                 );
             }
@@ -429,6 +443,201 @@ impl Resolver {
             graph.package_count()
         );
 
+        // Post-BFS peer resolution pass
+        graph.peer_report = resolve_peers(&mut graph);
+
         Ok(graph)
     }
 }
+
+// ---------------------------------------------------------------------------
+// Peer dependency resolution helpers
+// ---------------------------------------------------------------------------
+
+/// Check if a version string satisfies a semver range string.
+/// Returns true if the range is unparseable (be lenient).
+fn semver_satisfies(version: &str, range: &str) -> bool {
+    // Strip pre-release build metadata before parsing
+    let version_clean = version.split('+').next().unwrap_or(version);
+    let v = match version_clean.parse::<Version>() {
+        Ok(v) => v,
+        Err(_) => return true, // unparseable version -> assume ok
+    };
+    let r = match range.parse::<Range>() {
+        Ok(r) => r,
+        Err(_) => return true, // unparseable range -> assume ok
+    };
+    r.satisfies(&v)
+}
+
+/// Build a map of child_key -> list of parent_keys that directly depend on it.
+fn build_parent_map(graph: &DepGraph) -> HashMap<String, Vec<String>> {
+    let mut parents: HashMap<String, Vec<String>> = HashMap::new();
+    for (parent_key, parent_node) in &graph.nodes {
+        for dep_key in parent_node.dependencies.values() {
+            parents
+                .entry(dep_key.clone())
+                .or_default()
+                .push(parent_key.clone());
+        }
+    }
+    parents
+}
+
+enum PeerLookupResult {
+    Found(String),   // peer key that satisfies the range
+    Conflict(String), // peer found but version doesn't satisfy
+    Missing,
+}
+
+/// Walk up the dependency chain from `pkg_key` looking for `peer_name`.
+fn find_peer_in_context(
+    graph: &DepGraph,
+    parents: &HashMap<String, Vec<String>>,
+    pkg_key: &str,
+    peer_name: &str,
+    peer_range: &str,
+) -> PeerLookupResult {
+    let mut visited: HashSet<String> = HashSet::new();
+    let mut queue: VecDeque<String> = VecDeque::new();
+
+    // Start by looking at direct parents of pkg_key
+    if let Some(parent_keys) = parents.get(pkg_key) {
+        for p in parent_keys {
+            queue.push_back(p.clone());
+        }
+    }
+
+    // Also check the roots directly (consumer's direct deps)
+    // because root packages may not appear as another node's dependency
+    for root_key in &graph.roots {
+        queue.push_back(root_key.clone());
+    }
+
+    while let Some(ancestor_key) = queue.pop_front() {
+        if !visited.insert(ancestor_key.clone()) {
+            continue;
+        }
+
+        let ancestor = match graph.nodes.get(&ancestor_key) {
+            Some(n) => n,
+            None => continue,
+        };
+
+        // Does this ancestor have peer_name as a resolved dependency?
+        if let Some(resolved_key) = ancestor.dependencies.get(peer_name) {
+            // Extract version from "name@version" or "@scope/name@version"
+            let found_version = extract_version_from_key(resolved_key);
+            if semver_satisfies(found_version, peer_range) {
+                return PeerLookupResult::Found(resolved_key.clone());
+            } else {
+                return PeerLookupResult::Conflict(found_version.to_string());
+            }
+        }
+
+        // Walk further up
+        if let Some(grandparents) = parents.get(&ancestor_key) {
+            for gp in grandparents {
+                if !visited.contains(gp) {
+                    queue.push_back(gp.clone());
+                }
+            }
+        }
+    }
+
+    // Check roots by name directly (peer_name matches install_name or node.name)
+    for root_key in &graph.roots {
+        let root_node = match graph.nodes.get(root_key) {
+            Some(n) => n,
+            None => continue,
+        };
+        let install_name = root_node.alias.as_deref().unwrap_or(&root_node.name);
+        if install_name == peer_name || root_node.name == peer_name {
+            if semver_satisfies(&root_node.version, peer_range) {
+                return PeerLookupResult::Found(root_key.clone());
+            } else {
+                return PeerLookupResult::Conflict(root_node.version.clone());
+            }
+        }
+    }
+
+    PeerLookupResult::Missing
+}
+
+/// Extract the version portion from a "name@version" or "@scope/name@version" key
+fn extract_version_from_key(key: &str) -> &str {
+    // For scoped packages like "@scope/name@1.0.0", the last '@' splits name from version
+    if let Some(at) = key.rfind('@') {
+        if at > 0 {
+            return &key[at + 1..];
+        }
+    }
+    key
+}
+
+/// Run the post-BFS peer resolution pass. Populates `resolved_peers` on each DepNode
+/// and returns a PeerReport describing what was found/missing/conflicting.
+fn resolve_peers(graph: &mut DepGraph) -> PeerReport {
+    let mut report = PeerReport::default();
+    let parents = build_parent_map(graph);
+
+    // Collect all (key, peer_name, peer_range, is_optional) tuples to avoid borrow issues
+    let work: Vec<(String, String, String, bool)> = graph
+        .nodes
+        .iter()
+        .flat_map(|(key, node)| {
+            node.peer_dependencies.iter().map(move |(pname, prange)| {
+                let optional = node.optional_peers.contains(pname);
+                (key.clone(), pname.clone(), prange.clone(), optional)
+            })
+        })
+        .collect();
+
+    for (pkg_key, peer_name, peer_range, is_optional) in work {
+        let result = find_peer_in_context(graph, &parents, &pkg_key, &peer_name, &peer_range);
+        match result {
+            PeerLookupResult::Found(peer_key) => {
+                if let Some(node) = graph.nodes.get_mut(&pkg_key) {
+                    node.resolved_peers.insert(peer_name.clone(), peer_key.clone());
+                }
+                report.satisfied.push(PeerResolution::Satisfied {
+                    required_by: pkg_key.clone(),
+                    peer_name,
+                    peer_key,
+                });
+            }
+            PeerLookupResult::Missing => {
+                if is_optional {
+                    report.optional_missing.push(peer_name);
+                } else {
+                    report.missing.push(PeerResolution::Missing {
+                        required_by: pkg_key,
+                        peer_name,
+                        range: peer_range,
+                    });
+                }
+            }
+            PeerLookupResult::Conflict(found_version) => {
+                if is_optional {
+                    // Conflict on an optional peer: warn but don't error
+                    report.conflicts.push(PeerResolution::Conflict {
+                        required_by: pkg_key,
+                        peer_name,
+                        range: peer_range,
+                        found_version,
+                    });
+                } else {
+                    report.conflicts.push(PeerResolution::Conflict {
+                        required_by: pkg_key,
+                        peer_name,
+                        range: peer_range,
+                        found_version,
+                    });
+                }
+            }
+        }
+    }
+
+    report
+}
+

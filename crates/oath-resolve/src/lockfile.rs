@@ -50,6 +50,12 @@ pub struct LockEntry {
     /// Alias name if installed under a different name
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub alias: Option<String>,
+    /// Peer dependencies declared by this package (name -> range)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub peer_dependencies: HashMap<String, String>,
+    /// Resolved peers (name -> "name@version" key)
+    #[serde(default, skip_serializing_if = "HashMap::is_empty")]
+    pub resolved_peers: HashMap<String, String>,
 }
 
 impl Lockfile {
@@ -69,6 +75,8 @@ impl Lockfile {
                     optional: node.optional,
                     has_install_script: node.has_install_script,
                     alias: node.alias.clone(),
+                    peer_dependencies: node.peer_dependencies.clone(),
+                    resolved_peers: node.resolved_peers.clone(),
                 },
             );
         }
@@ -130,6 +138,9 @@ impl Lockfile {
                     has_install_script: entry.has_install_script,
                     dev: entry.dev,
                     optional: entry.optional,
+                    peer_dependencies: entry.peer_dependencies.clone(),
+                    optional_peers: std::collections::HashSet::new(),
+                    resolved_peers: entry.resolved_peers.clone(),
                 },
             );
         }

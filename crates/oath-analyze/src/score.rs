@@ -236,6 +236,77 @@ fn compute_safety_score_inner(
         raw_score -= 25;
     }
 
+    // ---- Advanced obfuscation scoring (Feature 2) ----
+    // Base64 payload: High obfuscation findings containing "Base64 payload"
+    let base64_payload_count = report.findings.iter()
+        .filter(|f| f.kind == FindingKind::Obfuscation && f.message.contains("Base64 payload"))
+        .count() as i32;
+    if base64_payload_count > 0 {
+        let penalty = -(base64_payload_count * 30).min(60) as i16;
+        factors.push(ScoreFactor {
+            name: "base64_payload".into(),
+            weight: penalty,
+            description: format!("{} base64 payload detection(s) (Buffer.from/atob with encoded data)", base64_payload_count),
+        });
+        raw_score += penalty as i32;
+    }
+
+    // Dynamic require obfuscation
+    let dyn_req_count = report.findings.iter()
+        .filter(|f| f.kind == FindingKind::Obfuscation && f.message.contains("Dynamic require"))
+        .count() as i32;
+    if dyn_req_count > 0 {
+        let penalty = -(dyn_req_count * 25).min(50) as i16;
+        factors.push(ScoreFactor {
+            name: "dynamic_require_obfuscation".into(),
+            weight: penalty,
+            description: format!("{} dynamic require obfuscation(s) (concatenated module names)", dyn_req_count),
+        });
+        raw_score += penalty as i32;
+    }
+
+    // Hex string execution
+    let hex_exec_count = report.findings.iter()
+        .filter(|f| f.kind == FindingKind::Obfuscation && f.message.contains("Hex string execution"))
+        .count() as i32;
+    if hex_exec_count > 0 {
+        let penalty = -(hex_exec_count * 40).min(80) as i16;
+        factors.push(ScoreFactor {
+            name: "hex_string_execution".into(),
+            weight: penalty,
+            description: format!("{} hex string execution(s) (eval+fromCharCode or hex eval)", hex_exec_count),
+        });
+        raw_score += penalty as i32;
+    }
+
+    // Env exfiltration combo
+    let env_exfil_count = report.findings.iter()
+        .filter(|f| f.kind == FindingKind::DataExfiltration && f.message.contains("Environment variable exfiltration"))
+        .count() as i32;
+    if env_exfil_count > 0 {
+        let penalty = -(env_exfil_count * 35).min(70) as i16;
+        factors.push(ScoreFactor {
+            name: "env_exfiltration_combo".into(),
+            weight: penalty,
+            description: format!("{} file(s) with process.env read + HTTP request (possible exfiltration)", env_exfil_count),
+        });
+        raw_score += penalty as i32;
+    }
+
+    // Cryptocurrency wallet patterns
+    let crypto_wallet_count = report.findings.iter()
+        .filter(|f| f.kind == FindingKind::CryptoMiner && f.message.contains("wallet address"))
+        .count() as i32;
+    if crypto_wallet_count > 0 {
+        let penalty = -(crypto_wallet_count * 20).min(60) as i16;
+        factors.push(ScoreFactor {
+            name: "crypto_wallet_patterns".into(),
+            weight: penalty,
+            description: format!("{} cryptocurrency wallet address(es) detected", crypto_wallet_count),
+        });
+        raw_score += penalty as i32;
+    }
+
     // Directory-based checks
     let has_readme = package_dir.join("README.md").exists()
         || package_dir.join("readme.md").exists()

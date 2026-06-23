@@ -65,6 +65,18 @@ pub enum FindingKind {
     ConditionalPayload,
     /// Slopsquatting: package name matches common LLM-hallucinated patterns
     Slopsquatting,
+    /// Bracket notation property access to evade static string detection (process['env'])
+    BracketNotation,
+    /// CI environment targeting (process.env.CI, GITHUB_ACTIONS, TRAVIS, etc.)
+    CiTargeting,
+    /// Silent subprocess execution ({stdio: 'ignore'}) - near-definitive malware signal
+    SilentSubprocess,
+    /// Environment PATH or LD_PRELOAD overwrite -- redirects executables to malicious binaries
+    EnvPathOverwrite,
+    /// Module loader patching (Module._resolveFilename / require() hijacking)
+    ModuleLoaderPatch,
+    /// Native addon (.node binary / binding.gyp) -- bypasses JS sandbox entirely
+    NativeAddon,
 }
 
 impl std::fmt::Display for FindingKind {
@@ -84,6 +96,12 @@ impl std::fmt::Display for FindingKind {
             Self::CredentialHarvest => write!(f, "credential_harvest"),
             Self::ConditionalPayload => write!(f, "conditional_payload"),
             Self::Slopsquatting     => write!(f, "slopsquatting"),
+            Self::BracketNotation   => write!(f, "bracket_notation"),
+            Self::CiTargeting       => write!(f, "ci_targeting"),
+            Self::SilentSubprocess  => write!(f, "silent_subprocess"),
+            Self::EnvPathOverwrite  => write!(f, "env_path_overwrite"),
+            Self::ModuleLoaderPatch => write!(f, "module_loader_patch"),
+            Self::NativeAddon       => write!(f, "native_addon"),
         }
     }
 }
@@ -124,6 +142,8 @@ pub struct Capabilities {
     pub subprocess: bool,
     pub dynamic_exec: bool,
     pub has_install_scripts: bool,
+    /// Package contains a native addon (.node binary or binding.gyp)
+    pub native_addon: bool,
 }
 
 /// Per-package risk summary (lightweight, for lockfile/audit display)

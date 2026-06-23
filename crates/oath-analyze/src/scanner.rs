@@ -85,6 +85,10 @@ impl PackageScanner {
             let obfuscation_findings = detect_obfuscation(&source, &relative_path);
             all_findings.extend(obfuscation_findings);
 
+            // Advanced obfuscation / malware detection (Feature 2)
+            let advanced_findings = detect_advanced_obfuscation(&source, &relative_path);
+            all_findings.extend(advanced_findings);
+
             let mut analyzer = Analyzer::new(source, relative_path);
             analyzer.analyze()?;
             all_findings.extend(analyzer.findings);
@@ -240,6 +244,121 @@ fn detect_obfuscation(source: &str, relative_path: &str) -> Vec<Finding> {
                 snippet: None,
             });
         }
+    }
+
+    findings
+}
+
+/// Detect advanced obfuscation patterns added in Feature 2.
+/// Scores: base64 payload +30, dynamic require +25, hex string exec +40,
+/// env exfiltration combo +35, crypto wallet patterns +20 per occurrence.
+pub fn detect_advanced_obfuscation(source: &str, relative_path: &str) -> Vec<Finding> {
+    let mut findings = Vec::new();
+
+    // 1. Base64 payload detection
+    // Buffer.from('...', 'base64') or atob(...) with strings > 50 chars
+    let b64_buf_re = Regex::new(
+        r#"Buffer\.from\(\s*['"]([A-Za-z0-9+/=]{50,})['"]\s*,\s*['"]base64['"]\s*\)"#
+    ).unwrap();
+    let atob_re = Regex::new(
+        r#"atob\(\s*['"]([A-Za-z0-9+/=]{50,})['"]\s*\)"#
+    ).unwrap();
+
+    let b64_count = b64_buf_re.find_iter(source).count()
+        + atob_re.find_iter(source).count();
+
+    for _ in 0..b64_count {
+        findings.push(Finding {
+            kind: FindingKind::Obfuscation,
+            risk: RiskLevel::High,
+            message: "Base64 payload detected: Buffer.from(..., 'base64') or atob() with long string".to_string(),
+            file: relative_path.to_string(),
+            line: 1,
+            snippet: None,
+        });
+    }
+
+    // 2. Dynamic require obfuscation
+    // require([a,b].join('')), require('child_' + 'process'), template literals in require
+    let dyn_req_patterns: &[&str] = &[
+        r"require\s*\(\s*\[",         // require([...].join)
+        r"require\s*\('[^']*'\s*\+",  // require('str' + ...)
+        r#"require\s*\("[^"]*"\s*\+"#, // require("str" + ...)
+        r"require\s*\(`",             // require(`template`)
+    ];
+    for pat in dyn_req_patterns {
+        let re = Regex::new(pat).unwrap();
+        let count = re.find_iter(source).count();
+        for _ in 0..count {
+            findings.push(Finding {
+                kind: FindingKind::Obfuscation,
+                risk: RiskLevel::High,
+                message: "Dynamic require obfuscation: require() called with concatenated/computed string".to_string(),
+                file: relative_path.to_string(),
+                line: 1,
+                snippet: None,
+            });
+        }
+    }
+
+    // 3. Hex string execution: eval(String.fromCharCode(...)) or long hex strings in eval
+    let eval_charcode_re = Regex::new(r"eval\s*\(\s*String\.fromCharCode\s*\(").unwrap();
+    let eval_hex_re = Regex::new(r#"eval\s*\(\s*['"](?:\\x[0-9a-fA-F]{2}){20,}['"]\s*\)"#).unwrap();
+
+    let hex_exec_count = eval_charcode_re.find_iter(source).count()
+        + eval_hex_re.find_iter(source).count();
+
+    for _ in 0..hex_exec_count {
+        findings.push(Finding {
+            kind: FindingKind::Obfuscation,
+            risk: RiskLevel::Critical,
+            message: "Hex string execution: eval(String.fromCharCode(...)) or eval() with hex-encoded string".to_string(),
+            file: relative_path.to_string(),
+            line: 1,
+            snippet: None,
+        });
+    }
+
+    // 4. Environment variable exfiltration: process.env read + HTTP request in same file
+    let has_env_read = source.contains("process.env");
+    let has_http = source.contains("require('http')")
+        || source.contains("require(\"http\")")
+        || source.contains("require('https')")
+        || source.contains("require(\"https\")")
+        || source.contains("fetch(")
+        || source.contains("axios.")
+        || source.contains(".get(")
+        || source.contains(".post(");
+
+    if has_env_read && has_http {
+        findings.push(Finding {
+            kind: FindingKind::DataExfiltration,
+            risk: RiskLevel::High,
+            message: "Environment variable exfiltration: process.env access combined with HTTP requests in same file".to_string(),
+            file: relative_path.to_string(),
+            line: 1,
+            snippet: None,
+        });
+    }
+
+    // 5. Cryptocurrency wallet patterns
+    // Ethereum: 0x[0-9a-f]{40}
+    // Bitcoin: [13][a-km-zA-HJ-NP-Z1-9]{25,34}
+    let eth_wallet_re = Regex::new(r"\b0x[0-9a-fA-F]{40}\b").unwrap();
+    let btc_wallet_re = Regex::new(r"\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b").unwrap();
+
+    let wallet_count = eth_wallet_re.find_iter(source).count()
+        + btc_wallet_re.find_iter(source).count();
+
+    for _ in 0..wallet_count {
+        findings.push(Finding {
+            kind: FindingKind::CryptoMiner,
+            risk: RiskLevel::Medium,
+            message: "Cryptocurrency wallet address detected (Bitcoin/Ethereum pattern)".to_string(),
+            file: relative_path.to_string(),
+            line: 1,
+            snippet: None,
+        });
     }
 
     findings

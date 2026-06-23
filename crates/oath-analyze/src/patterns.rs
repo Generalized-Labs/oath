@@ -334,6 +334,97 @@ pub static PATTERNS: &[Pattern] = &[
         ],
     },
 
+    // ---- NEW PATTERN 1: BRACKET NOTATION ----
+    // process['env'] / require['child_process'] bypass StaticMemberExpression visitors.
+    // String-level pre-filter; AST visitor in analyzer.rs catches the ComputedMemberExpression.
+    Pattern {
+        id: "bracket-notation",
+        kind: FindingKind::BracketNotation,
+        risk: RiskLevel::Medium,
+        description: "Bracket notation property access used to evade static string detection",
+        strings: &[
+            "process['env']", "process[\"env\"]",
+            "require['child_process']", "require[\"child_process\"]",
+            "process['env']['", "process[\"env\"][\"",
+        ],
+    },
+
+    // ---- NEW PATTERN 3: CI ENVIRONMENT TARGETING ----
+    // Attackers check for CI=true to know they're running in a pipeline where tokens are populated.
+    Pattern {
+        id: "ci-env-targeting",
+        kind: FindingKind::CiTargeting,
+        risk: RiskLevel::High,
+        description: "Reads CI pipeline environment variables (often used to detect and steal tokens)",
+        strings: &[
+            "process.env.CI",
+            "process.env.GITHUB_ACTIONS",
+            "process.env.TRAVIS",
+            "process.env.CIRCLECI",
+            "process.env.GITHUB_TOKEN",
+            "process.env.NPM_TOKEN",
+            "GITHUB_ACTIONS",
+            "TRAVIS_BUILD",
+            "CIRCLECI",
+        ],
+    },
+
+    // ---- NEW PATTERN 5: ENV PATH OVERWRITE ----
+    // Overwriting PATH or LD_PRELOAD can redirect system executables to malicious binaries.
+    Pattern {
+        id: "env-path-overwrite",
+        kind: FindingKind::EnvPathOverwrite,
+        risk: RiskLevel::High,
+        description: "Overwrites process.env.PATH or LD_PRELOAD -- can redirect executables to malicious binaries",
+        strings: &[
+            "process.env.PATH =",
+            "process.env.PATH=",
+            "process.env['PATH']",
+            "process.env[\"PATH\"]",
+            "process.env.LD_PRELOAD",
+            "process.env['LD_PRELOAD']",
+            "process.env[\"LD_PRELOAD\"]",
+            "LD_PRELOAD=",
+        ],
+    },
+
+    // ---- NEW PATTERN 6: MODULE LOADER PATCH ----
+    // Hijacking require() intercepts ALL module loads by any code in the process.
+    Pattern {
+        id: "module-loader-patch",
+        kind: FindingKind::ModuleLoaderPatch,
+        risk: RiskLevel::High,
+        description: "Patches Node.js module loader (require hijacking) -- can intercept all module loads",
+        strings: &[
+            "Module._resolveFilename",
+            "Module.prototype.require",
+            "Module._load",
+            "require('module')._resolveFilename",
+            "require(\"module\")._resolveFilename",
+            "_resolveFilename",
+            "prototype.require =",
+        ],
+    },
+
+    // ---- NEW PATTERN 9: EXFIL DOMAINS ----
+    // Hardcoded domains used exclusively for data exfiltration / attacker infrastructure.
+    Pattern {
+        id: "exfil-domains",
+        kind: FindingKind::DataExfiltration,
+        risk: RiskLevel::Critical,
+        description: "Hardcoded data-exfil domain detected (ngrok, requestbin, pipedream, webhook.site, etc.)",
+        strings: &[
+            "ngrok.io",
+            "ngrok.app",
+            "requestbin",
+            "pipedream.net",
+            "webhook.site",
+            "burpcollaborator",
+            "duckdns.org",
+            "freemyip.com",
+        ],
+    },
+
     // ---- DNS EXFILTRATION ----
     // Only flag DNS resolve/lookup calls combined with attacker infrastructure domains,
     // or direct dns.resolve(btoa/Buffer combos (encoding data INTO a hostname).

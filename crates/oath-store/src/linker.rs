@@ -283,6 +283,40 @@ impl Linker {
             }
         }
 
+        // Phase 4b: Create peer dep symlinks within each package's .oath node_modules
+        for (key, node) in &graph.nodes {
+            for (_peer_name, peer_key) in &node.resolved_peers {
+                let peer_node = match graph.nodes.get(peer_key) {
+                    Some(n) => n,
+                    None => continue,
+                };
+                let peer_install_name = peer_node.alias.as_deref().unwrap_or(&peer_node.name);
+
+                let source = oath_dir
+                    .join(peer_key)
+                    .join("node_modules")
+                    .join(peer_install_name);
+                let target = oath_dir
+                    .join(key)
+                    .join("node_modules")
+                    .join(peer_install_name);
+
+                if source.exists() && !target.exists() {
+                    // Handle scoped peer package
+                    if peer_install_name.contains('/') {
+                        if let Some(scope) = peer_install_name.split('/').next() {
+                            std::fs::create_dir_all(
+                                oath_dir.join(key).join("node_modules").join(scope),
+                            )?;
+                        }
+                    }
+                    let relative = pathdiff_relative(&target, &source);
+                    std::os::unix::fs::symlink(&relative, &target).ok();
+                    result.symlinks += 1;
+                }
+            }
+        }
+
         // Phase 5: Create .bin symlinks for packages with bin entries
         let bin_dir = nm_dir.join(".bin");
         std::fs::create_dir_all(&bin_dir)?;
@@ -414,9 +448,43 @@ fn find_dep_in_graph<'a>(graph: &'a DepGraph, name: &str, _spec: &str) -> Option
     graph.nodes.values().find(|n| n.name == name)
 }
 
-/// Compute a relative path from `from` to `to`
-fn pathdiff_relative(_from: &Path, to: &Path) -> PathBuf {
-    // Simple relative path: go up from `from` and down to `to`
-    // For node_modules layout, we can use the absolute path
-    to.to_path_buf()
+/// Compute a relative path from `from` (symlink location) to `to` (symlink target).
+///
+/// For a symlink at `/a/b/c/link` pointing at `/a/b/d/e/target`:
+/// - Go up from the symlink's parent dir (/a/b/c) to the common ancestor (/a/b)
+/// - Then descend into d/e/target
+///
+/// Both paths should be absolute. `from` is the path of the symlink itself
+/// (not its parent directory).
+fn pathdiff_relative(from: &Path, to: &Path) -> PathBuf {
+    // We compute relative from the *parent* of `from` (the dir containing the symlink)
+    let from_dir = from.parent().unwrap_or(from);
+
+    // Collect components
+    let from_parts: Vec<_> = from_dir.components().collect();
+    let to_parts: Vec<_> = to.components().collect();
+
+    // Find the length of the common prefix
+    let common_len = from_parts
+        .iter()
+        .zip(to_parts.iter())
+        .take_while(|(a, b)| a == b)
+        .count();
+
+    let mut rel = PathBuf::new();
+    // Go up from from_dir to the common ancestor
+    for _ in common_len..from_parts.len() {
+        rel.push("..");
+    }
+    // Descend into the target
+    for part in &to_parts[common_len..] {
+        rel.push(part);
+    }
+
+    // If the result is empty (same dir), use "."
+    if rel.as_os_str().is_empty() {
+        PathBuf::from(".")
+    } else {
+        rel
+    }
 }
