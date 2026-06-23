@@ -50,4 +50,4 @@ bytes = "1"
 rusqlite = { version = "0.32", features = ["bundled"] }
 
 # WASM sandbox
-wasmtime = "29"
+# wasmtime = "29"  # removed: using OS-level sandbox (macOS Seatbelt / Linux Landlock)

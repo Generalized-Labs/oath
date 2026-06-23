@@ -14,10 +14,9 @@ path = "src/oathx.rs"
 
 [dependencies]
 oath-core = { path = "../oath-core" }
-oath-resolve = { path = "../oath-resolve" }
 oath-fetch = { path = "../oath-fetch" }
+oath-resolve = { path = "../oath-resolve" }
 oath-store = { path = "../oath-store" }
-oath-sandbox = { path = "../oath-sandbox" }
 oath-analyze = { path = "../oath-analyze" }
 
 clap.workspace = true

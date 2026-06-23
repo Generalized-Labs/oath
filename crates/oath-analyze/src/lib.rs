@@ -1,3 +1,14 @@
-//! oath-analyze: TODO
+//! oath-analyze: static analysis engine for npm packages
+//!
+//! Parses JS/TS source with OXC and detects what system resources
+//! each package actually accesses -- network, fs, subprocess, env,
+//! dynamic code execution, obfuscation.
 
-pub fn placeholder() {}
+pub mod analyzer;
+pub mod patterns;
+pub mod report;
+pub mod scanner;
+
+pub use analyzer::Analyzer;
+pub use report::{AnalysisReport, Capabilities, Finding, FindingKind, RiskLevel, PackageRisk};
+pub use scanner::PackageScanner;

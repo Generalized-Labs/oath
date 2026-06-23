@@ -7,6 +7,7 @@ use anyhow::{Context, Result};
 use std::path::{Path, PathBuf};
 
 /// The global content-addressable store
+#[derive(Clone)]
 pub struct ContentStore {
     /// Root directory of the store
     root: PathBuf,
@@ -59,6 +60,11 @@ impl ContentStore {
     /// Check if a package is already in the store
     pub fn has_package(&self, name: &str, version: &str) -> bool {
         self.package_dir(name, version).exists()
+    }
+
+    /// Root path of the store (for scanning)
+    pub fn store_path(&self) -> PathBuf {
+        self.root.clone()
     }
 
     /// Get the store path for a package
