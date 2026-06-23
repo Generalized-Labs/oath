@@ -19,6 +19,9 @@ pub struct DepGraph {
 pub struct DepNode {
     /// Package name
     pub name: String,
+    /// If this package was installed under an alias (npm:real-name@version),
+    /// this is the alias name. The `name` field holds the real package name.
+    pub alias: Option<String>,
     /// Exact resolved version
     pub version: String,
     /// Tarball URL

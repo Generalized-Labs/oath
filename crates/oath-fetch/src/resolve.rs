@@ -166,6 +166,7 @@ mod tests {
             modified: None,
             dist_tags,
             versions: version_map,
+            time: HashMap::new(),
         }
     }
 

@@ -47,6 +47,9 @@ pub struct LockEntry {
     /// Has install scripts
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub has_install_script: bool,
+    /// Alias name if installed under a different name
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub alias: Option<String>,
 }
 
 impl Lockfile {
@@ -65,6 +68,7 @@ impl Lockfile {
                     dev: node.dev,
                     optional: node.optional,
                     has_install_script: node.has_install_script,
+                    alias: node.alias.clone(),
                 },
             );
         }
@@ -118,6 +122,7 @@ impl Lockfile {
                 key.clone(),
                 DepNode {
                     name: name.clone(),
+                    alias: entry.alias.clone(),
                     version: entry.version.clone(),
                     resolved: entry.resolved.clone(),
                     integrity: entry.integrity.clone(),

@@ -42,6 +42,12 @@ enum Commands {
         /// Skip all prompts and approve everything (including install scripts)
         #[arg(short = 'y', long)]
         yes: bool,
+        /// Prompt before running install scripts (old behavior; default is to block)
+        #[arg(long)]
+        run_scripts: bool,
+        /// Minimum release age to warn about (e.g. '7d', '24h', '30d')
+        #[arg(long)]
+        min_age: Option<String>,
     },
     /// Add a dependency
     Add {
@@ -69,6 +75,9 @@ enum Commands {
         allow_write: Option<Vec<String>>,
         #[arg(long)]
         allow_env: Option<Vec<String>>,
+        /// Minimum release age required (e.g. '7d', '24h', '30d'). Block if newer.
+        #[arg(long)]
+        min_age: Option<String>,
     },
     /// Scan installed packages for malicious behavior
     Audit {
@@ -121,8 +130,10 @@ async fn main() -> Result<()> {
             dry_run,
             no_audit,
             yes,
+            run_scripts,
+            min_age: _min_age,
         } => {
-            cmd_install(packages, dev, dry_run, !no_audit, yes).await?;
+            cmd_install(packages, dev, dry_run, !no_audit, yes, run_scripts).await?;
         }
         Commands::Add { package, dev } => {
             cmd_add(&package, dev).await?;
@@ -161,8 +172,9 @@ async fn main() -> Result<()> {
             allow_read,
             allow_write,
             allow_env,
+            min_age,
         } => {
-            cmd_exec(&package, &args, allow_net, allow_read, allow_write, allow_env).await?;
+            cmd_exec(&package, &args, allow_net, allow_read, allow_write, allow_env, min_age.as_deref()).await?;
         }
         Commands::Score { package } => {
             cmd_score(&package).await?;
@@ -186,6 +198,7 @@ async fn cmd_install(
     dry_run: bool,
     run_audit: bool,
     yes_flag: bool,
+    run_scripts: bool,
 ) -> Result<()> {
     let start = Instant::now();
 
@@ -209,6 +222,14 @@ async fn cmd_install(
             "project".to_string(),
             "0.0.0".to_string(),
         )
+    };
+
+    let trusted_deps: HashSet<String> = {
+        let pkg = read_package_json().unwrap_or_default();
+        pkg.get("trustedDependencies")
+            .and_then(|v| v.as_array())
+            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .unwrap_or_default()
     };
 
     let total_direct = deps.len() + dev_deps.len();
@@ -235,7 +256,7 @@ async fn cmd_install(
             let client = RegistryClient::default_client()?;
             let options = ResolveOptions {
                 include_dev: true,
-                include_optional: false,
+                include_optional: true,
                 max_depth: 256,
             };
             let mut resolver = Resolver::new(client, options);
@@ -253,7 +274,7 @@ async fn cmd_install(
         let client = RegistryClient::default_client()?;
         let options = ResolveOptions {
             include_dev: true,
-            include_optional: false,
+            include_optional: true,
             max_depth: 256,
         };
         let mut resolver = Resolver::new(client, options);
@@ -353,20 +374,13 @@ async fn cmd_install(
     let policy = OathPolicy::load();
     let store_path = store.store_path();
 
+    let mut scripts_blocked = 0;
     for (_key, node) in &graph.nodes {
         if !node.has_install_script {
             continue;
         }
 
-        // Find the package in the store
-        let pkg_dir = store_path
-            .join(node.name.replace('/', "+"))
-            .join(&node.version);
-        if !pkg_dir.exists() {
-            continue;
-        }
-
-        // Policy hard-block: banned packages should not run scripts (or install at all)
+        // Policy hard-block
         if policy.is_package_banned(&node.name) {
             println!(
                 "  oath: blocked install script for banned package {}@{}",
@@ -375,47 +389,60 @@ async fn cmd_install(
             continue;
         }
 
-        // Scan to learn capabilities
-        let report = match PackageScanner::scan(&node.name, &node.version, &pkg_dir) {
-            Ok(r) => r,
-            Err(_) => continue,
-        };
-
-        // Determine the script string to display
-        let script_display = detect_install_script(&pkg_dir)
-            .unwrap_or_else(|| "node install.js".to_string());
-
-        let decision = prompts::prompt_install_script(
-            &node.name,
-            &node.version,
-            &script_display,
-            &report.capabilities,
-            yes_flag,
-            &policy,
-        );
-
-        match decision {
-            prompts::ScriptDecision::Allow | prompts::ScriptDecision::Always => {
-                println!(
-                    "  oath: running install script for {}@{}",
-                    node.name, node.version
-                );
+        // Trusted: run without prompting
+        if trusted_deps.contains(&node.name) || yes_flag {
+            let pkg_dir = store_path
+                .join(node.name.replace('/', "+"))
+                .join(&node.version);
+            if pkg_dir.exists() {
                 run_install_script(&node.name, &pkg_dir);
             }
-            prompts::ScriptDecision::Sandbox => {
-                println!(
-                    "  oath: running sandboxed install script for {}@{}",
-                    node.name, node.version
-                );
-                run_install_script_sandboxed(&node.name, &pkg_dir);
-            }
-            prompts::ScriptDecision::Deny => {
-                println!(
-                    "  oath: skipped install script for {}@{}",
-                    node.name, node.version
-                );
-            }
+            continue;
         }
+
+        // --run-scripts: prompt for each (old behavior)
+        if run_scripts {
+            let pkg_dir = store_path
+                .join(node.name.replace('/', "+"))
+                .join(&node.version);
+            if !pkg_dir.exists() {
+                continue;
+            }
+            let report = match PackageScanner::scan(&node.name, &node.version, &pkg_dir) {
+                Ok(r) => r,
+                Err(_) => continue,
+            };
+            let script_display = detect_install_script(&pkg_dir)
+                .unwrap_or_else(|| "node install.js".to_string());
+            let decision = prompts::prompt_install_script(
+                &node.name,
+                &node.version,
+                &script_display,
+                &report.capabilities,
+                false,
+                &policy,
+            );
+            match decision {
+                prompts::ScriptDecision::Allow | prompts::ScriptDecision::Always => {
+                    run_install_script(&node.name, &pkg_dir);
+                }
+                prompts::ScriptDecision::Sandbox => {
+                    run_install_script_sandboxed(&node.name, &pkg_dir);
+                }
+                prompts::ScriptDecision::Deny => {}
+            }
+            continue;
+        }
+
+        // Default: BLOCK (silent, just count)
+        scripts_blocked += 1;
+    }
+
+    if scripts_blocked > 0 {
+        println!(
+            "  {} install script(s) blocked (add to trustedDependencies or use --run-scripts)",
+            scripts_blocked
+        );
     }
 
     // Static analysis on newly downloaded packages
@@ -672,7 +699,7 @@ async fn cmd_add(package: &str, _dev: bool) -> Result<()> {
 
     std::fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
     println!("oath: added {name}@{} ({key})", resolved.version);
-    cmd_install(vec![], false, false, true, false).await
+    cmd_install(vec![], false, false, true, false, false).await
 }
 
 // ---- RUN --------------------------------------------------------------------
@@ -1400,6 +1427,7 @@ async fn cmd_exec(
     allow_read: Option<Vec<String>>,
     allow_write: Option<Vec<String>>,
     allow_env: Option<Vec<String>>,
+    min_age: Option<&str>,
 ) -> Result<()> {
     use oath_analyze::{PackageScanner, RiskLevel};
     use std::io::Write;
@@ -1431,6 +1459,43 @@ async fn cmd_exec(
     let version = resolved.version.to_string();
     let info = resolved.info;
 
+    // -- Release age check --
+    // The abbreviated packument doesn't include time; fetch from full packument
+    let publish_time_str = {
+        let full = client.fetch_packument_full(&pkg_name).await.ok();
+        full.and_then(|v| {
+            v.get("time")
+                .and_then(|t| t.get(&version))
+                .and_then(|s| s.as_str().map(String::from))
+        })
+    };
+    if let Some(ref pts) = publish_time_str {
+        if let Some(age_secs) = parse_iso_age_secs(pts) {
+            let age_days = age_secs / 86400;
+            let age_hours = age_secs / 3600;
+            if age_days > 0 {
+                println!("  published {} days ago", age_days);
+            } else {
+                println!("  published {} hours ago", age_hours);
+            }
+
+            if let Some(min_age_str) = min_age {
+                if let Some(min_age_secs) = parse_duration_secs(min_age_str) {
+                    if age_secs < min_age_secs {
+                        let min_days = min_age_secs / 86400;
+                        anyhow::bail!(
+                            "oath exec: BLOCKED -- {}@{} was published only {} days ago (minimum required: {} days)",
+                            pkg_name, version, age_days,
+                            if min_days > 0 { min_days } else { 1 }
+                        );
+                    }
+                }
+            }
+        }
+    } else if min_age.is_some() {
+        println!("  warning: no publish time available for {}@{}", pkg_name, version);
+    }
+
     // Check store first
     let store = ContentStore::default_store()?;
     let pkg_dir = if store.has_package(&pkg_name, &version) {
@@ -1460,7 +1525,7 @@ async fn cmd_exec(
     deps_map.insert(pkg_name.clone(), version.clone());
     let options = ResolveOptions {
         include_dev: false,
-        include_optional: false,
+        include_optional: true,
         max_depth: 256,
     };
     let mut resolver = Resolver::new(RegistryClient::default_client()?, options);
@@ -1711,3 +1776,72 @@ fn format_downloads(n: u64) -> String {
         n.to_string()
     }
 }
+
+/// Parse an ISO 8601 datetime string and return seconds since publication.
+/// Handles formats like "2024-01-15T10:30:00.000Z" or "2024-01-15T10:30:00Z"
+fn parse_iso_age_secs(iso: &str) -> Option<u64> {
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    // Extract YYYY-MM-DDTHH:MM:SS from the string
+    let s = iso.trim();
+    if s.len() < 19 {
+        return None;
+    }
+    let year: u64 = s[0..4].parse().ok()?;
+    let month: u64 = s[5..7].parse().ok()?;
+    let day: u64 = s[8..10].parse().ok()?;
+    let hour: u64 = s[11..13].parse().ok()?;
+    let min: u64 = s[14..16].parse().ok()?;
+    let sec: u64 = s[17..19].parse().ok()?;
+
+    // Convert to approximate unix timestamp (good enough for age comparison)
+    // Days in each month (non-leap)
+    let days_before_month: [u64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
+    let mut days = (year - 1970) * 365 + (year - 1969) / 4; // approx leap years
+    if month >= 1 && month <= 12 {
+        days += days_before_month[(month - 1) as usize];
+    }
+    // Add leap day for current year if applicable
+    if month > 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+        days += 1;
+    }
+    days += day - 1;
+    let publish_ts = days * 86400 + hour * 3600 + min * 60 + sec;
+
+    let now_ts = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .ok()?
+        .as_secs();
+
+    if now_ts > publish_ts {
+        Some(now_ts - publish_ts)
+    } else {
+        Some(0)
+    }
+}
+
+/// Parse a human duration string like "7d", "24h", "30d" into seconds.
+fn parse_duration_secs(s: &str) -> Option<u64> {
+    let s = s.trim();
+    if s.is_empty() {
+        return None;
+    }
+    let (num_str, unit) = if s.ends_with('d') {
+        (&s[..s.len() - 1], 'd')
+    } else if s.ends_with('h') {
+        (&s[..s.len() - 1], 'h')
+    } else if s.ends_with('w') {
+        (&s[..s.len() - 1], 'w')
+    } else {
+        // Default to days if no unit
+        (s, 'd')
+    };
+    let num: u64 = num_str.parse().ok()?;
+    match unit {
+        'h' => Some(num * 3600),
+        'd' => Some(num * 86400),
+        'w' => Some(num * 7 * 86400),
+        _ => None,
+    }
+}
+

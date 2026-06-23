@@ -58,10 +58,10 @@ impl RegistryClient {
     pub fn new(config: RegistryConfig) -> Result<Self> {
         let mut headers = HeaderMap::new();
 
-        // Use abbreviated metadata by default (much smaller responses)
+        // Use full metadata to get optionalDependencies, peerDependencies, os, cpu
         headers.insert(
             ACCEPT,
-            HeaderValue::from_static("application/vnd.npm.install-v1+json"),
+            HeaderValue::from_static("application/json"),
         );
 
         if let Some(ref token) = config.token {

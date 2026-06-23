@@ -22,6 +22,10 @@ pub struct Packument {
     /// All published versions with their metadata
     #[serde(default)]
     pub versions: HashMap<String, VersionInfo>,
+
+    /// Publish timestamps per version (version -> ISO 8601 datetime)
+    #[serde(default)]
+    pub time: HashMap<String, String>,
 }
 
 /// Per-version metadata (abbreviated form)

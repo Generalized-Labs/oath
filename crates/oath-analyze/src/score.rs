@@ -32,8 +32,104 @@ fn score_to_grade(score: u8) -> char {
     }
 }
 
+/// Context for scoring -- reduces false positives by understanding what the package IS
+#[derive(Debug, Clone, Default)]
+pub struct ScoreContext {
+    /// Whether this is a devDependency (build tool, test framework, etc.)
+    pub is_dev: bool,
+    /// Weekly download count from registry (0 = unknown)
+    pub weekly_downloads: u64,
+    /// Package age in days (0 = unknown)
+    pub age_days: u32,
+}
+
+/// Known-safe package patterns: packages whose ENTIRE PURPOSE is the flagged capability.
+/// We suppress capability penalties for these.
+const KNOWN_NETWORK_PACKAGES: &[&str] = &[
+    "axios", "node-fetch", "undici", "got", "request", "superagent", "ky",
+    "cross-fetch", "isomorphic-fetch", "whatwg-fetch", "needle", "phin",
+];
+const KNOWN_FS_PACKAGES: &[&str] = &[
+    "fs-extra", "graceful-fs", "glob", "globby", "chokidar", "rimraf",
+    "del", "mkdirp", "make-dir", "find-up", "locate-path", "fast-glob",
+];
+const KNOWN_ENV_PACKAGES: &[&str] = &[
+    "dotenv", "cross-env", "env-ci", "envinfo",
+];
+const KNOWN_EXEC_PACKAGES: &[&str] = &[
+    "execa", "cross-spawn", "shelljs", "npm-run-all",
+];
+
+fn is_known_safe_for_capability(name: &str, capability: &str) -> bool {
+    match capability {
+        "network" => KNOWN_NETWORK_PACKAGES.contains(&name),
+        "filesystem" => KNOWN_FS_PACKAGES.contains(&name),
+        "env_access" => KNOWN_ENV_PACKAGES.contains(&name),
+        "subprocess" | "dynamic_exec" => KNOWN_EXEC_PACKAGES.contains(&name),
+        _ => false,
+    }
+}
+
+/// Compute a safety score with context awareness (preferred)
+pub fn compute_safety_score_contextual(
+    report: &AnalysisReport,
+    package_dir: &Path,
+    ctx: &ScoreContext,
+) -> SafetyScore {
+    let mut score = compute_safety_score_inner(report, package_dir, Some(ctx));
+
+    // Dev dependency discount: reduce penalties by 40% (build tools SHOULD have capabilities)
+    if ctx.is_dev && score.score < 100 {
+        let lost = 100i32 - score.score as i32;
+        let recovered = (lost * 40) / 100;
+        score.score = (score.score as i32 + recovered).min(100).max(0) as u8;
+        score.grade = score_to_grade(score.score);
+        if recovered > 0 {
+            score.factors.push(ScoreFactor {
+                name: "dev_dependency".into(),
+                weight: recovered as i16,
+                description: "Dev dependency (reduced severity)".into(),
+            });
+        }
+    }
+
+    // Popularity trust: >1M weekly downloads + >1 year old = small boost
+    if ctx.weekly_downloads > 1_000_000 && ctx.age_days > 365 {
+        let boost = 5i16;
+        score.score = (score.score as i32 + boost as i32).min(100) as u8;
+        score.grade = score_to_grade(score.score);
+        score.factors.push(ScoreFactor {
+            name: "established_package".into(),
+            weight: boost,
+            description: "High downloads + established (>1yr)".into(),
+        });
+    }
+
+    // Suspicion boost: <100 weekly downloads + <30 days old = extra penalty
+    if ctx.weekly_downloads > 0 && ctx.weekly_downloads < 100 && ctx.age_days < 30 {
+        let penalty = -15i16;
+        score.score = (score.score as i32 + penalty as i32).max(0) as u8;
+        score.grade = score_to_grade(score.score);
+        score.factors.push(ScoreFactor {
+            name: "new_unpopular".into(),
+            weight: penalty,
+            description: "New package with very few downloads".into(),
+        });
+    }
+
+    score
+}
+
 /// Compute a safety score for a package based on analysis results and package directory contents.
 pub fn compute_safety_score(report: &AnalysisReport, package_dir: &Path) -> SafetyScore {
+    compute_safety_score_inner(report, package_dir, None)
+}
+
+fn compute_safety_score_inner(
+    report: &AnalysisReport,
+    package_dir: &Path,
+    ctx: Option<&ScoreContext>,
+) -> SafetyScore {
     let mut factors: Vec<ScoreFactor> = Vec::new();
     let mut raw_score: i32 = 100;
 
@@ -93,7 +189,9 @@ pub fn compute_safety_score(report: &AnalysisReport, package_dir: &Path) -> Safe
         raw_score += penalty as i32;
     }
 
-    // Capability-based penalties
+    // Capability-based penalties (suppress for known-safe packages)
+    let pkg_name = &report.package_name;
+    
     if report.capabilities.has_install_scripts {
         factors.push(ScoreFactor {
             name: "install_scripts".into(),
@@ -103,7 +201,10 @@ pub fn compute_safety_score(report: &AnalysisReport, package_dir: &Path) -> Safe
         raw_score -= 10;
     }
 
-    if report.capabilities.network && report.capabilities.env_access {
+    if report.capabilities.network && report.capabilities.env_access
+        && !is_known_safe_for_capability(pkg_name, "network")
+        && !is_known_safe_for_capability(pkg_name, "env_access")
+    {
         factors.push(ScoreFactor {
             name: "network_env_combo".into(),
             weight: -20,
@@ -112,7 +213,7 @@ pub fn compute_safety_score(report: &AnalysisReport, package_dir: &Path) -> Safe
         raw_score -= 20;
     }
 
-    if report.capabilities.dynamic_exec {
+    if report.capabilities.dynamic_exec && !is_known_safe_for_capability(pkg_name, "dynamic_exec") {
         factors.push(ScoreFactor {
             name: "dynamic_exec".into(),
             weight: -10,
