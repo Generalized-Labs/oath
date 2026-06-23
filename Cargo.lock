@@ -1522,6 +1522,7 @@ dependencies = [
  "oath-store",
  "serde",
  "serde_json",
+ "tempfile",
  "tokio",
  "tracing",
  "tracing-subscriber",
@@ -1628,11 +1629,14 @@ dependencies = [
  "blake3",
  "flate2",
  "oath-core",
- "rusqlite",
+ "oath-fetch",
+ "oath-resolve",
  "serde",
  "serde_json",
  "tar",
- "zstd",
+ "tempfile",
+ "tokio",
+ "tracing",
 ]
 
 [[package]]
