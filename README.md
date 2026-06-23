@@ -1,104 +1,126 @@
 # oath
 
-Secure package management for the JavaScript ecosystem.
+**npm runs code. oath asks permission first.**
 
-**oath** is a drop-in replacement for npm/npx that makes security structural, not bolted-on. Written in Rust.
+---
 
-## Why
+- Scans every package for malware before it touches your machine. 14 pattern detectors. Zero trust.
+- Drop-in replacement for npm/npx. Same commands, same registry, full security analysis on every install and exec.
+- Safety scores (0-100) for any package. Know what you're importing before you import it.
 
-Every week there's another npm supply chain attack. The current approach (npm + Socket/Snyk bolted on) is failing:
-- `npm audit` has a 99% false positive rate. Developers ignore it.
-- Install scripts run arbitrary code with full system access.
-- Typosquatting is trivially easy.
-- No transparency log. You trust the registry blindly.
-- npx executes untrusted code with zero sandboxing.
+## Install
 
-Oath fixes this at the architecture level.
+```sh
+curl -fsSL https://oath.dev/install.sh | sh
+```
+
+Or via Homebrew:
+
+```sh
+brew install generalized-labs/tap/oath
+```
+
+## Usage
+
+```sh
+# Install dependencies (scans everything, blocks threats)
+oath install
+
+# Execute a package (prompts for permissions first)
+oath exec cowsay "hello world"
+
+# Check a package safety score before you commit to it
+oath score express
+#  express@5.2.1 -- 96/100 (A)
+
+# Deep package intel
+oath info lodash
+
+# Full audit of your dependency tree
+oath audit
+```
+
+## npx vs oath exec
+
+```
+┌─────────────────────────────────┬──────────────────────────────────────────────┐
+│  $ npx cowsay "hi"              │  $ oath exec cowsay "hi"                     │
+│                                 │                                              │
+│  Need to install the following  │  oath | fetching cowsay@1.6.0                │
+│  packages: cowsay@1.6.0        │  oath | scanning 1 package (14 detectors)    │
+│  Ok to proceed? (y)            │  oath | score: 88/100 (B+)                   │
+│                                 │  oath | capabilities: [fs:read, env:read]    │
+│                                 │  oath | no malicious patterns detected       │
+│  (runs immediately)             │                                              │
+│                                 │  Allow cowsay to run? [y/n/always]           │
+│                                 │                                              │
+│                                 │  (runs after informed consent)               │
+└─────────────────────────────────┴──────────────────────────────────────────────┘
+```
+
+npx tells you a name. oath tells you what it does.
+
+## Benchmarks
+
+Machine: Apple M1, macOS 15.6.1, Node v22.12.0
+
+### Cold install (empty cache, no lockfile)
+
+| Project | npm | bun | oath | Security overhead |
+|---------|-----|-----|------|-------------------|
+| 3 deps | 1.78s | 0.23s | 0.22s | scans 3 packages |
+| 93 deps | 3.12s | 0.72s | 2.35s | scans 7 new packages |
+| 163 deps | 5.43s | 1.08s | 8.60s | scans 69 new packages |
+
+### Package execution (npx vs oath exec)
+
+| Scenario | npx | oath exec | Notes |
+|----------|-----|-----------|-------|
+| Cold (cowsay) | 2.67s | 2.44s | oath fetches, resolves, scans, runs |
+| Warm (cached) | 2.23s | 2.24s | oath still scans before running |
+
+oath exec matches npx speed while running full security analysis on every invocation.
 
 ## How it works
 
-### Capability-based permissions
-Every package declares what it needs:
+**Parser.** OXC-based JavaScript/TypeScript parser. Fast enough to scan hundreds of files during install without you noticing.
 
-```json
-{
-  "name": "my-package",
-  "oath": {
-    "permissions": {
-      "net": ["api.example.com"],
-      "fs_read": ["./config/**"],
-      "fs_write": ["./dist/**"],
-      "env": ["NODE_ENV", "API_KEY"]
-    }
-  }
-}
-```
+**Detectors.** 14 pattern detectors run in parallel: data exfiltration, credential harvesting, crypto mining, install script abuse, dynamic code execution, typosquatting signals, obfuscated payloads, and more.
 
-Packages without a `oath.permissions` declaration are treated as untrusted and sandboxed to pure computation.
+**Store.** BLAKE3 content-addressable package store. Deduplicated. Integrity-verified. Every artifact is hashed before it enters the cache.
 
-### Sandboxed execution (oathx)
+**Resolver.** Level-parallel dependency resolver. Resolves entire dependency levels concurrently instead of walking the tree node-by-node.
 
-```sh
-# npx runs arbitrary code with full access. oathx doesn't.
-oathx create-react-app my-app
-
-# oathx shows what the package wants:
-#   create-react-app requires:
-#     network: registry.npmjs.org, github.com
-#     write: ./my-app/**
-#     run: git
-#   [Allow? y/n/always]
-
-# Explicit grants (like Deno):
-oathx --allow-net --allow-write=./out some-tool
-```
-
-### Transparency log
-
-Every package version is recorded in an append-only Merkle tree (Go's sumdb design). Any mirror is trustworthy because integrity is math, not trust.
-
-```sh
-oath verify            # check entire lockfile against transparency log
-oath verify express    # check single package
-```
-
-### Anti-typosquatting
-
-Publishing `expresss`, `expres`, or `3xpress` is automatically flagged and reviewed. Levenshtein distance + visual similarity + homoglyph detection.
-
-### Built-in behavioral analysis
-
-No $50K/year Socket.dev subscription needed. Oath analyzes packages at publish time:
-- Does it access the network? (and where?)
-- Does it read environment variables?
-- Does it spawn subprocesses?
-- Does the declared permissions match actual behavior?
-
-Mismatch = blocked or flagged.
-
-## Architecture
+## All commands
 
 ```
-crates/
-  oath-cli/       # `oath` and `oathx` binaries
-  oath-core/      # Shared types, permissions, config
-  oath-resolve/   # Dependency resolution
-  oath-fetch/     # Registry client + download
-  oath-store/     # Content-addressable local store
-  oath-sandbox/   # WASM/permission enforcement
-  oath-registry/  # Self-hostable registry server
-  oath-index/     # Transparency log (Merkle tree)
-  oath-analyze/   # Behavioral analysis engine
+oath install      Install dependencies from package.json
+oath add          Add a package
+oath remove       Remove a package
+oath run          Run a script from package.json
+oath exec         Execute a package binary (npx replacement)
+oath audit        Audit installed dependencies
+oath score        Get safety score for any package
+oath info         Package metadata and capability report
+oath perms        View/manage permission grants
+oath init         Initialize a new project
+oath why          Explain why a package is in your tree
+oath licenses     List all licenses in your dependency tree
+oath verify       Verify integrity of installed packages
+oath graph        Visualize your dependency graph
 ```
 
-## Compatibility
+## Roadmap
 
-Oath reads `package.json` and resolves from the npm registry. Your existing projects work without changes. The `oath` section in package.json is optional and additive.
+- [ ] ML-based malware classifier trained on known supply chain attacks
+- [ ] Private registry support (Artifactory, Verdaccio, GitHub Packages)
+- [ ] CI integration (GitHub Actions, GitLab CI) with policy-as-code
+- [ ] VS Code extension with inline safety scores
 
-## Status
+## The name
 
-Early development. Not ready for production use.
+Packages swear an oath. Break it, get blocked.
 
 ## License
 
-MIT - Generalized Labs
+MIT
