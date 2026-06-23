@@ -1,8 +1,8 @@
-# ward
+# oath
 
 Secure package management for the JavaScript ecosystem.
 
-**ward** is a drop-in replacement for npm/npx that makes security structural, not bolted-on. Written in Rust.
+**oath** is a drop-in replacement for npm/npx that makes security structural, not bolted-on. Written in Rust.
 
 ## Why
 
@@ -13,7 +13,7 @@ Every week there's another npm supply chain attack. The current approach (npm + 
 - No transparency log. You trust the registry blindly.
 - npx executes untrusted code with zero sandboxing.
 
-Ward fixes this at the architecture level.
+Oath fixes this at the architecture level.
 
 ## How it works
 
@@ -23,7 +23,7 @@ Every package declares what it needs:
 ```json
 {
   "name": "my-package",
-  "ward": {
+  "oath": {
     "permissions": {
       "net": ["api.example.com"],
       "fs_read": ["./config/**"],
@@ -34,15 +34,15 @@ Every package declares what it needs:
 }
 ```
 
-Packages without a `ward.permissions` declaration are treated as untrusted and sandboxed to pure computation.
+Packages without a `oath.permissions` declaration are treated as untrusted and sandboxed to pure computation.
 
-### Sandboxed execution (wardx)
+### Sandboxed execution (oathx)
 
 ```sh
-# npx runs arbitrary code with full access. wardx doesn't.
-wardx create-react-app my-app
+# npx runs arbitrary code with full access. oathx doesn't.
+oathx create-react-app my-app
 
-# wardx shows what the package wants:
+# oathx shows what the package wants:
 #   create-react-app requires:
 #     network: registry.npmjs.org, github.com
 #     write: ./my-app/**
@@ -50,7 +50,7 @@ wardx create-react-app my-app
 #   [Allow? y/n/always]
 
 # Explicit grants (like Deno):
-wardx --allow-net --allow-write=./out some-tool
+oathx --allow-net --allow-write=./out some-tool
 ```
 
 ### Transparency log
@@ -58,8 +58,8 @@ wardx --allow-net --allow-write=./out some-tool
 Every package version is recorded in an append-only Merkle tree (Go's sumdb design). Any mirror is trustworthy because integrity is math, not trust.
 
 ```sh
-ward verify            # check entire lockfile against transparency log
-ward verify express    # check single package
+oath verify            # check entire lockfile against transparency log
+oath verify express    # check single package
 ```
 
 ### Anti-typosquatting
@@ -68,7 +68,7 @@ Publishing `expresss`, `expres`, or `3xpress` is automatically flagged and revie
 
 ### Built-in behavioral analysis
 
-No $50K/year Socket.dev subscription needed. Ward analyzes packages at publish time:
+No $50K/year Socket.dev subscription needed. Oath analyzes packages at publish time:
 - Does it access the network? (and where?)
 - Does it read environment variables?
 - Does it spawn subprocesses?
@@ -80,20 +80,20 @@ Mismatch = blocked or flagged.
 
 ```
 crates/
-  ward-cli/       # `ward` and `wardx` binaries
-  ward-core/      # Shared types, permissions, config
-  ward-resolve/   # Dependency resolution
-  ward-fetch/     # Registry client + download
-  ward-store/     # Content-addressable local store
-  ward-sandbox/   # WASM/permission enforcement
-  ward-registry/  # Self-hostable registry server
-  ward-index/     # Transparency log (Merkle tree)
-  ward-analyze/   # Behavioral analysis engine
+  oath-cli/       # `oath` and `oathx` binaries
+  oath-core/      # Shared types, permissions, config
+  oath-resolve/   # Dependency resolution
+  oath-fetch/     # Registry client + download
+  oath-store/     # Content-addressable local store
+  oath-sandbox/   # WASM/permission enforcement
+  oath-registry/  # Self-hostable registry server
+  oath-index/     # Transparency log (Merkle tree)
+  oath-analyze/   # Behavioral analysis engine
 ```
 
 ## Compatibility
 
-Ward reads `package.json` and resolves from the npm registry. Your existing projects work without changes. The `ward` section in package.json is optional and additive.
+Oath reads `package.json` and resolves from the npm registry. Your existing projects work without changes. The `oath` section in package.json is optional and additive.
 
 ## Status
 

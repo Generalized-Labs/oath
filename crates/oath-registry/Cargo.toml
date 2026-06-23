@@ -1,0 +1,25 @@
+[package]
+name = "oath-registry"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[[bin]]
+name = "oath-registry"
+path = "src/main.rs"
+
+[dependencies]
+oath-core = { path = "../oath-core" }
+oath-store = { path = "../oath-store" }
+oath-index = { path = "../oath-index" }
+oath-analyze = { path = "../oath-analyze" }
+
+axum.workspace = true
+tokio.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+anyhow.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+rusqlite.workspace = true
+sha2.workspace = true
