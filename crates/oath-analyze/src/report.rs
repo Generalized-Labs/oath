@@ -59,22 +59,31 @@ pub enum FindingKind {
     CryptoMiner,
     /// Shadow dependency (requires packages not in manifest)
     ShadowDep,
+    /// Credential harvesting (SSH keys, AWS creds, browser cookies, tokens)
+    CredentialHarvest,
+    /// Conditional/protestware payload (locale/geo/IP-gated execution)
+    ConditionalPayload,
+    /// Slopsquatting: package name matches common LLM-hallucinated patterns
+    Slopsquatting,
 }
 
 impl std::fmt::Display for FindingKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Network          => write!(f, "network"),
-            Self::Filesystem       => write!(f, "filesystem"),
-            Self::EnvAccess        => write!(f, "env_access"),
-            Self::Subprocess       => write!(f, "subprocess"),
-            Self::DynamicExec      => write!(f, "dynamic_exec"),
-            Self::Obfuscation      => write!(f, "obfuscation"),
-            Self::InstallScript    => write!(f, "install_script"),
-            Self::Typosquatting    => write!(f, "typosquatting"),
-            Self::DataExfiltration => write!(f, "data_exfiltration"),
-            Self::CryptoMiner      => write!(f, "crypto_miner"),
-            Self::ShadowDep        => write!(f, "shadow_dep"),
+            Self::Network           => write!(f, "network"),
+            Self::Filesystem        => write!(f, "filesystem"),
+            Self::EnvAccess         => write!(f, "env_access"),
+            Self::Subprocess        => write!(f, "subprocess"),
+            Self::DynamicExec       => write!(f, "dynamic_exec"),
+            Self::Obfuscation       => write!(f, "obfuscation"),
+            Self::InstallScript     => write!(f, "install_script"),
+            Self::Typosquatting     => write!(f, "typosquatting"),
+            Self::DataExfiltration  => write!(f, "data_exfiltration"),
+            Self::CryptoMiner       => write!(f, "crypto_miner"),
+            Self::ShadowDep         => write!(f, "shadow_dep"),
+            Self::CredentialHarvest => write!(f, "credential_harvest"),
+            Self::ConditionalPayload => write!(f, "conditional_payload"),
+            Self::Slopsquatting     => write!(f, "slopsquatting"),
         }
     }
 }

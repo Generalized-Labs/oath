@@ -1,0 +1,27 @@
+# oath-policy.toml -- project-local or global (~/.oath/policy.toml)
+#
+# Place this file as `oath-policy.toml` in your project root, or as
+# `~/.oath/policy.toml` for a global default.  Both are loaded and merged
+# (global first, then local overrides/extends).
+
+# Block ALL install scripts by default.  Only packages in `allow_install_scripts`
+# may run them without prompting.
+block_install_scripts = false
+
+# Highest risk level allowed without aborting.  Packages above this threshold
+# are flagged during install.  Values: "clean" | "info" | "low" | "medium" | "high" | "critical"
+max_risk_level = "high"
+
+# Packages that are always blocked (install is refused).
+banned_packages = ["colors", "node-ipc"]
+
+# SPDX license identifiers that are not allowed in your project.
+banned_licenses = ["GPL-3.0", "AGPL-3.0"]
+
+# Packages that need explicit approval before installation.
+# (Future: requires a maintainer to run `oath approve <package>`)
+require_approval = []
+
+# Packages pre-approved to run install scripts without interactive prompting.
+# Useful for well-known native addons that legitimately need postinstall.
+allow_install_scripts = ["esbuild", "sharp", "canvas", "node-sass"]

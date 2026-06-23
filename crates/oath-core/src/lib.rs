@@ -4,6 +4,7 @@ pub mod manifest;
 pub mod permissions;
 pub mod integrity;
 pub mod config;
+pub mod policy;
 
 use thiserror::Error;
 

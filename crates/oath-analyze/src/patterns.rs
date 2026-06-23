@@ -4,6 +4,11 @@
 //! - How packages access system resources
 //! - Known malicious obfuscation techniques (ua-parser-js, event-stream, node-ipc)
 //! - Typosquatting targets
+//! - 2024-2025 attack vectors: crypto mining, credential harvest, second-stage
+//!   downloads, DNS exfil, conditional payloads, postinstall abuse
+//!
+//! Current pattern count: 28 (plus slopsquatting, which is a metadata check
+//! handled separately in the name-similarity analyzer, not a string scan)
 
 use crate::report::{FindingKind, RiskLevel};
 
@@ -229,12 +234,119 @@ pub static PATTERNS: &[Pattern] = &[
     Pattern {
         id: "crypto-miner",
         kind: FindingKind::CryptoMiner,
-        risk: RiskLevel::Critical,
+        risk: RiskLevel::High,
         description: "Possible cryptocurrency mining code",
         strings: &[
-            "coinhive", "cryptonight", "stratum+tcp://",
-            "monero", "xmrig", "CoinHive",
+            "coinhive", "CoinHive", "CryptoNight", "cryptonight",
+            "stratum+tcp://", "monero", "xmrig",
+            "wasm-pack-template", "WebAssembly.instantiate",
             "mining", "hashrate",
+        ],
+    },
+
+    // ---- SECOND-STAGE PAYLOAD DOWNLOAD ----
+    // Downloads code at runtime then executes it -- the #1 supply-chain evasion technique.
+    // Static scanners see nothing malicious in the published package; the real payload
+    // is fetched on first install/run from an attacker-controlled server.
+    Pattern {
+        id: "second-stage-download",
+        kind: FindingKind::DynamicExec,
+        risk: RiskLevel::Critical,
+        description: "Downloads and executes remote code at runtime (second-stage payload)",
+        strings: &[
+            "eval(require('https')",
+            "eval(require(\"https\")",
+            "new Function(await",
+            "vm.runInContext(await",
+            "vm.runInNewContext(await",
+            ".then(eval)",
+            ".then(r=>eval(",
+            ".then(r => eval(",
+            "eval(await fetch",
+            "eval(await res",
+            // download to temp dir then require
+            "/tmp/",
+        ],
+    },
+
+    // ---- CREDENTIAL HARVESTING ----
+    Pattern {
+        id: "credential-harvest",
+        kind: FindingKind::CredentialHarvest,
+        risk: RiskLevel::Critical,
+        description: "Reads SSH keys, cloud credentials, browser cookies, or registry tokens",
+        strings: &[
+            ".ssh/id_rsa", ".ssh/id_ed25519",
+            ".aws/credentials", ".aws/config",
+            "Library/Application Support/Google/Chrome",
+            "npm_token", "NPM_TOKEN",
+            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
+            "GITHUB_TOKEN", ".npmrc", "keychain",
+        ],
+    },
+
+    // ---- DATA EXFILTRATION: ENV OVER NETWORK ----
+    // Same-file detection only: process.env reads combined with outbound HTTP in one source file.
+    // Cross-file combos require dataflow analysis (handled by a separate AST pass, not here).
+    Pattern {
+        id: "exfil-env-over-network",
+        kind: FindingKind::DataExfiltration,
+        risk: RiskLevel::High,
+        description: "Sends env var contents over network (suspicious exfiltration pattern)",
+        // Require very specific patterns: env var value interpolated into a URL or request body
+        // Not just any file that happens to use both process.env and fetch
+        strings: &[
+            "process.env.AWS_SECRET", "process.env.GITHUB_TOKEN",
+            "process.env.NPM_TOKEN", "process.env.CI_JOB_TOKEN",
+            "process.env.DATABASE_URL", "process.env.SECRET_KEY",
+        ],
+    },
+
+    // ---- POSTINSTALL SCRIPT ABUSE ----
+    Pattern {
+        id: "postinstall-heavy",
+        kind: FindingKind::InstallScript,
+        risk: RiskLevel::High,
+        description: "Heavy postinstall lifecycle manipulation (path probing, env inspection)",
+        strings: &[
+            "npm_lifecycle_event",
+            "npm_package_name",
+            "npm_lifecycle_script",
+            "INIT_CWD",
+        ],
+    },
+
+    // ---- PROTESTWARE / CONDITIONAL PAYLOAD ----
+    // Code that gates destructive/exfil behaviour on locale, timezone, country, or
+    // IP geolocation (see node-ipc 2022, peacenotwar 2022).
+    Pattern {
+        id: "conditional-payload",
+        kind: FindingKind::ConditionalPayload,
+        risk: RiskLevel::High,
+        description: "Conditional payload gated on locale, timezone, or IP geolocation",
+        strings: &[
+            "Intl.DateTimeFormat",
+            "process.env.LANG",
+            "process.env.TZ",
+            "geoiplookup",
+            "ipapi.co", "ip-api.com", "ipinfo.io",
+            "freegeoip", "geolocation-db.com",
+        ],
+    },
+
+    // ---- DNS EXFILTRATION ----
+    // Only flag DNS resolve/lookup calls combined with attacker infrastructure domains,
+    // or direct dns.resolve(btoa/Buffer combos (encoding data INTO a hostname).
+    Pattern {
+        id: "dns-exfil",
+        kind: FindingKind::DataExfiltration,
+        risk: RiskLevel::Critical,
+        description: "DNS exfiltration: data tunnelled through DNS queries to attacker domain",
+        strings: &[
+            ".burpcollaborator.net",
+            ".oastify.com",
+            ".interact.sh",
+            ".canarytokens.com",
         ],
     },
 ];

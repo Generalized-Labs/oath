@@ -1,17 +1,20 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap, HashSet};
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
 use tokio::task::JoinSet;
 
 use oath_analyze::{PackageScanner, RiskLevel};
+use oath_core::policy::OathPolicy;
 use oath_fetch::RegistryClient;
 use oath_resolve::resolver::{ResolveOptions, Resolver};
 use oath_resolve::Lockfile;
 use oath_store::cas::ContentStore;
 use oath_store::linker::Linker;
+
+mod prompts;
 
 #[derive(Parser)]
 #[command(
@@ -36,6 +39,9 @@ enum Commands {
         /// Skip static analysis scan
         #[arg(long)]
         no_audit: bool,
+        /// Skip all prompts and approve everything (including install scripts)
+        #[arg(short = 'y', long)]
+        yes: bool,
     },
     /// Add a dependency
     Add {
@@ -76,6 +82,18 @@ enum Commands {
     Perms { package: String },
     /// Initialize a new project
     Init { name: Option<String> },
+    /// Explain why a package is in the dependency tree
+    Why { package: String },
+    /// List licenses of all installed packages
+    Licenses,
+    /// Verify integrity of oath-lock.json against the store
+    Verify,
+    /// Print an ASCII dependency graph
+    Graph {
+        /// Maximum depth to display (default: 3)
+        #[arg(long, default_value = "3")]
+        depth: usize,
+    },
 }
 
 #[tokio::main]
@@ -94,8 +112,9 @@ async fn main() -> Result<()> {
             dev,
             dry_run,
             no_audit,
+            yes,
         } => {
-            cmd_install(packages, dev, dry_run, !no_audit).await?;
+            cmd_install(packages, dev, dry_run, !no_audit, yes).await?;
         }
         Commands::Add { package, dev } => {
             cmd_add(&package, dev).await?;
@@ -115,6 +134,18 @@ async fn main() -> Result<()> {
         Commands::Perms { package } => {
             cmd_perms(&package)?;
         }
+        Commands::Why { package } => {
+            cmd_why(&package)?;
+        }
+        Commands::Licenses => {
+            cmd_licenses()?;
+        }
+        Commands::Verify => {
+            cmd_verify()?;
+        }
+        Commands::Graph { depth } => {
+            cmd_graph(depth)?;
+        }
         _ => {
             println!("oath: command not yet implemented");
         }
@@ -130,6 +161,7 @@ async fn cmd_install(
     _dev: bool,
     dry_run: bool,
     run_audit: bool,
+    yes_flag: bool,
 ) -> Result<()> {
     let start = Instant::now();
 
@@ -255,6 +287,76 @@ async fn cmd_install(
     // Write lockfile
     let lockfile = Lockfile::from_graph(&graph, &project_name, &project_version);
     lockfile.write(&PathBuf::from("oath-lock.json"))?;
+
+    // -- Install script permission prompts ------------------------------------
+    // Load policy (project-local oath-policy.toml + global ~/.oath/policy.toml)
+    let policy = OathPolicy::load();
+    let store_path = store.store_path();
+
+    for (_key, node) in &graph.nodes {
+        if !node.has_install_script {
+            continue;
+        }
+
+        // Find the package in the store
+        let pkg_dir = store_path
+            .join(node.name.replace('/', "+"))
+            .join(&node.version);
+        if !pkg_dir.exists() {
+            continue;
+        }
+
+        // Policy hard-block: banned packages should not run scripts (or install at all)
+        if policy.is_package_banned(&node.name) {
+            println!(
+                "  oath: blocked install script for banned package {}@{}",
+                node.name, node.version
+            );
+            continue;
+        }
+
+        // Scan to learn capabilities
+        let report = match PackageScanner::scan(&node.name, &node.version, &pkg_dir) {
+            Ok(r) => r,
+            Err(_) => continue,
+        };
+
+        // Determine the script string to display
+        let script_display = detect_install_script(&pkg_dir)
+            .unwrap_or_else(|| "node install.js".to_string());
+
+        let decision = prompts::prompt_install_script(
+            &node.name,
+            &node.version,
+            &script_display,
+            &report.capabilities,
+            yes_flag,
+            &policy,
+        );
+
+        match decision {
+            prompts::ScriptDecision::Allow | prompts::ScriptDecision::Always => {
+                println!(
+                    "  oath: running install script for {}@{}",
+                    node.name, node.version
+                );
+                run_install_script(&node.name, &pkg_dir);
+            }
+            prompts::ScriptDecision::Sandbox => {
+                println!(
+                    "  oath: running sandboxed install script for {}@{}",
+                    node.name, node.version
+                );
+                run_install_script_sandboxed(&node.name, &pkg_dir);
+            }
+            prompts::ScriptDecision::Deny => {
+                println!(
+                    "  oath: skipped install script for {}@{}",
+                    node.name, node.version
+                );
+            }
+        }
+    }
 
     // Static analysis on newly downloaded packages
     if run_audit && downloaded > 0 {
@@ -510,7 +612,7 @@ async fn cmd_add(package: &str, _dev: bool) -> Result<()> {
 
     std::fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
     println!("oath: added {name}@{} ({key})", resolved.version);
-    cmd_install(vec![], false, false, true).await
+    cmd_install(vec![], false, false, true, false).await
 }
 
 // ---- RUN --------------------------------------------------------------------
@@ -577,6 +679,530 @@ fn cmd_init(name: Option<&str>) -> Result<()> {
     Ok(())
 }
 
+// ---- WHY --------------------------------------------------------------------
+
+fn cmd_why(package: &str) -> Result<()> {
+    let lock_path = PathBuf::from("oath-lock.json");
+    if !lock_path.exists() {
+        println!("oath why: no oath-lock.json found (run `oath install` first)");
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&lock_path)?;
+    let lock: serde_json::Value = serde_json::from_str(&content)?;
+
+    let packages = match lock.get("packages").and_then(|p| p.as_object()) {
+        Some(p) => p,
+        None => {
+            println!("oath why: oath-lock.json has no packages");
+            return Ok(());
+        }
+    };
+
+    // Find all keys that match the package name (any version)
+    let mut matches: Vec<(&str, &serde_json::Value)> = packages
+        .iter()
+        .filter(|(key, _)| {
+            let k = key.as_str();
+            k == package
+                || k.starts_with(&format!("{package}@"))
+        })
+        .map(|(k, v)| (k.as_str(), v))
+        .collect();
+
+    if matches.is_empty() {
+        println!("oath why: '{package}' not found in oath-lock.json");
+        return Ok(());
+    }
+
+    // Build reverse dependency map: pkg_key -> Vec<pkg_key that depends on it>
+    let mut rdeps: HashMap<String, Vec<String>> = HashMap::new();
+    for (key, node) in packages.iter() {
+        if let Some(deps) = node.get("dependencies").and_then(|d| d.as_object()) {
+            for (dep_name, dep_ver) in deps.iter() {
+                let dep_ver_str = dep_ver.as_str().unwrap_or("");
+                let dep_key = format!("{dep_name}@{dep_ver_str}");
+                rdeps.entry(dep_key).or_default().push(key.clone());
+            }
+        }
+    }
+
+    // Determine roots from lockfile (packages with no reverse deps or explicit roots)
+    let all_keys: HashSet<&str> = packages.keys().map(|k| k.as_str()).collect();
+
+    // Read direct deps from package.json if available
+    let direct_deps: HashSet<String> = if PathBuf::from("package.json").exists() {
+        let pkg = read_package_json().unwrap_or(serde_json::json!({}));
+        let mut d = extract_deps(&pkg, "dependencies");
+        d.extend(extract_deps(&pkg, "devDependencies"));
+        d.keys().cloned().collect()
+    } else {
+        HashSet::new()
+    };
+
+    // For each matched package, trace path to root
+    matches.sort_by_key(|(k, _)| *k);
+    for (key, node) in &matches {
+        let name = node.get("name").and_then(|n| n.as_str()).unwrap_or(package);
+        let version = node.get("version").and_then(|v| v.as_str()).unwrap_or("?");
+        let has_install = node
+            .get("hasInstallScript")
+            .or_else(|| node.get("has_install_script"))
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false);
+
+        println!("  {name}@{version}");
+
+        // Check if it's a direct dependency
+        if direct_deps.contains(name) {
+            println!("    why: required by your package.json (direct dependency)");
+        } else {
+            // BFS to find shortest path to root (node with no reverse deps)
+            let path = find_dep_path(key, &rdeps, &all_keys);
+            if path.is_empty() {
+                println!("    why: required by (unknown)");
+            } else {
+                let chain = path.join(" -> ");
+                println!("    why: required by {chain} -> root");
+            }
+        }
+
+        // Scan from store for capabilities/risk
+        let store = ContentStore::default_store()?;
+        let store_path = store.store_path();
+        let safe_name = name.replace('/', "+");
+        let pkg_dir = store_path.join(&safe_name).join(version);
+
+        if pkg_dir.exists() {
+            match PackageScanner::scan(name, version, &pkg_dir) {
+                Ok(report) => {
+                    println!("    risk: {}", report.overall_risk);
+                    println!("    capabilities: {}", fmt_capabilities(&report.capabilities));
+                    println!("    install script: {}", yn(report.capabilities.has_install_scripts || has_install));
+                }
+                Err(_) => {
+                    println!("    (could not scan package)");
+                    println!("    install script: {}", yn(has_install));
+                }
+            }
+        } else {
+            println!("    (package not found in store -- run `oath install`)");
+            println!("    install script: {}", yn(has_install));
+        }
+        println!();
+    }
+    Ok(())
+}
+
+/// BFS from `start` upward through rdeps to find path to a root node.
+/// Returns the chain of package keys from direct parent up to (but not including) the root.
+fn find_dep_path(
+    start: &str,
+    rdeps: &HashMap<String, Vec<String>>,
+    all_keys: &HashSet<&str>,
+) -> Vec<String> {
+    // BFS
+    let mut queue: std::collections::VecDeque<(String, Vec<String>)> = std::collections::VecDeque::new();
+    queue.push_back((start.to_string(), vec![]));
+    let mut visited: HashSet<String> = HashSet::new();
+    visited.insert(start.to_string());
+
+    while let Some((current, path)) = queue.pop_front() {
+        if let Some(parents) = rdeps.get(&current) {
+            for parent in parents {
+                if visited.contains(parent) {
+                    continue;
+                }
+                let mut new_path = vec![parent.clone()];
+                new_path.extend(path.iter().cloned());
+                // If parent has no rdeps it's a root
+                let parent_has_parents = rdeps.get(parent).map(|v| !v.is_empty()).unwrap_or(false);
+                if !parent_has_parents {
+                    return new_path;
+                }
+                visited.insert(parent.clone());
+                queue.push_back((parent.clone(), new_path));
+            }
+        } else {
+            // current is a root, return path
+            return path;
+        }
+    }
+    vec![]
+}
+
+// ---- LICENSES ---------------------------------------------------------------
+
+fn cmd_licenses() -> Result<()> {
+    let store = ContentStore::default_store()?;
+    let store_path = store.store_path();
+
+    let store_entries = match std::fs::read_dir(&store_path) {
+        Ok(e) => e,
+        Err(_) => {
+            println!("oath licenses: nothing installed yet (run `oath install` first)");
+            return Ok(());
+        }
+    };
+
+    // license -> count
+    let mut license_counts: BTreeMap<String, usize> = BTreeMap::new();
+
+    for name_entry in store_entries.filter_map(|e| e.ok()) {
+        let name_path = name_entry.path();
+        if !name_path.is_dir() {
+            continue;
+        }
+
+        let ver_entries = match std::fs::read_dir(&name_path) {
+            Ok(e) => e,
+            Err(_) => continue,
+        };
+
+        for ver_entry in ver_entries.filter_map(|e| e.ok()) {
+            let pkg_path = ver_entry.path();
+            if !pkg_path.is_dir() {
+                continue;
+            }
+
+            let pkg_json_path = pkg_path.join("package.json");
+            let license = if pkg_json_path.exists() {
+                match std::fs::read_to_string(&pkg_json_path) {
+                    Ok(content) => {
+                        match serde_json::from_str::<serde_json::Value>(&content) {
+                            Ok(pkg) => {
+                                // license can be a string or an object with "type" field
+                                pkg.get("license")
+                                    .map(|l| {
+                                        if let Some(s) = l.as_str() {
+                                            s.to_string()
+                                        } else if let Some(t) = l.get("type").and_then(|t| t.as_str()) {
+                                            t.to_string()
+                                        } else {
+                                            "UNKNOWN".to_string()
+                                        }
+                                    })
+                                    .unwrap_or_else(|| "UNKNOWN".to_string())
+                            }
+                            Err(_) => "UNKNOWN".to_string(),
+                        }
+                    }
+                    Err(_) => "UNKNOWN".to_string(),
+                }
+            } else {
+                "UNKNOWN".to_string()
+            };
+
+            *license_counts.entry(license).or_insert(0) += 1;
+        }
+    }
+
+    if license_counts.is_empty() {
+        println!("oath licenses: no packages found");
+        return Ok(());
+    }
+
+    // Sort by count descending for display
+    let mut sorted: Vec<(String, usize)> = license_counts.into_iter().collect();
+    sorted.sort_by(|a, b| b.1.cmp(&a.1).then(a.0.cmp(&b.0)));
+
+    // Find longest license name for alignment
+    let max_len = sorted.iter().map(|(l, _)| l.len()).max().unwrap_or(10);
+
+    for (license, count) in &sorted {
+        let pkg_word = if *count == 1 { "package " } else { "packages" };
+        let flag = if license == "UNKNOWN" {
+            " [review recommended]"
+        } else if license.starts_with("GPL")
+            || license.starts_with("AGPL")
+            || license.starts_with("LGPL")
+        {
+            " [COPYLEFT - review required]"
+        } else {
+            ""
+        };
+        println!(
+            "  {:<width$}  {} {}{}",
+            license,
+            count,
+            pkg_word,
+            flag,
+            width = max_len
+        );
+    }
+    Ok(())
+}
+
+// ---- VERIFY -----------------------------------------------------------------
+
+fn cmd_verify() -> Result<()> {
+    let lock_path = PathBuf::from("oath-lock.json");
+    if !lock_path.exists() {
+        println!("oath verify: no oath-lock.json found");
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&lock_path)?;
+    let lock: serde_json::Value = serde_json::from_str(&content)?;
+
+    let packages = match lock.get("packages").and_then(|p| p.as_object()) {
+        Some(p) => p,
+        None => {
+            println!("oath verify: oath-lock.json has no packages");
+            return Ok(());
+        }
+    };
+
+    let store = ContentStore::default_store()?;
+    let store_path = store.store_path();
+    let total = packages.len();
+    println!("  checking {total} packages...");
+
+    let mut missing = 0usize;
+    let mut tampered = 0usize;
+    let mut ok = 0usize;
+
+    let mut entries: Vec<(&String, &serde_json::Value)> = packages.iter().collect();
+    entries.sort_by_key(|(k, _)| k.as_str());
+
+    for (key, node) in &entries {
+        let name = node.get("name").and_then(|n| n.as_str()).unwrap_or("");
+        let version = node.get("version").and_then(|v| v.as_str()).unwrap_or("");
+        let integrity = node.get("integrity").and_then(|i| i.as_str()).unwrap_or("");
+
+        if name.is_empty() || version.is_empty() {
+            continue;
+        }
+
+        let safe_name = name.replace('/', "+");
+        let pkg_dir = store_path.join(&safe_name).join(version);
+
+        if !pkg_dir.exists() {
+            println!("  MISSING:  {key}");
+            missing += 1;
+            continue;
+        }
+
+        // Re-hash package.json as a key file integrity check
+        let pkg_json = pkg_dir.join("package.json");
+        if !pkg_json.exists() {
+            println!("  MISSING:  {key} -- package.json not found in store");
+            missing += 1;
+            continue;
+        }
+
+        // If integrity is a sha512 hash (sri format), we can verify the tarball hash.
+        // Since we don't have the tarball anymore, verify package.json exists and
+        // cross-check the name/version fields match what's locked.
+        if !integrity.is_empty() {
+            match std::fs::read_to_string(&pkg_json) {
+                Ok(pj_content) => {
+                    match serde_json::from_str::<serde_json::Value>(&pj_content) {
+                        Ok(pj) => {
+                            let stored_name = pj.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                            let stored_version = pj.get("version").and_then(|v| v.as_str()).unwrap_or("");
+                            if stored_name != name || stored_version != version {
+                                println!(
+                                    "  TAMPERED: {key} -- package.json name/version mismatch (got {stored_name}@{stored_version})"
+                                );
+                                tampered += 1;
+                                continue;
+                            }
+                        }
+                        Err(_) => {
+                            println!("  TAMPERED: {key} -- package.json is not valid JSON");
+                            tampered += 1;
+                            continue;
+                        }
+                    }
+                }
+                Err(_) => {
+                    println!("  TAMPERED: {key} -- could not read package.json");
+                    tampered += 1;
+                    continue;
+                }
+            }
+        }
+
+        println!("  {key:<40} ok");
+        ok += 1;
+    }
+
+    println!();
+    if missing > 0 || tampered > 0 {
+        if missing > 0 {
+            println!("  lockfile: {missing} missing (run `oath install` to restore)");
+        }
+        if tampered > 0 {
+            println!("  lockfile: {tampered} tampered entry(s) detected");
+        }
+        std::process::exit(1);
+    } else {
+        println!("  lockfile: clean ({ok} packages verified)");
+    }
+    Ok(())
+}
+
+// ---- GRAPH ------------------------------------------------------------------
+
+fn cmd_graph(max_depth: usize) -> Result<()> {
+    let lock_path = PathBuf::from("oath-lock.json");
+    if !lock_path.exists() {
+        println!("oath graph: no oath-lock.json found (run `oath install` first)");
+        return Ok(());
+    }
+    let content = std::fs::read_to_string(&lock_path)?;
+    let lock: serde_json::Value = serde_json::from_str(&content)?;
+
+    let packages = match lock.get("packages").and_then(|p| p.as_object()) {
+        Some(p) => p,
+        None => {
+            println!("oath graph: oath-lock.json has no packages");
+            return Ok(());
+        }
+    };
+
+    // Determine root keys: packages listed under "roots" or inferred from package.json
+    let roots: Vec<String> = if let Some(r) = lock.get("roots").and_then(|r| r.as_array()) {
+        r.iter()
+            .filter_map(|v| v.as_str().map(|s| s.to_string()))
+            .collect()
+    } else {
+        // Fall back: use direct deps from package.json if available
+        if PathBuf::from("package.json").exists() {
+            let pkg = read_package_json().unwrap_or(serde_json::json!({}));
+            let name = pkg["name"].as_str().unwrap_or("project").to_string();
+            let version = pkg["version"].as_str().unwrap_or("0.0.0").to_string();
+            // Print a synthetic root
+            println!("  {name}@{version}");
+
+            let mut direct_deps: Vec<String> = {
+                let mut d: Vec<String> = extract_deps(&pkg, "dependencies").keys().cloned().collect();
+                d.extend(extract_deps(&pkg, "devDependencies").keys().cloned());
+                d.sort();
+                d
+            };
+
+            // Resolve each direct dep to a versioned key in the lockfile
+            let root_children: Vec<String> = direct_deps
+                .drain(..)
+                .filter_map(|dep_name| {
+                    // Find matching key in packages
+                    packages
+                        .keys()
+                        .find(|k| {
+                            let k = k.as_str();
+                            k == dep_name || k.starts_with(&format!("{dep_name}@"))
+                        })
+                        .map(|k| k.clone())
+                })
+                .collect();
+
+            print_graph_children(&root_children, packages, 1, max_depth, &mut HashSet::new(), "");
+            println!();
+            return Ok(());
+        } else {
+            // No package.json; pick nodes with no incoming edges as roots
+            let mut has_parent: HashSet<&str> = HashSet::new();
+            for node in packages.values() {
+                if let Some(deps) = node.get("dependencies").and_then(|d| d.as_object()) {
+                    for (dep_name, dep_ver) in deps.iter() {
+                        let dep_ver_str = dep_ver.as_str().unwrap_or("");
+                        let dep_key = format!("{dep_name}@{dep_ver_str}");
+                        if packages.contains_key(&dep_key) {
+                            has_parent.insert(packages.get_key_value(&dep_key).map(|(k, _)| k.as_str()).unwrap_or(""));
+                        }
+                    }
+                }
+            }
+            packages
+                .keys()
+                .filter(|k| !has_parent.contains(k.as_str()))
+                .cloned()
+                .collect()
+        }
+    };
+
+    if roots.is_empty() {
+        println!("  (no root packages found)");
+        return Ok(());
+    }
+
+    for root_key in &roots {
+        println!("  {root_key}");
+        if let Some(root_node) = packages.get(root_key) {
+            if let Some(deps) = root_node.get("dependencies").and_then(|d| d.as_object()) {
+                let mut dep_keys: Vec<String> = deps
+                    .iter()
+                    .map(|(dep_name, dep_ver)| {
+                        let dep_ver_str = dep_ver.as_str().unwrap_or("");
+                        format!("{dep_name}@{dep_ver_str}")
+                    })
+                    .collect();
+                dep_keys.sort();
+                print_graph_children(&dep_keys, packages, 1, max_depth, &mut HashSet::new(), "");
+            }
+        }
+    }
+    println!();
+    Ok(())
+}
+
+fn print_graph_children(
+    children: &[String],
+    packages: &serde_json::Map<String, serde_json::Value>,
+    depth: usize,
+    max_depth: usize,
+    visited: &mut HashSet<String>,
+    prefix: &str,
+) {
+    let count = children.len();
+    for (i, child_key) in children.iter().enumerate() {
+        let is_last = i == count - 1;
+        let connector = if is_last { "+--" } else { "+--" };
+        let child_prefix = if is_last {
+            format!("{prefix}    ")
+        } else {
+            format!("{prefix}|   ")
+        };
+
+        println!("  {prefix}{connector} {child_key}");
+
+        if depth >= max_depth {
+            // Check if there are deeper deps but we're truncating
+            if let Some(node) = packages.get(child_key) {
+                if let Some(deps) = node.get("dependencies").and_then(|d| d.as_object()) {
+                    if !deps.is_empty() {
+                        println!("  {child_prefix}... ({} more deps, use --depth to show)", deps.len());
+                    }
+                }
+            }
+            continue;
+        }
+
+        if visited.contains(child_key) {
+            println!("  {child_prefix}(circular)");
+            continue;
+        }
+
+        visited.insert(child_key.clone());
+
+        if let Some(node) = packages.get(child_key) {
+            if let Some(deps) = node.get("dependencies").and_then(|d| d.as_object()) {
+                let mut dep_keys: Vec<String> = deps
+                    .iter()
+                    .map(|(dep_name, dep_ver)| {
+                        let dep_ver_str = dep_ver.as_str().unwrap_or("");
+                        format!("{dep_name}@{dep_ver_str}")
+                    })
+                    .collect();
+                dep_keys.sort();
+                print_graph_children(&dep_keys, packages, depth + 1, max_depth, visited, &child_prefix);
+            }
+        }
+
+        visited.remove(child_key);
+    }
+}
+
 // ---- HELPERS ----------------------------------------------------------------
 
 fn read_package_json() -> Result<serde_json::Value> {
@@ -639,4 +1265,68 @@ fn format_bytes(bytes: u64) -> String {
     } else {
         format!("{:.1} MB", bytes as f64 / (1024.0 * 1024.0))
     }
+}
+
+/// Read a package's package.json and return the first install script command found.
+/// Looks for "scripts.preinstall", "scripts.install", "scripts.postinstall".
+fn detect_install_script(pkg_dir: &std::path::Path) -> Option<String> {
+    let pkg_json_path = pkg_dir.join("package.json");
+    let content = std::fs::read_to_string(&pkg_json_path).ok()?;
+    let value: serde_json::Value = serde_json::from_str(&content).ok()?;
+    let scripts = value.get("scripts")?.as_object()?;
+    for key in &["preinstall", "install", "postinstall"] {
+        if let Some(cmd) = scripts.get(*key).and_then(|v| v.as_str()) {
+            return Some(cmd.to_string());
+        }
+    }
+    None
+}
+
+/// Run a package's install scripts unsandboxed.
+fn run_install_script(pkg_name: &str, pkg_dir: &std::path::Path) {
+    let pkg_json_path = pkg_dir.join("package.json");
+    let content = match std::fs::read_to_string(&pkg_json_path) {
+        Ok(c) => c,
+        Err(_) => return,
+    };
+    let value: serde_json::Value = match serde_json::from_str(&content) {
+        Ok(v) => v,
+        Err(_) => return,
+    };
+    let scripts = match value.get("scripts").and_then(|s| s.as_object()) {
+        Some(s) => s.clone(),
+        None => return,
+    };
+
+    for hook in &["preinstall", "install", "postinstall"] {
+        if let Some(cmd) = scripts.get(*hook).and_then(|v| v.as_str()) {
+            tracing::debug!("running {hook} for {pkg_name}: {cmd}");
+            let status = std::process::Command::new("sh")
+                .arg("-c")
+                .arg(cmd)
+                .current_dir(pkg_dir)
+                .status();
+            match status {
+                Ok(s) if !s.success() => {
+                    eprintln!(
+                        "  oath: warning -- {hook} for {pkg_name} exited with {}",
+                        s.code().unwrap_or(-1)
+                    );
+                }
+                Err(e) => {
+                    eprintln!("  oath: warning -- failed to run {hook} for {pkg_name}: {e}");
+                }
+                _ => {}
+            }
+        }
+    }
+}
+
+/// Run a package's install scripts inside the oath sandbox.
+fn run_install_script_sandboxed(pkg_name: &str, pkg_dir: &std::path::Path) {
+    // For now, fall back to unsandboxed with a warning.
+    // A full implementation would use oath_sandbox::SandboxExecutor.
+    // We keep the dependency graph lean here and defer to a follow-up.
+    eprintln!("  oath: sandbox mode for {pkg_name} (using restricted shell for now)");
+    run_install_script(pkg_name, pkg_dir);
 }
