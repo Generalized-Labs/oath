@@ -94,6 +94,14 @@ enum Commands {
         #[arg(long, default_value = "3")]
         depth: usize,
     },
+    /// Show safety score and metadata for a package
+    Score {
+        package: String,
+    },
+    /// Show info about a package (author, downloads, publish date)
+    Info {
+        package: String,
+    },
 }
 
 #[tokio::main]
@@ -146,6 +154,22 @@ async fn main() -> Result<()> {
         Commands::Graph { depth } => {
             cmd_graph(depth)?;
         }
+        Commands::Exec {
+            package,
+            args,
+            allow_net,
+            allow_read,
+            allow_write,
+            allow_env,
+        } => {
+            cmd_exec(&package, &args, allow_net, allow_read, allow_write, allow_env).await?;
+        }
+        Commands::Score { package } => {
+            cmd_score(&package).await?;
+        }
+        Commands::Info { package } => {
+            cmd_info(&package).await?;
+        }
         _ => {
             println!("oath: command not yet implemented");
         }
@@ -188,24 +212,60 @@ async fn cmd_install(
     };
 
     let total_direct = deps.len() + dev_deps.len();
-    println!("oath: resolving {total_direct} dependencies...");
 
-    // Resolve
-    let client = RegistryClient::default_client()?;
-    let options = ResolveOptions {
-        include_dev: true,
-        include_optional: false,
-        max_depth: 256,
+    // Fast path: if lockfile exists and all store entries are present, skip resolution
+    let lock_path = PathBuf::from("oath-lock.json");
+    let graph = if lock_path.exists() && packages.is_empty() {
+        // Try to use lockfile directly
+        let lockfile = Lockfile::read(&lock_path)?;
+        let store_check = ContentStore::default_store()?;
+        let all_cached = lockfile.packages.iter().all(|(key, entry)| {
+            let name = if let Some(at_pos) = key.rfind('@') {
+                &key[..at_pos]
+            } else {
+                key.as_str()
+            };
+            store_check.has_package(name, &entry.version)
+        });
+        if all_cached && !lockfile.packages.is_empty() {
+            println!("oath: lockfile up-to-date ({} packages)", lockfile.packages.len());
+            lockfile.to_graph()
+        } else {
+            println!("oath: resolving {total_direct} dependencies...");
+            let client = RegistryClient::default_client()?;
+            let options = ResolveOptions {
+                include_dev: true,
+                include_optional: false,
+                max_depth: 256,
+            };
+            let mut resolver = Resolver::new(client, options);
+            let g = resolver.resolve(&deps, &dev_deps).await?;
+            let resolve_time = start.elapsed();
+            println!(
+                "  resolved {} packages in {:.1}s",
+                g.package_count(),
+                resolve_time.as_secs_f64()
+            );
+            g
+        }
+    } else {
+        println!("oath: resolving {total_direct} dependencies...");
+        let client = RegistryClient::default_client()?;
+        let options = ResolveOptions {
+            include_dev: true,
+            include_optional: false,
+            max_depth: 256,
+        };
+        let mut resolver = Resolver::new(client, options);
+        let g = resolver.resolve(&deps, &dev_deps).await?;
+        let resolve_time = start.elapsed();
+        println!(
+            "  resolved {} packages in {:.1}s",
+            g.package_count(),
+            resolve_time.as_secs_f64()
+        );
+        g
     };
-    let mut resolver = Resolver::new(client, options);
-    let graph = resolver.resolve(&deps, &dev_deps).await?;
-
-    let resolve_time = start.elapsed();
-    println!(
-        "  resolved {} packages in {:.1}s",
-        graph.package_count(),
-        resolve_time.as_secs_f64()
-    );
 
     if dry_run {
         println!("  (dry run, skipping download and link)");
@@ -1329,4 +1389,325 @@ fn run_install_script_sandboxed(pkg_name: &str, pkg_dir: &std::path::Path) {
     // We keep the dependency graph lean here and defer to a follow-up.
     eprintln!("  oath: sandbox mode for {pkg_name} (using restricted shell for now)");
     run_install_script(pkg_name, pkg_dir);
+}
+
+// ---- EXEC (oathx) -----------------------------------------------------------
+
+async fn cmd_exec(
+    package: &str,
+    args: &[String],
+    allow_net: bool,
+    allow_read: Option<Vec<String>>,
+    allow_write: Option<Vec<String>>,
+    allow_env: Option<Vec<String>>,
+) -> Result<()> {
+    use oath_analyze::{PackageScanner, RiskLevel};
+    use std::io::Write;
+
+    let start = std::time::Instant::now();
+
+    // Parse package spec: name[@version]
+    let (pkg_name, pkg_version) = parse_package_spec(package);
+
+    // Check if already in local node_modules/.bin
+    let local_bin = PathBuf::from("node_modules/.bin").join(&pkg_name);
+    if local_bin.exists() {
+        println!("oath exec: running {} (local)", pkg_name);
+        let status = std::process::Command::new(&local_bin)
+            .args(args)
+            .status()
+            .with_context(|| format!("failed to execute {}", pkg_name))?;
+        std::process::exit(status.code().unwrap_or(1));
+    }
+
+    // Need to fetch the package
+    println!("oath exec: fetching {}@{}...", pkg_name, pkg_version);
+    let client = RegistryClient::default_client()?;
+    let packument = client.fetch_packument(&pkg_name).await
+        .with_context(|| format!("fetching {pkg_name}"))?;
+    let resolved = oath_fetch::resolve_version(&packument, &pkg_version)
+        .with_context(|| format!("resolving {pkg_name}@{pkg_version}"))?;
+
+    let version = resolved.version.to_string();
+    let info = resolved.info;
+
+    // Check store first
+    let store = ContentStore::default_store()?;
+    let pkg_dir = if store.has_package(&pkg_name, &version) {
+        store.package_dir(&pkg_name, &version)
+    } else {
+        // Download and store
+        let data = client.fetch_tarball(&info.dist.tarball, info.dist.integrity.as_deref()).await
+            .with_context(|| format!("downloading {pkg_name}@{version}"))?;
+        let tmp = tempfile::tempdir()?;
+        oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
+        store.store_package(&pkg_name, &version, tmp.path())?;
+        store.package_dir(&pkg_name, &version)
+    };
+    // Install full dep tree into a temp node_modules so requires work
+    let exec_dir = tempfile::tempdir()?;
+    let exec_path = exec_dir.path().to_path_buf();
+    // Write a package.json for the package
+    let exec_pkg = serde_json::json!({
+        "name": "oath-exec-tmp",
+        "version": "0.0.0",
+        "dependencies": { &pkg_name: &version }
+    });
+    std::fs::write(exec_path.join("package.json"), serde_json::to_string(&exec_pkg)?)?;
+
+    // Resolve full dep tree
+    let mut deps_map = HashMap::new();
+    deps_map.insert(pkg_name.clone(), version.clone());
+    let options = ResolveOptions {
+        include_dev: false,
+        include_optional: false,
+        max_depth: 256,
+    };
+    let mut resolver = Resolver::new(RegistryClient::default_client()?, options);
+    let graph = resolver.resolve(&deps_map, &HashMap::new()).await?;
+
+    // Download any missing packages
+    let store2 = ContentStore::default_store()?;
+    for (_key, node) in &graph.nodes {
+        if !store2.has_package(&node.name, &node.version) {
+            let data = client.fetch_tarball(&node.resolved, node.integrity.as_deref()).await?;
+            let tmp = tempfile::tempdir()?;
+            oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
+            store2.store_package(&node.name, &node.version, tmp.path())?;
+        }
+    }
+
+    // Link into exec_dir/node_modules
+    let linker = oath_store::Linker::new(store2);
+    linker.link_all(&graph, &exec_path)?;
+
+    // Update pkg_dir to point into the linked node_modules
+    let pkg_dir = exec_path.join("node_modules").join(&pkg_name);
+
+    // Static analysis BEFORE execution
+    let report = PackageScanner::scan(&pkg_name, &version, &pkg_dir)?;
+    let caps = &report.capabilities;
+
+    let has_risks = !report.findings.is_empty();
+    let needs_prompt = has_risks && !allow_net && std::env::var("OATH_ALLOW_ALL").is_err();
+
+    if has_risks {
+        println!("\n  oath exec: {} v{}", pkg_name, version);
+        println!("  capabilities detected:");
+        if caps.network { println!("    network access"); }
+        if caps.filesystem { println!("    filesystem access"); }
+        if caps.env_access { println!("    env variable reads"); }
+        if caps.subprocess { println!("    subprocess spawn"); }
+        if caps.dynamic_exec { println!("    dynamic code eval"); }
+        if caps.has_install_scripts { println!("    install scripts"); }
+
+        // Show high/critical findings
+        let serious: Vec<_> = report.findings.iter()
+            .filter(|f| matches!(f.risk, RiskLevel::High | RiskLevel::Critical))
+            .collect();
+        if !serious.is_empty() {
+            println!("\n  findings:");
+            for f in serious.iter().take(5) {
+                println!("    [{:?}] {:?} -- {}", f.risk, f.kind, f.message);
+            }
+        }
+
+        if needs_prompt {
+            print!("\n  allow execution? [y/N] ");
+            std::io::stdout().flush()?;
+            let mut input = String::new();
+            std::io::stdin().read_line(&mut input)?;
+            if !input.trim().eq_ignore_ascii_case("y") {
+                println!("  blocked.");
+                std::process::exit(1);
+            }
+        }
+    }
+
+    // Find the binary
+    let pkg_json_path = pkg_dir.join("package.json");
+    let bin_name = if pkg_json_path.exists() {
+        let pkg_json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&pkg_json_path)?)?;
+        // Check "bin" field
+        match &pkg_json["bin"] {
+            serde_json::Value::String(s) => Some(s.clone()),
+            serde_json::Value::Object(map) => {
+                map.get(&pkg_name).and_then(|v| v.as_str().map(|s| s.to_string()))
+                    .or_else(|| map.values().next().and_then(|v| v.as_str().map(|s| s.to_string())))
+            }
+            _ => None,
+        }
+    } else {
+        None
+    };
+
+    let bin_path = match bin_name {
+        Some(rel) => pkg_dir.join(rel),
+        None => {
+            // Fallback: check common locations
+            let candidates = ["cli.js", "bin/index.js", "index.js", "bin.js"];
+            candidates.iter()
+                .map(|c| pkg_dir.join(c))
+                .find(|p| p.exists())
+                .unwrap_or_else(|| {
+                    eprintln!("oath exec: could not find binary for {pkg_name}");
+                    std::process::exit(1);
+                })
+        }
+    };
+
+    let elapsed = start.elapsed();
+    if elapsed.as_millis() > 100 {
+        eprintln!("  fetched + scanned in {:.1}s", elapsed.as_secs_f64());
+    }
+
+    // Execute with Node
+    let status = std::process::Command::new("node")
+        .arg(&bin_path)
+        .args(args)
+        .status()
+        .with_context(|| format!("failed to execute node {}", bin_path.display()))?;
+
+    std::process::exit(status.code().unwrap_or(1));
+}
+
+// ---- SCORE ------------------------------------------------------------------
+
+async fn cmd_score(package: &str) -> Result<()> {
+    use oath_analyze::{PackageScanner, compute_safety_score};
+
+    let (pkg_name, pkg_version) = parse_package_spec(package);
+
+    println!("oath score: analyzing {}@{}...", pkg_name, pkg_version);
+
+    // Resolve and fetch
+    let client = RegistryClient::default_client()?;
+    let packument = client.fetch_packument(&pkg_name).await?;
+    let resolved = oath_fetch::resolve_version(&packument, &pkg_version)?;
+    let version = resolved.version.to_string();
+    let info = resolved.info;
+
+    // Ensure in store
+    let store = ContentStore::default_store()?;
+    let pkg_dir = if store.has_package(&pkg_name, &version) {
+        store.package_dir(&pkg_name, &version)
+    } else {
+        let data = client.fetch_tarball(&info.dist.tarball, info.dist.integrity.as_deref()).await?;
+        let tmp = tempfile::tempdir()?;
+        oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
+        store.store_package(&pkg_name, &version, tmp.path())?;
+        store.package_dir(&pkg_name, &version)
+    };
+
+    // Scan
+    let report = PackageScanner::scan(&pkg_name, &version, &pkg_dir)?;
+    let score = compute_safety_score(&report, &pkg_dir);
+
+    // Display
+    let grade_color = match score.grade {
+        'A' => "\x1b[32m", // green
+        'B' => "\x1b[36m", // cyan
+        'C' => "\x1b[33m", // yellow
+        'D' => "\x1b[33m", // yellow
+        _   => "\x1b[31m", // red
+    };
+    let reset = "\x1b[0m";
+
+    println!();
+    println!("  {}@{}", pkg_name, version);
+    println!("  safety score: {}{}/100 (grade {}){}",
+        grade_color, score.score, score.grade, reset);
+    println!();
+    println!("  factors:");
+    for factor in &score.factors {
+        let sign = if factor.weight >= 0 { "+" } else { "" };
+        println!("    {}{:>3}  {}", sign, factor.weight, factor.description);
+    }
+    println!();
+
+    // Capabilities summary
+    let caps = &report.capabilities;
+    if caps.network || caps.filesystem || caps.env_access || caps.subprocess || caps.dynamic_exec || caps.has_install_scripts {
+        println!("  capabilities:");
+        if caps.network { println!("    network access"); }
+        if caps.filesystem { println!("    filesystem access"); }
+        if caps.env_access { println!("    env variable reads"); }
+        if caps.subprocess { println!("    subprocess spawn"); }
+        if caps.dynamic_exec { println!("    dynamic code eval"); }
+        if caps.has_install_scripts { println!("    install scripts"); }
+        println!();
+    }
+
+    println!("  files scanned: {}  |  lines: {}", report.files_scanned, report.lines_scanned);
+    println!("  findings: {} total ({} high/critical)",
+        report.findings.len(),
+        report.findings.iter().filter(|f| matches!(f.risk, oath_analyze::RiskLevel::High | oath_analyze::RiskLevel::Critical)).count()
+    );
+
+    Ok(())
+}
+
+// ---- INFO -------------------------------------------------------------------
+
+async fn cmd_info(package: &str) -> Result<()> {
+    use oath_fetch::metadata::fetch_package_metadata;
+
+    let (pkg_name, _) = parse_package_spec(package);
+
+    println!("oath info: fetching metadata for {}...", pkg_name);
+
+    let client = reqwest::Client::builder()
+        .user_agent("oath/0.1.0")
+        .build()?;
+
+    let meta = fetch_package_metadata(&client, &pkg_name).await?;
+
+    println!();
+    println!("  {}@{}", meta.name, meta.latest_version);
+    println!();
+
+    // Maintainers
+    println!("  maintainers:");
+    for m in &meta.maintainers {
+        if let Some(email) = &m.email {
+            println!("    {} <{}>", m.name, email);
+        } else {
+            println!("    {}", m.name);
+        }
+    }
+    println!();
+
+    // Stats
+    if let Some(downloads) = meta.weekly_downloads {
+        println!("  weekly downloads: {}", format_downloads(downloads));
+    }
+    println!("  total versions:   {}", meta.total_versions);
+    if let Some(ref published) = meta.published_at {
+        println!("  latest published: {}", published);
+    }
+    if let Some(age) = meta.last_publish_age_days {
+        println!("  publish age:      {} days ago", age);
+    }
+    println!();
+
+    // Metadata
+    if let Some(ref license) = meta.license {
+        println!("  license:    {}", license);
+    }
+    if let Some(ref repo) = meta.repository {
+        println!("  repository: {}", repo);
+    }
+    println!("  has readme: {}", if meta.has_readme { "yes" } else { "no" });
+
+    Ok(())
+}
+
+fn format_downloads(n: u64) -> String {
+    if n >= 1_000_000 {
+        format!("{:.1}M", n as f64 / 1_000_000.0)
+    } else if n >= 1_000 {
+        format!("{:.0}K", n as f64 / 1_000.0)
+    } else {
+        n.to_string()
+    }
 }

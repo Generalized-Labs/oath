@@ -8,7 +8,9 @@ pub mod analyzer;
 pub mod patterns;
 pub mod report;
 pub mod scanner;
+pub mod score;
 
 pub use analyzer::Analyzer;
 pub use report::{AnalysisReport, Capabilities, Finding, FindingKind, RiskLevel, PackageRisk};
 pub use scanner::PackageScanner;
+pub use score::{SafetyScore, ScoreFactor, compute_safety_score};

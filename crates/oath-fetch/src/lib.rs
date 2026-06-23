@@ -8,6 +8,9 @@ pub mod packument;
 pub mod resolve;
 pub mod tarball;
 pub mod cache;
+pub mod metadata;
+
+pub use metadata::{PackageMetadata, Maintainer, fetch_package_metadata};
 
 pub use client::RegistryClient;
 pub use packument::{Packument, VersionInfo, DistInfo};

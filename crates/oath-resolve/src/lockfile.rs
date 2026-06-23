@@ -100,4 +100,35 @@ impl Lockfile {
     pub fn package_count(&self) -> usize {
         self.packages.len()
     }
+
+    /// Convert lockfile back to a DepGraph (for fast-path installs without resolution)
+    pub fn to_graph(&self) -> DepGraph {
+        use crate::graph::{DepGraph, DepNode};
+        let mut graph = DepGraph::new();
+
+        for (key, entry) in &self.packages {
+            // Extract package name from key (format: "name@version")
+            let name = if let Some(at_pos) = key.rfind('@') {
+                key[..at_pos].to_string()
+            } else {
+                key.clone()
+            };
+
+            graph.nodes.insert(
+                key.clone(),
+                DepNode {
+                    name: name.clone(),
+                    version: entry.version.clone(),
+                    resolved: entry.resolved.clone(),
+                    integrity: entry.integrity.clone(),
+                    dependencies: entry.dependencies.clone(),
+                    has_install_script: entry.has_install_script,
+                    dev: entry.dev,
+                    optional: entry.optional,
+                },
+            );
+        }
+
+        graph
+    }
 }
