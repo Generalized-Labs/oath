@@ -49,7 +49,7 @@ pub struct VersionInfo {
     pub bin: Option<BinField>,
 
     #[serde(default)]
-    pub engines: HashMap<String, String>,
+    pub engines: Engines,
 
     #[serde(default)]
     pub os: Vec<String>,
@@ -120,6 +120,19 @@ pub struct PeerDepMeta {
 pub enum BinField {
     Single(String),
     Map(HashMap<String, String>),
+}
+
+/// Engines field: can be a map {"node": ">=14"} or a string in old packages
+#[derive(Debug, Clone, Serialize, Deserialize, Default)]
+#[serde(untagged)]
+pub enum Engines {
+    Map(HashMap<String, String>),
+    /// Some old packages have engines as a plain string
+    String(String),
+    /// Some packages have engines as an array (very rare)
+    Array(Vec<String>),
+    #[default]
+    None,
 }
 
 impl Packument {

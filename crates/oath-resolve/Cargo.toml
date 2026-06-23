@@ -6,7 +6,13 @@ license.workspace = true
 
 [dependencies]
 oath-core = { path = "../oath-core" }
+oath-fetch = { path = "../oath-fetch" }
 serde.workspace = true
 serde_json.workspace = true
 anyhow.workspace = true
-pubgrub = "0.2"
+tokio.workspace = true
+tracing.workspace = true
+node-semver.workspace = true
+
+[dev-dependencies]
+tempfile.workspace = true

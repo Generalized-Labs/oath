@@ -123,7 +123,7 @@ pub fn resolve_intersection<'a>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::packument::{DistInfo, Packument, VersionInfo};
+    use crate::packument::{DistInfo, Engines, Packument, VersionInfo};
     use std::collections::HashMap;
 
     fn make_packument(versions: &[&str], latest: &str) -> Packument {
@@ -140,7 +140,7 @@ mod tests {
                     peer_dependencies: HashMap::new(),
                     peer_dependencies_meta: HashMap::new(),
                     bin: None,
-                    engines: HashMap::new(),
+                    engines: Engines::Map(HashMap::new()),
                     os: vec![],
                     cpu: vec![],
                     dist: DistInfo {
