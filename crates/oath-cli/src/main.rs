@@ -159,11 +159,11 @@ async fn main() -> Result<()> {
             no_audit,
             yes,
             run_scripts,
-            min_age: _min_age,
+            min_age,
             global,
             frozen_lockfile,
         } => {
-            cmd_install(packages, dev, dry_run, !no_audit, yes, run_scripts, global, frozen_lockfile).await?;
+            cmd_install(packages, dev, dry_run, !no_audit, yes, run_scripts, global, frozen_lockfile, min_age).await?;
         }
         Commands::Add { package, dev, yes: _ } => {
             cmd_add(&package, dev).await?;
@@ -240,6 +240,7 @@ async fn cmd_install(
     run_scripts: bool,
     global: bool,
     frozen_lockfile: bool,
+    min_age: Option<String>,
 ) -> Result<()> {
     let start = Instant::now();
 
@@ -382,6 +383,85 @@ async fn cmd_install(
 
     let mut downloaded = 0usize;
     let mut download_bytes = 0u64;
+
+    // ---- Minimum release age (supply-chain cooldown) ------------------------
+    // Block newly-added versions published more recently than --min-age. Only
+    // applies to packages not already in the store (new additions) -- already
+    // cached packages were vetted on a prior install. A freshly published
+    // version (anywhere in the tree) is the classic compromised-package window.
+    if let Some(min_age_str) = min_age.as_deref() {
+        match parse_duration_secs(min_age_str) {
+            Some(min_age_secs) if !to_download.is_empty() => {
+                let min_days = (min_age_secs / 86400).max(1);
+                println!(
+                    "  checking release age ({}-day cooldown) for {} new package(s)...",
+                    min_days,
+                    to_download.len()
+                );
+                let mut age_set: JoinSet<(String, String, Option<u64>)> = JoinSet::new();
+                for node in &to_download {
+                    // Git deps have no registry publish time -- skip.
+                    if node.resolved.starts_with("git+")
+                        || node.resolved.starts_with("github:")
+                        || node.resolved.starts_with("gitlab:")
+                        || node.resolved.starts_with("bitbucket:")
+                    {
+                        continue;
+                    }
+                    let client = Arc::clone(&client);
+                    let name = node.name.clone();
+                    let version = node.version.clone();
+                    age_set.spawn(async move {
+                        // Abbreviated packuments omit `time`; the full one carries it.
+                        let age = client
+                            .fetch_packument_full(&name)
+                            .await
+                            .ok()
+                            .and_then(|v| {
+                                v.get("time")
+                                    .and_then(|t| t.get(&version))
+                                    .and_then(|s| s.as_str().map(String::from))
+                            })
+                            .and_then(|pts| parse_iso_age_secs(&pts));
+                        (name, version, age)
+                    });
+                }
+                let mut violations: Vec<(String, String, u64)> = Vec::new();
+                while let Some(res) = age_set.join_next().await {
+                    let (name, version, age) = res?;
+                    if let Some(age_secs) = age {
+                        if age_secs < min_age_secs {
+                            violations.push((name, version, age_secs / 86400));
+                        }
+                    }
+                }
+                if !violations.is_empty() {
+                    violations.sort();
+                    eprintln!();
+                    eprintln!(
+                        "oath install: BLOCKED by --min-age {} ({}-day cooldown)",
+                        min_age_str, min_days
+                    );
+                    eprintln!("  These newly-added versions are too recent to trust yet:");
+                    for (n, v, days) in &violations {
+                        eprintln!("    - {}@{}  published {} day(s) ago", n, v, days);
+                    }
+                    eprintln!("  Wait out the cooldown, pin an older version, or lower --min-age.");
+                    anyhow::bail!(
+                        "{} package(s) newer than the {}-day minimum release age",
+                        violations.len(),
+                        min_days
+                    );
+                }
+                println!("  release age OK");
+            }
+            Some(_) => {} // nothing new to check
+            None => eprintln!(
+                "oath: ignoring unparseable --min-age '{}' (use e.g. 7d, 24h, 30d)",
+                min_age_str
+            ),
+        }
+    }
 
     if !to_download.is_empty() {
         let mut set: JoinSet<Result<(String, String, Vec<u8>)>> = JoinSet::new();
@@ -1108,7 +1188,7 @@ async fn cmd_add(package: &str, _dev: bool) -> Result<()> {
 
     std::fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
     println!("oath: added {name}@{} ({key})", resolved.version);
-    cmd_install(vec![], false, false, true, false, false, false, false).await
+    cmd_install(vec![], false, false, true, false, false, false, false, None).await
 }
 
 // ---- RUN --------------------------------------------------------------------
