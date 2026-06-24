@@ -689,12 +689,14 @@ async fn cmd_install(
     // Static analysis on newly downloaded packages
     if run_audit && downloaded > 0 {
         println!("  scanning {} new packages...", downloaded);
-        let store_path = store.store_path();
         let mut critical = 0usize;
         let mut high = 0usize;
 
         for (_key, node) in &graph.nodes {
-            let pkg_dir = store_path.join(format!("{}-{}", node.name, node.version));
+            // Use the canonical store layout (name/version). The old
+            // `format!("{}-{}")` path never existed, so the scan silently
+            // skipped every package and always printed "all clear".
+            let pkg_dir = store.package_dir(&node.name, &node.version);
             if !pkg_dir.exists() {
                 continue;
             }
