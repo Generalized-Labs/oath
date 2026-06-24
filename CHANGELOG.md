@@ -3,6 +3,26 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.1.2] - 2026-06-24
+
+### Added
+- `oath run` and install scripts now export the `npm_*` lifecycle env vars
+  (`npm_lifecycle_event`, `npm_package_name`, `npm_package_version`, and the
+  flattened `npm_package_<field>` set) that many build scripts rely on.
+- Root project lifecycle hooks: a plain `oath install` now runs the project's
+  own `preinstall`/`postinstall`/`prepare` scripts (e.g. husky), matching npm/bun.
+  These are your own trusted scripts and always run, unlike blocked dependency
+  scripts.
+- Drop-in aliases: `oath ci` (clean install from the lockfile), `oath uninstall`
+  / `oath rm` (= remove), and `oath x` (= exec).
+
+### Changed
+- `oath audit` is now `oath scan` (`audit` kept as an alias). It is behavioral
+  analysis, not a CVE/advisory lookup, and the new name says so.
+- Faster installs: package scanning now runs in parallel across CPU cores (the
+  cold-install hot path), and a re-install with an unchanged lockfile skips the
+  node_modules rebuild instead of nuking and relinking every time.
+
 ## [0.1.1] - 2026-06-24
 
 ### Removed

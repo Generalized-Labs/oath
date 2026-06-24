@@ -31,3 +31,4 @@ base64.workspace = true
 flate2.workspace = true
 tar.workspace = true
 sha1 = "0.10"
+rayon = "1"
