@@ -89,6 +89,15 @@ enum Commands {
         /// Minimum release age required (e.g. '7d', '24h', '30d'). Block if newer.
         #[arg(long)]
         min_age: Option<String>,
+        /// Emit a machine-readable JSON verdict and never prompt (for agents / CI)
+        #[arg(long)]
+        json: bool,
+        /// Refuse to run if the safety grade is below this (A/B/C/D/F)
+        #[arg(long)]
+        require_grade: Option<String>,
+        /// Show the pre-run verdict and exit without executing
+        #[arg(long)]
+        dry_run: bool,
     },
     /// Scan installed packages for malicious behavior (behavioral analysis, not a CVE audit)
     #[command(visible_alias = "audit")]
@@ -216,8 +225,20 @@ async fn main() -> Result<()> {
             args,
             yes,
             min_age,
+            json,
+            require_grade,
+            dry_run,
         } => {
-            cmd_exec(&package, &args, yes, min_age.as_deref()).await?;
+            cmd_exec(
+                &package,
+                &args,
+                yes,
+                min_age.as_deref(),
+                json,
+                require_grade.as_deref(),
+                dry_run,
+            )
+            .await?;
         }
         Commands::Score { package } => {
             cmd_score(&package).await?;
@@ -2194,19 +2215,65 @@ fn run_install_script(pkg_name: &str, pkg_dir: &std::path::Path) {
 
 // ---- EXEC -------------------------------------------------------------------
 
-async fn cmd_exec(package: &str, args: &[String], yes: bool, min_age: Option<&str>) -> Result<()> {
-    use oath_analyze::{PackageScanner, RiskLevel};
+const EXEC_EXIT_GRADE: i32 = 10;
+const EXEC_EXIT_AGE: i32 = 11;
+const EXEC_EXIT_USER: i32 = 13;
+
+/// Rank safety grades A(best)..F(worst) for `--require-grade` comparison.
+fn grade_rank(g: char) -> u8 {
+    match g.to_ascii_uppercase() {
+        'A' => 5,
+        'B' => 4,
+        'C' => 3,
+        'D' => 2,
+        'F' => 1,
+        _ => 0,
+    }
+}
+
+/// Unpacked size of a package's own files (skips nested node_modules).
+fn dir_size(dir: &std::path::Path) -> u64 {
+    let mut total = 0u64;
+    let mut stack = vec![dir.to_path_buf()];
+    while let Some(d) = stack.pop() {
+        let Ok(rd) = std::fs::read_dir(&d) else {
+            continue;
+        };
+        for e in rd.flatten() {
+            let Ok(ft) = e.file_type() else { continue };
+            if ft.is_dir() {
+                if e.file_name() != "node_modules" {
+                    stack.push(e.path());
+                }
+            } else if let Ok(m) = e.metadata() {
+                total += m.len();
+            }
+        }
+    }
+    total
+}
+
+async fn cmd_exec(
+    package: &str,
+    args: &[String],
+    yes: bool,
+    min_age: Option<&str>,
+    json: bool,
+    require_grade: Option<&str>,
+    dry_run: bool,
+) -> Result<()> {
+    use oath_analyze::{FindingKind, PackageScanner, RiskLevel, compute_safety_score};
     use std::io::Write;
 
     let start = std::time::Instant::now();
-
-    // Parse package spec: name[@version]
     let (pkg_name, pkg_version) = parse_package_spec(package);
 
-    // Check if already in local node_modules/.bin
+    // Local node_modules/.bin fast path: already installed by the project (trusted).
     let local_bin = PathBuf::from("node_modules/.bin").join(&pkg_name);
-    if local_bin.exists() {
-        println!("oath exec: running {} (local)", pkg_name);
+    if local_bin.exists() && !dry_run {
+        if !json {
+            println!("oath exec: running {} (local)", pkg_name);
+        }
         let status = std::process::Command::new(&local_bin)
             .args(args)
             .status()
@@ -2214,8 +2281,9 @@ async fn cmd_exec(package: &str, args: &[String], yes: bool, min_age: Option<&st
         std::process::exit(status.code().unwrap_or(1));
     }
 
-    // Need to fetch the package
-    println!("oath exec: fetching {}@{}...", pkg_name, pkg_version);
+    if !json {
+        println!("oath exec: inspecting {}@{}...", pkg_name, pkg_version);
+    }
     let client = RegistryClient::default_client()?;
     let packument = client
         .fetch_packument(&pkg_name)
@@ -2223,57 +2291,73 @@ async fn cmd_exec(package: &str, args: &[String], yes: bool, min_age: Option<&st
         .with_context(|| format!("fetching {pkg_name}"))?;
     let resolved = oath_fetch::resolve_version(&packument, &pkg_version)
         .with_context(|| format!("resolving {pkg_name}@{pkg_version}"))?;
-
     let version = resolved.version.to_string();
     let info = resolved.info;
 
-    // -- Release age check --
-    // The abbreviated packument doesn't include time; fetch from full packument
-    let publish_time_str = {
-        let full = client.fetch_packument_full(&pkg_name).await.ok();
-        full.and_then(|v| {
+    // Full packument -> publish time, last publisher, repository.
+    let full = client.fetch_packument_full(&pkg_name).await.ok();
+    let age_days: Option<u64> = full
+        .as_ref()
+        .and_then(|v| {
             v.get("time")
                 .and_then(|t| t.get(&version))
-                .and_then(|s| s.as_str().map(String::from))
+                .and_then(|s| s.as_str())
+                .map(String::from)
         })
-    };
-    if let Some(ref pts) = publish_time_str {
-        if let Some(age_secs) = parse_iso_age_secs(pts) {
-            let age_days = age_secs / 86400;
-            let age_hours = age_secs / 3600;
-            if age_days > 0 {
-                println!("  published {} days ago", age_days);
-            } else {
-                println!("  published {} hours ago", age_hours);
-            }
+        .and_then(|pts| parse_iso_age_secs(&pts))
+        .map(|secs| secs / 86400);
+    let last_publisher: Option<String> = full.as_ref().and_then(|v| {
+        v.get("versions")
+            .and_then(|vs| vs.get(&version))
+            .and_then(|ver| ver.get("_npmUser"))
+            .and_then(|u| u.get("name"))
+            .and_then(|n| n.as_str())
+            .map(String::from)
+            .or_else(|| {
+                v.get("maintainers")
+                    .and_then(|m| m.as_array())
+                    .and_then(|a| a.first())
+                    .and_then(|m| m.get("name"))
+                    .and_then(|n| n.as_str())
+                    .map(String::from)
+            })
+    });
+    let repository: Option<String> = full.as_ref().and_then(|v| {
+        v.get("repository").and_then(|r| {
+            r.get("url")
+                .and_then(|u| u.as_str())
+                .or_else(|| r.as_str())
+                .map(String::from)
+        })
+    });
+    let open_source = repository.is_some();
 
-            if let Some(min_age_str) = min_age
-                && let Some(min_age_secs) = parse_duration_secs(min_age_str)
-                && age_secs < min_age_secs
-            {
-                let min_days = min_age_secs / 86400;
-                anyhow::bail!(
-                    "oath exec: BLOCKED -- {}@{} was published only {} days ago (minimum required: {} days)",
-                    pkg_name,
-                    version,
-                    age_days,
-                    if min_days > 0 { min_days } else { 1 }
+    // Age gate (before download).
+    if let (Some(days), Some(min_str)) = (age_days, min_age)
+        && let Some(min_secs) = parse_duration_secs(min_str)
+    {
+        let min_days = (min_secs / 86400).max(1);
+        if days < min_days {
+            if json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "name": pkg_name, "version": version,
+                        "age_days": days, "decision": "block", "reason": "min-age"
+                    }))?
+                );
+            } else {
+                eprintln!(
+                    "oath exec: BLOCKED -- {pkg_name}@{version} is {days}d old (need >= {min_days}d)"
                 );
             }
+            std::process::exit(EXEC_EXIT_AGE);
         }
-    } else if min_age.is_some() {
-        println!(
-            "  warning: no publish time available for {}@{}",
-            pkg_name, version
-        );
     }
 
-    // Check store first
+    // Download + resolve the full tree + link, so requires work and we can scan.
     let store = ContentStore::default_store()?;
-    let _pkg_dir = if store.has_package(&pkg_name, &version) {
-        store.package_dir(&pkg_name, &version)
-    } else {
-        // Download and store
+    if !store.has_package(&pkg_name, &version) {
         let data = client
             .fetch_tarball(&info.dist.tarball, info.dist.integrity.as_deref())
             .await
@@ -2281,12 +2365,9 @@ async fn cmd_exec(package: &str, args: &[String], yes: bool, min_age: Option<&st
         let tmp = tempfile::tempdir()?;
         oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
         store.store_package(&pkg_name, &version, tmp.path())?;
-        store.package_dir(&pkg_name, &version)
-    };
-    // Install full dep tree into a temp node_modules so requires work
+    }
     let exec_dir = tempfile::tempdir()?;
     let exec_path = exec_dir.path().to_path_buf();
-    // Write a package.json for the package
     let exec_pkg = serde_json::json!({
         "name": "oath-exec-tmp",
         "version": "0.0.0",
@@ -2296,8 +2377,6 @@ async fn cmd_exec(package: &str, args: &[String], yes: bool, min_age: Option<&st
         exec_path.join("package.json"),
         serde_json::to_string(&exec_pkg)?,
     )?;
-
-    // Resolve full dep tree
     let mut deps_map = HashMap::new();
     deps_map.insert(pkg_name.clone(), version.clone());
     let options = ResolveOptions {
@@ -2307,8 +2386,6 @@ async fn cmd_exec(package: &str, args: &[String], yes: bool, min_age: Option<&st
     };
     let mut resolver = Resolver::new(RegistryClient::default_client()?, options);
     let graph = resolver.resolve(&deps_map, &HashMap::new()).await?;
-
-    // Download any missing packages
     let store2 = ContentStore::default_store()?;
     for node in graph.nodes.values() {
         if !store2.has_package(&node.name, &node.version) {
@@ -2320,74 +2397,139 @@ async fn cmd_exec(package: &str, args: &[String], yes: bool, min_age: Option<&st
             store2.store_package(&node.name, &node.version, tmp.path())?;
         }
     }
-
-    // Link into exec_dir/node_modules
     let linker = oath_store::Linker::new(store2);
     linker.link_all(&graph, &exec_path)?;
-
-    // Update pkg_dir to point into the linked node_modules
     let pkg_dir = exec_path.join("node_modules").join(&pkg_name);
 
-    // Static analysis BEFORE execution
+    // Scan + score before deciding to run.
     let report = PackageScanner::scan(&pkg_name, &version, &pkg_dir)?;
     let caps = &report.capabilities;
+    let score = compute_safety_score(&report, &pkg_dir);
+    let obfuscated = report.findings.iter().any(|f| {
+        f.kind == FindingKind::Obfuscation
+            && matches!(f.risk, RiskLevel::High | RiskLevel::Critical)
+    });
+    let unpacked_kb = dir_size(&pkg_dir) / 1024;
+    let serious: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| matches!(f.risk, RiskLevel::High | RiskLevel::Critical))
+        .collect();
+    let mut perms: Vec<&str> = Vec::new();
+    if caps.network {
+        perms.push("network");
+    }
+    if caps.filesystem {
+        perms.push("filesystem");
+    }
+    if caps.env_access {
+        perms.push("env");
+    }
+    if caps.subprocess {
+        perms.push("subprocess");
+    }
+    if caps.dynamic_exec {
+        perms.push("eval");
+    }
+    if caps.has_install_scripts {
+        perms.push("install-scripts");
+    }
 
-    let has_risks = !report.findings.is_empty();
-    let needs_prompt = has_risks && !yes && std::env::var("OATH_ALLOW_ALL").is_err();
+    let grade_blocked = require_grade
+        .map(|g| grade_rank(score.grade) < grade_rank(g.chars().next().unwrap_or('A')))
+        .unwrap_or(false);
 
-    if has_risks {
-        println!("\n  oath exec: {} v{}", pkg_name, version);
-        println!("  capabilities detected:");
-        if caps.network {
-            println!("    network access");
+    if json {
+        let verdict = serde_json::json!({
+            "name": pkg_name,
+            "version": version,
+            "integrity": info.dist.integrity,
+            "grade": score.grade.to_string(),
+            "score": score.score,
+            "age_days": age_days,
+            "last_publisher": last_publisher,
+            "open_source": open_source,
+            "repository": repository,
+            "obfuscated": obfuscated,
+            "unpacked_kb": unpacked_kb,
+            "permissions": perms,
+            "verdict": format!("{:?}", report.overall_risk),
+            "findings": serious
+                .iter()
+                .map(|f| format!("{:?}: {}", f.kind, f.message))
+                .collect::<Vec<_>>(),
+            "decision": if grade_blocked { "block" } else { "allow" },
+            "reason": if grade_blocked { "require-grade" } else { "" },
+        });
+        println!("{}", serde_json::to_string_pretty(&verdict)?);
+        if grade_blocked {
+            std::process::exit(EXEC_EXIT_GRADE);
         }
-        if caps.filesystem {
-            println!("    filesystem access");
+        if dry_run {
+            return Ok(());
         }
-        if caps.env_access {
-            println!("    env variable reads");
+    } else {
+        // Human pre-run card.
+        println!("\n  {}@{}", pkg_name, version);
+        println!("  grade        {} ({}/100)", score.grade, score.score);
+        if let Some(d) = age_days {
+            println!("  published    {d} days ago");
         }
-        if caps.subprocess {
-            println!("    subprocess spawn");
+        if let Some(p) = &last_publisher {
+            println!("  publisher    {p}");
         }
-        if caps.dynamic_exec {
-            println!("    dynamic code eval");
-        }
-        if caps.has_install_scripts {
-            println!("    install scripts");
-        }
-
-        // Show high/critical findings
-        let serious: Vec<_> = report
-            .findings
-            .iter()
-            .filter(|f| matches!(f.risk, RiskLevel::High | RiskLevel::Critical))
-            .collect();
+        println!(
+            "  open source  {}",
+            if open_source { "yes" } else { "unknown" }
+        );
+        println!(
+            "  source       {}",
+            if obfuscated { "obfuscated" } else { "readable" }
+        );
+        println!("  size         {unpacked_kb} KB");
+        println!(
+            "  permissions  {}",
+            if perms.is_empty() {
+                "none".to_string()
+            } else {
+                perms.join(", ")
+            }
+        );
         if !serious.is_empty() {
             println!("\n  findings:");
             for f in serious.iter().take(5) {
                 println!("    [{:?}] {:?} -- {}", f.risk, f.kind, f.message);
             }
         }
-
+        if grade_blocked {
+            eprintln!(
+                "\n  BLOCKED -- grade {} is below required {}",
+                score.grade,
+                require_grade.unwrap_or("")
+            );
+            std::process::exit(EXEC_EXIT_GRADE);
+        }
+        if dry_run {
+            return Ok(());
+        }
+        let needs_prompt = !serious.is_empty() && !yes && std::env::var("OATH_ALLOW_ALL").is_err();
         if needs_prompt {
-            print!("\n  allow execution? [y/N] ");
+            print!("\n  run anyway? [y/N] ");
             std::io::stdout().flush()?;
             let mut input = String::new();
             std::io::stdin().read_line(&mut input)?;
             if !input.trim().eq_ignore_ascii_case("y") {
                 println!("  blocked.");
-                std::process::exit(1);
+                std::process::exit(EXEC_EXIT_USER);
             }
         }
     }
 
-    // Find the binary
+    // Find the binary.
     let pkg_json_path = pkg_dir.join("package.json");
     let bin_name = if pkg_json_path.exists() {
         let pkg_json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&pkg_json_path)?)?;
-        // Check "bin" field
         match &pkg_json["bin"] {
             serde_json::Value::String(s) => Some(s.clone()),
             serde_json::Value::Object(map) => map
@@ -2403,11 +2545,9 @@ async fn cmd_exec(package: &str, args: &[String], yes: bool, min_age: Option<&st
     } else {
         None
     };
-
     let bin_path = match bin_name {
         Some(rel) => pkg_dir.join(rel),
         None => {
-            // Fallback: check common locations
             let candidates = ["cli.js", "bin/index.js", "index.js", "bin.js"];
             candidates
                 .iter()
@@ -2421,17 +2561,15 @@ async fn cmd_exec(package: &str, args: &[String], yes: bool, min_age: Option<&st
     };
 
     let elapsed = start.elapsed();
-    if elapsed.as_millis() > 100 {
+    if !json && elapsed.as_millis() > 100 {
         eprintln!("  fetched + scanned in {:.1}s", elapsed.as_secs_f64());
     }
 
-    // Execute with Node
     let status = std::process::Command::new("node")
         .arg(&bin_path)
         .args(args)
         .status()
         .with_context(|| format!("failed to execute node {}", bin_path.display()))?;
-
     std::process::exit(status.code().unwrap_or(1));
 }
 
@@ -3368,5 +3506,17 @@ mod tests {
         // objects/arrays (dependencies, scripts) are skipped, not stringified
         assert!(!env.iter().any(|(k, _)| k == "npm_package_dependencies"));
         assert!(!env.iter().any(|(k, _)| k == "npm_package_scripts"));
+    }
+
+    #[test]
+    fn grade_rank_orders_a_best_to_f_worst_and_gates() {
+        assert!(grade_rank('A') > grade_rank('B'));
+        assert!(grade_rank('B') > grade_rank('C'));
+        assert!(grade_rank('C') > grade_rank('D'));
+        assert!(grade_rank('D') > grade_rank('F'));
+        assert_eq!(grade_rank('a'), grade_rank('A')); // case-insensitive
+        // `--require-grade B` blocks a C, allows an A
+        assert!(grade_rank('C') < grade_rank('B')); // C is blocked
+        assert!(grade_rank('A') >= grade_rank('B')); // A passes
     }
 }

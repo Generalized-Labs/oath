@@ -3,6 +3,21 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.1.3] - 2026-06-24
+
+### Added
+- **`oath exec` always-on pre-run card.** Before running a package, oath now shows
+  its safety grade + score, publish age, last publisher, open-source flag,
+  readable-vs-obfuscated, unpacked size, and runtime permissions — replacing
+  npm/npx's uninformative `[y/N]` prompt with a real verdict.
+- **`oath exec --json`** emits a machine-readable verdict (`grade`, `score`,
+  `capabilities`, `last_publisher`, `age_days`, `integrity`, `decision`, …) so an
+  AI agent or CI step can vet a `skill.md` / `npx`-style command *before* it runs —
+  closing a real supply-chain hole for agents.
+- **Agent gates**: `oath exec --require-grade <A-F>` and `--dry-run`, with stable
+  exit codes an agent can branch on without parsing text: `10` blocked by grade,
+  `11` blocked by min-age, `13` declined.
+
 ## [0.1.2] - 2026-06-24
 
 ### Added
