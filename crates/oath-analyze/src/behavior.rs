@@ -69,9 +69,13 @@ impl Behavior {
         self.shell_download |= o.shell_download;
     }
 
-    /// A strong sensitive-data source (not just reading NODE_ENV).
+    /// A specifically sensitive data source: a named secret env var or a
+    /// credential-file path. Whole-`process.env` capture (`env_whole`) is
+    /// deliberately NOT here -- build tools legitimately capture the env
+    /// (vite/webpack `define`, `loadEnv`), so it only escalates in the
+    /// corroborated exfil rule, not as a blanket "strong source".
     pub fn strong_source(&self) -> bool {
-        self.env_whole || self.sensitive_env || self.cred_path
+        self.sensitive_env || self.cred_path
     }
 }
 
@@ -89,10 +93,19 @@ pub fn verdict(b: &Behavior, has_install_script: bool) -> (Verdict, Vec<String>)
     let mut reasons = Vec::new();
     let mut block = false;
 
-    if b.strong_source() && b.net {
+    // High-confidence exfil: a SPECIFIC sensitive secret (token/key/AWS/...) or a
+    // credential-file path read alongside a network sink.
+    if (b.sensitive_env || b.cred_path) && b.net {
         block = true;
-        reasons
-            .push("exfiltration: sensitive env/credentials read alongside a network sink".into());
+        reasons.push("exfiltration: sensitive credentials read alongside a network sink".into());
+    }
+    // Whole-`process.env` capture + network is common in legitimate build tools
+    // (vite/webpack `define`, env forwarding to workers), so it only Blocks when a
+    // real payload marker co-occurs (attacker host, decode, or worm/secret-stealer
+    // markers). Bare whole-env + network downgrades to a Warn below.
+    else if b.env_whole && b.net && (b.suspicious_host || b.worm_marker) {
+        block = true;
+        reasons.push("exfiltration: full environment captured and sent to a network sink".into());
     }
     if b.decode_into_exec {
         block = true;
@@ -255,23 +268,24 @@ const SENSITIVE_ENV: &[&str] = &[
     "CLIENT_SECRET",
 ];
 
+// Genuine secret/credential targets only. Deliberately excludes:
+//   - the `.env*` family: standard dotenv files that essentially every build
+//     tool (vite/next/dotenv/...) reads legitimately, so the literal string is a
+//     terrible exfil discriminator;
+//   - `/etc/passwd`: world-readable and littered across benign code/tests/tutorials
+//     (the real secret is /etc/shadow, kept below).
 const CRED_PATH_FRAGMENTS: &[&str] = &[
     ".ssh/id_rsa",
     ".ssh/id_ed25519",
     ".aws/credentials",
     ".aws/config",
     ".npmrc",
-    "/etc/passwd",
     "/etc/shadow",
     "id_rsa",
     "Library/Keychains",
     "Login Data",
     "/.config/gcloud",
     ".docker/config.json",
-    "/.env",
-    "\\.env",
-    ".env.local",
-    ".env.production",
     "wallet.dat",
     ".bash_history",
 ];

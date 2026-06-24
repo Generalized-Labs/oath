@@ -28,19 +28,24 @@ scanned, since many attacks put the entire payload in `preinstall`.
 ## Measured performance
 
 Benchmarked with `cargo run --release -p oath-analyze --example bench` against:
-- **benign:** 928 of the most-depended-on npm packages (+ their trees).
-- **malware:** 313 real npm samples from DataDog's labeled
+- **benign:** 1,776 package trees from a local store of the most-depended-on npm
+  packages (bundled/vendored sub-packages counted separately).
+- **malware:** 883 real npm samples from DataDog's labeled
   `malicious-software-packages-dataset` (static analysis only — never executed).
 
 | | substring engine (old) | behavioral engine (current) |
 |---|---|---|
-| **false-positive rate** (benign flagged) | 11.6% | **1.1%** |
-| **recall** (malware caught) | 42.3% | **54.1%** |
+| **false-positive rate** (benign flagged) | 11.6% | **0.6%** |
+| **recall** (malware caught) | 42.3% | **57.5%** |
 
-The low-false-positive operating point is intentional: false alarms on popular
-packages (the old engine flagged express, next.js, prisma, mongodb) are what
-destroy trust. A higher-recall point (~55% at ~3% FP) exists but re-flags
-next.js's vendored bundles.
+The low-false-positive operating point is intentional: false alarms on the
+packages everyone installs destroy trust. The exfil rule treats a *specifically*
+sensitive source — a named secret env var (`AWS_SECRET`, `NPM_TOKEN`, …) or a
+credential-file path (`~/.ssh/id_rsa`, `.aws/credentials`) — reaching a network
+sink as high-confidence. A build tool merely capturing the whole environment
+(vite/webpack `define`, `loadEnv`) is **not**, so vite, esbuild, and similar are
+no longer flagged. The remaining false positives are vendored bundles inside a
+few large packages (next.js / prisma).
 
 ## What it does NOT catch (honest limits)
 

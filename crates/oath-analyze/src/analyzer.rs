@@ -182,8 +182,14 @@ impl<'a> Visit<'a> for AstVisitor<'a> {
                     && obj.name == "Buffer"
                     && it.arguments.len() >= 2
                 {
-                    let end = (start + 80).min(self.source.len() as u32);
-                    let slice = &self.source[start as usize..end as usize];
+                    // Clamp the window end down to a UTF-8 char boundary; a fixed
+                    // +80 byte offset can land inside a multi-byte char (e.g.
+                    // non-ASCII source) and panic the slice.
+                    let mut end = (start as usize + 80).min(self.source.len());
+                    while end > start as usize && !self.source.is_char_boundary(end) {
+                        end -= 1;
+                    }
+                    let slice = &self.source[start as usize..end];
                     if slice.contains("base64") || slice.contains("hex") {
                         let line = self.offset_to_line(start);
                         let snippet = self.line_snippet(start);
