@@ -34,7 +34,7 @@ enum Commands {
     /// Install dependencies from package.json
     Install {
         packages: Vec<String>,
-        #[arg(short = 'D', long)]
+        #[arg(short = 'D', long, alias = "save-dev")]
         dev: bool,
         #[arg(long)]
         dry_run: bool,
@@ -53,6 +53,9 @@ enum Commands {
         /// Install to global location (~/.oath/global/)
         #[arg(short = 'g', long)]
         global: bool,
+        /// Fail if lockfile is missing or would be changed (for CI)
+        #[arg(long, alias = "ci")]
+        frozen_lockfile: bool,
     },
     /// Add a dependency
     Add {
@@ -158,8 +161,9 @@ async fn main() -> Result<()> {
             run_scripts,
             min_age: _min_age,
             global,
+            frozen_lockfile,
         } => {
-            cmd_install(packages, dev, dry_run, !no_audit, yes, run_scripts, global).await?;
+            cmd_install(packages, dev, dry_run, !no_audit, yes, run_scripts, global, frozen_lockfile).await?;
         }
         Commands::Add { package, dev, yes: _ } => {
             cmd_add(&package, dev).await?;
@@ -229,18 +233,24 @@ async fn main() -> Result<()> {
 
 async fn cmd_install(
     packages: Vec<String>,
-    _dev: bool,
+    dev: bool,
     dry_run: bool,
     run_audit: bool,
     yes_flag: bool,
     run_scripts: bool,
     global: bool,
+    frozen_lockfile: bool,
 ) -> Result<()> {
     let start = Instant::now();
 
     // ---- Global install shortcut --------------------------------------------
     if global {
         return cmd_install_global(packages, dry_run).await;
+    }
+
+    // ---- Frozen lockfile check (--frozen-lockfile / --ci) -------------------
+    if frozen_lockfile && !PathBuf::from("oath-lock.json").exists() {
+        anyhow::bail!("no lockfile found, run oath install first");
     }
 
     // ---- Workspace detection ------------------------------------------------
@@ -383,6 +393,23 @@ async fn cmd_install(
             let name = node.name.clone();
             let version = node.version.clone();
             set.spawn(async move {
+                // For git dependencies, the resolved URL is git+https:// or similar.
+                // Try to find the cached tarball from the git cache directory.
+                if resolved.starts_with("git+") || resolved.starts_with("github:")
+                    || resolved.starts_with("gitlab:") || resolved.starts_with("bitbucket:")
+                {
+                    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+                    let safe_name = name.replace('/', "+");
+                    let cache_file = std::path::PathBuf::from(&home)
+                        .join(".oath").join("git-cache")
+                        .join(format!("{}-{}.tgz", safe_name, version));
+                    if cache_file.exists() {
+                        let data = std::fs::read(&cache_file)
+                            .with_context(|| format!("reading git cache {}", cache_file.display()))?;
+                        return Ok((name, version, data));
+                    }
+                    anyhow::bail!("git dep {name}@{version} not in cache and no tarball URL available");
+                }
                 let data = client
                     .fetch_tarball(&resolved, integrity.as_deref())
                     .await
@@ -429,7 +456,44 @@ async fn cmd_install(
 
     // Write lockfile
     let lockfile = Lockfile::from_graph(&graph, &project_name, &project_version);
-    lockfile.write(&PathBuf::from("oath-lock.json"))?;
+    if frozen_lockfile {
+        // Compare new lockfile with existing; error if they differ
+        let existing_content = std::fs::read_to_string("oath-lock.json")
+            .context("failed to read oath-lock.json")?;
+        let new_content = serde_json::to_string_pretty(&lockfile)?;
+        // Parse both to compare semantically (ignore key ordering differences)
+        let existing_val: serde_json::Value = serde_json::from_str(&existing_content)
+            .context("failed to parse existing oath-lock.json")?;
+        let new_val: serde_json::Value = serde_json::from_str(&new_content)?;
+        if existing_val != new_val {
+            anyhow::bail!("lockfile would be modified, refusing (--frozen-lockfile)");
+        }
+    } else {
+        lockfile.write(&PathBuf::from("oath-lock.json"))?;
+    }
+
+    // Write package.json manifest if packages were explicitly specified
+    if !packages.is_empty() {
+        let mut pkg_json: serde_json::Value = if PathBuf::from("package.json").exists() {
+            read_package_json()?
+        } else {
+            serde_json::json!({"name": "project", "version": "1.0.0"})
+        };
+        let dep_key = if dev { "devDependencies" } else { "dependencies" };
+        if pkg_json.get(dep_key).is_none() {
+            pkg_json[dep_key] = serde_json::json!({});
+        }
+        for (pkg_name, _spec) in &deps {
+            // Find resolved version from graph
+            let resolved_version = graph.nodes.values()
+                .find(|n| &n.name == pkg_name)
+                .map(|n| n.version.clone())
+                .unwrap_or_else(|| "0.0.0".to_string());
+            let version_range = format!("^{}", resolved_version);
+            pkg_json[dep_key][pkg_name] = serde_json::Value::String(version_range);
+        }
+        std::fs::write("package.json", serde_json::to_string_pretty(&pkg_json)?)?;
+    }
 
     // -- Peer dependency warnings ---------------------------------------------
     let peer = &graph.peer_report;
@@ -1036,7 +1100,7 @@ async fn cmd_add(package: &str, _dev: bool) -> Result<()> {
 
     std::fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
     println!("oath: added {name}@{} ({key})", resolved.version);
-    cmd_install(vec![], false, false, true, false, false, false).await
+    cmd_install(vec![], false, false, true, false, false, false, false).await
 }
 
 // ---- RUN --------------------------------------------------------------------

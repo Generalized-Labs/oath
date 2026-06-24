@@ -12,6 +12,13 @@ use tokio::sync::RwLock;
 
 use crate::packument::Packument;
 
+/// Abbreviated packument Accept header (much smaller than full application/json)
+const ABBREVIATED_ACCEPT: &str = "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8";
+
+/// TTL for disk cache in seconds: if the cached file is younger than this,
+/// return it directly without any HTTP request.
+const CACHE_TTL_SECS: u64 = 300; // 5 minutes
+
 /// Registry client configuration
 #[derive(Debug, Clone)]
 pub struct RegistryConfig {
@@ -35,7 +42,7 @@ impl Default for RegistryConfig {
             registry_url: "https://registry.npmjs.org".to_string(),
             cache_dir,
             token: None,
-            timeout_secs: 30,
+            timeout_secs: 10,
         }
     }
 }
@@ -58,10 +65,11 @@ impl RegistryClient {
     pub fn new(config: RegistryConfig) -> Result<Self> {
         let mut headers = HeaderMap::new();
 
-        // Use full metadata to get optionalDependencies, peerDependencies, os, cpu
+        // Use abbreviated packument format -- much smaller than full application/json
+        // vnd.npm.install-v1+json is ~100x smaller for large packages like babel
         headers.insert(
             ACCEPT,
-            HeaderValue::from_static("application/json"),
+            HeaderValue::from_static(ABBREVIATED_ACCEPT),
         );
 
         if let Some(ref token) = config.token {
@@ -76,6 +84,8 @@ impl RegistryClient {
             .default_headers(headers)
             .timeout(std::time::Duration::from_secs(config.timeout_secs))
             .gzip(true)
+            .tcp_nodelay(true)
+            .pool_max_idle_per_host(32)
             .build()
             .context("failed to build HTTP client")?;
 
@@ -100,12 +110,38 @@ impl RegistryClient {
         let url = self.package_url(name);
         tracing::debug!("fetching packument: {url}");
 
+        // Fast path: check disk cache first with TTL
+        // If the cached file is fresh (< CACHE_TTL_SECS), use it directly without HTTP
+        let cache_path = self.cache_path(name);
+        if let Ok(meta) = std::fs::metadata(&cache_path) {
+            if let Ok(modified) = meta.modified() {
+                let age = std::time::SystemTime::now()
+                    .duration_since(modified)
+                    .unwrap_or_default();
+                if age.as_secs() < CACHE_TTL_SECS {
+                    if let Ok(data) = std::fs::read(&cache_path) {
+                        if let Ok(packument) = serde_json::from_slice::<Packument>(&data) {
+                            tracing::debug!("{name}: disk cache hit ({}s old)", age.as_secs());
+                            return Ok(packument);
+                        }
+                    }
+                }
+            }
+        }
+
         let mut req = self.http.get(&url);
 
         // Attach etag for conditional request
         let etag_cache = self.etag_cache.read().await;
         if let Some(etag) = etag_cache.get(name) {
             req = req.header(IF_NONE_MATCH, etag.as_str());
+        } else {
+            // Try to load persisted etag from disk sidecar file
+            let etag_path = self.etag_path(name);
+            if let Ok(etag_str) = std::fs::read_to_string(&etag_path) {
+                let etag_str = etag_str.trim().to_string();
+                req = req.header(IF_NONE_MATCH, etag_str.as_str());
+            }
         }
         drop(etag_cache);
 
@@ -134,6 +170,9 @@ impl RegistryClient {
             if let Ok(etag_str) = etag.to_str() {
                 let mut cache = self.etag_cache.write().await;
                 cache.insert(name.to_string(), etag_str.to_string());
+                // Persist etag to disk for use across process restarts
+                let etag_path = self.etag_path(name);
+                tokio::fs::write(&etag_path, etag_str).await.ok();
             }
         }
 
@@ -245,6 +284,11 @@ impl RegistryClient {
         // @scope/name -> @scope__name
         let safe_name = name.replace('/', "__");
         self.config.cache_dir.join(format!("{safe_name}.json"))
+    }
+
+    fn etag_path(&self, name: &str) -> PathBuf {
+        let safe_name = name.replace('/', "__");
+        self.config.cache_dir.join(format!("{safe_name}.etag"))
     }
 }
 

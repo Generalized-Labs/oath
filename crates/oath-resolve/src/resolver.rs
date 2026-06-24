@@ -13,6 +13,7 @@ use tracing::{debug, info, warn};
 use node_semver::{Range, Version};
 use oath_fetch::{resolve_version, Packument, RegistryClient};
 
+use crate::git::{is_git_spec, parse_git_spec, resolve_git_spec};
 use crate::graph::{DepGraph, DepNode, PeerReport, PeerResolution};
 
 /// Check if a package is compatible with the current platform.
@@ -156,14 +157,22 @@ pub struct Resolver {
     options: ResolveOptions,
     /// Cache of fetched packuments to avoid redundant requests
     packument_cache: Arc<RwLock<HashMap<String, Packument>>>,
+    /// HTTP client for git dependency downloads
+    http: reqwest::Client,
 }
 
 impl Resolver {
     pub fn new(client: RegistryClient, options: ResolveOptions) -> Self {
+        let http = reqwest::Client::builder()
+            .user_agent("oath-pm")
+            .timeout(std::time::Duration::from_secs(60))
+            .build()
+            .expect("failed to build reqwest client");
         Self {
             client,
             options,
             packument_cache: Arc::new(RwLock::new(HashMap::new())),
+            http,
         }
     }
 
@@ -230,6 +239,10 @@ impl Resolver {
                     if dep.depth > self.options.max_depth {
                         continue;
                     }
+                    // Skip git deps -- they don't come from the npm registry
+                    if is_git_spec(&dep.specifier) {
+                        continue;
+                    }
                     if !cache.contains_key(&dep.name) && seen.insert(dep.name.clone()) {
                         names_to_fetch.push(dep.name.clone());
                     }
@@ -272,6 +285,25 @@ impl Resolver {
             for pending in current_level {
                 if pending.depth > self.options.max_depth {
                     warn!("max depth exceeded for {}", pending.name);
+                    continue;
+                }
+
+                // Handle git dependencies (github:, git+https://, etc.)
+                if is_git_spec(&pending.specifier) {
+                    match self.resolve_git_dep(&pending, &mut graph, &mut resolved, &mut next_level, packages_resolved).await {
+                        Ok(count) => {
+                            packages_resolved = count;
+                        }
+                        Err(e) => {
+                            if pending.optional {
+                                debug!("skipping optional git dep {}: {e}", pending.name);
+                            } else {
+                                return Err(e).with_context(|| {
+                                    format!("resolving git dep {}@{}", pending.name, pending.specifier)
+                                });
+                            }
+                        }
+                    }
                     continue;
                 }
 
@@ -447,6 +479,122 @@ impl Resolver {
         graph.peer_report = resolve_peers(&mut graph);
 
         Ok(graph)
+    }
+
+    /// Resolve a git dependency and add it to the graph.
+    /// Returns the updated packages_resolved count.
+    async fn resolve_git_dep(
+        &self,
+        pending: &PendingDep,
+        graph: &mut DepGraph,
+        resolved: &mut HashSet<String>,
+        next_level: &mut Vec<PendingDep>,
+        mut packages_resolved: u32,
+    ) -> Result<u32> {
+        let spec = match parse_git_spec(&pending.specifier) {
+            Some(s) => s,
+            None => {
+                anyhow::bail!("failed to parse git spec: {}", pending.specifier);
+            }
+        };
+
+        info!("resolving git dep {}@{}", pending.name, pending.specifier);
+
+        let git_resolved = resolve_git_spec(&spec, &self.http)
+            .await
+            .with_context(|| format!("fetching git dep {}@{}", pending.name, pending.specifier))?;
+
+        // Use the resolved name from package.json (may differ from the dep name in package.json)
+        // but use pending.name (or alias) as the install name for the node
+        let install_name = pending.alias.as_deref().unwrap_or(&pending.name);
+        let key = DepGraph::key(install_name, &git_resolved.version);
+
+        // Skip if already resolved
+        if resolved.contains(&key) {
+            return Ok(packages_resolved);
+        }
+        resolved.insert(key.clone());
+
+        if pending.depth == 0 {
+            graph.roots.push(key.clone());
+        }
+
+        packages_resolved += 1;
+        if packages_resolved % 50 == 0 {
+            info!("resolved {packages_resolved} packages...");
+        }
+
+        // Build dependency map for this node (raw specs, will be fixed up later)
+        let mut node_deps = HashMap::new();
+        for (dep_name, dep_spec) in &git_resolved.dependencies {
+            node_deps.insert(dep_name.clone(), dep_spec.clone());
+            let (real_dep_name, real_dep_spec, dep_alias) = if let Some((real, ver)) = parse_alias_spec(dep_spec) {
+                (real, ver, Some(dep_name.clone()))
+            } else {
+                (dep_name.clone(), dep_spec.clone(), None)
+            };
+            next_level.push(PendingDep {
+                name: real_dep_name,
+                specifier: real_dep_spec,
+                depth: pending.depth + 1,
+                dev: pending.dev,
+                optional: false,
+                alias: dep_alias,
+            });
+        }
+
+        if self.options.include_optional {
+            for (dep_name, dep_spec) in &git_resolved.optional_dependencies {
+                node_deps.insert(dep_name.clone(), dep_spec.clone());
+                let (real_dep_name, real_dep_spec, dep_alias) = if let Some((real, ver)) = parse_alias_spec(dep_spec) {
+                    (real, ver, Some(dep_name.clone()))
+                } else {
+                    (dep_name.clone(), dep_spec.clone(), None)
+                };
+                next_level.push(PendingDep {
+                    name: real_dep_name,
+                    specifier: real_dep_spec,
+                    depth: pending.depth + 1,
+                    dev: pending.dev,
+                    optional: true,
+                    alias: dep_alias,
+                });
+            }
+        }
+
+        // Insert node with resolved_url set to the git URL (used later for download)
+        graph.nodes.insert(
+            key,
+            DepNode {
+                name: git_resolved.name.clone(),
+                alias: pending.alias.clone(),
+                version: git_resolved.version.clone(),
+                resolved: git_resolved.resolved_url.clone(),
+                integrity: None,
+                dependencies: node_deps,
+                has_install_script: git_resolved.has_install_script,
+                dev: pending.dev,
+                optional: pending.optional,
+                peer_dependencies: HashMap::new(),
+                optional_peers: std::collections::HashSet::new(),
+                resolved_peers: HashMap::new(),
+            },
+        );
+
+        // Save the tarball bytes to a local git cache so the CLI download loop can use them
+        // without re-fetching from the network.
+        // Path: ~/.oath/git-cache/{safe_name}-{version}.tgz
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let cache_dir = std::path::PathBuf::from(&home).join(".oath").join("git-cache");
+        std::fs::create_dir_all(&cache_dir).ok();
+        let safe_name = git_resolved.name.replace('/', "+");
+        let cache_file = cache_dir.join(format!("{}-{}.tgz", safe_name, git_resolved.version));
+        if !cache_file.exists() {
+            std::fs::write(&cache_file, &git_resolved.tarball_data)
+                .with_context(|| format!("failed to cache git tarball at {}", cache_file.display()))?;
+        }
+
+        Ok(packages_resolved)
     }
 }
 

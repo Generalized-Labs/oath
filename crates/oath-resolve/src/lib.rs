@@ -7,6 +7,7 @@
 //! Future: upgrade to PubGrub for better conflict resolution.
 
 pub mod graph;
+pub mod git;
 pub mod lockfile;
 pub mod resolver;
 

@@ -1328,12 +1328,15 @@ name = "oath-resolve"
 version = "0.1.0"
 dependencies = [
  "anyhow",
+ "flate2",
  "futures",
  "node-semver",
  "oath-core",
  "oath-fetch",
+ "reqwest",
  "serde",
  "serde_json",
+ "tar",
  "tempfile",
  "tokio",
  "tracing",
