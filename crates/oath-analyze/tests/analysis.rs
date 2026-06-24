@@ -33,6 +33,17 @@ fn detects_require_child_process() {
 }
 
 #[test]
+fn non_ascii_source_near_buffer_from_does_not_panic() {
+    // Regression: the Buffer.from detector sliced a fixed +80-byte window, which
+    // could land inside a multi-byte UTF-8 char and panic (seen on real malware
+    // with Turkish comments). Reaching the assertion = it returned without panic.
+    let findings = analyze(
+        "const x = Buffer.from(data, 'base64'); // parçalı veri çözme işlemi ığüşöç çalışır\nconsole.log(x);",
+    );
+    let _ = findings;
+}
+
+#[test]
 fn detects_eval() {
     let findings = analyze(
         r#"
