@@ -131,7 +131,7 @@ impl PackageScanner {
         // using fs/http/process.env). Capabilities are neutral; only dangerous
         // combinations -- strong-source->network, decode->exec, install-hook
         // payloads -- escalate to Warn/Block.
-        let (verdict, _reasons) = behavior::verdict(&pkg_behavior, has_install_script);
+        let (verdict, verdict_reasons) = behavior::verdict(&pkg_behavior, has_install_script);
         let overall_risk = match verdict {
             Verdict::Block => RiskLevel::Critical,
             Verdict::Warn => RiskLevel::High,
@@ -146,6 +146,7 @@ impl PackageScanner {
             files_scanned,
             lines_scanned,
             capabilities,
+            verdict_reasons,
         })
     }
 }

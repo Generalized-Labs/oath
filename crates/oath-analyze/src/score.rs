@@ -447,6 +447,7 @@ mod tests {
             files_scanned: 1,
             lines_scanned: 10,
             capabilities: Capabilities::default(),
+            verdict_reasons: vec![],
         }
     }
 

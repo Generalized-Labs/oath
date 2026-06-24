@@ -131,6 +131,9 @@ pub struct AnalysisReport {
     pub lines_scanned: usize,
     /// Detected capabilities summary (for oathx permission prompt)
     pub capabilities: Capabilities,
+    /// Human-readable reasons the behavioral verdict escalated (empty if Info).
+    #[serde(default)]
+    pub verdict_reasons: Vec<String>,
 }
 
 /// Summary of what this package can do (for permission prompts)

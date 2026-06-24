@@ -289,6 +289,24 @@ impl<'a> BehaviorVisitor<'a> {
         false
     }
 
+    /// Check a static string (from a string literal or a template-literal quasi)
+    /// for credential paths, exfil hosts, worm markers, and shell payloads.
+    fn check_string(&mut self, v: &str) {
+        if CRED_PATH_FRAGMENTS.iter().any(|p| v.contains(p)) {
+            self.b.cred_path = true;
+        }
+        let vl = v.to_ascii_lowercase();
+        if SUSPICIOUS_HOST.iter().any(|h| vl.contains(h)) {
+            self.b.suspicious_host = true;
+        }
+        if WORM_MARKER.iter().any(|w| v.contains(w)) {
+            self.b.worm_marker = true;
+        }
+        if SHELL_DOWNLOAD.iter().any(|c| v.contains(c)) {
+            self.b.shell_download = true;
+        }
+    }
+
     fn arg_is_fetchlike(&self, arg: &Expression) -> bool {
         if let Expression::CallExpression(c) = arg {
             if let Some(name) = callee_name(&c.callee) {
@@ -407,21 +425,17 @@ impl<'a> Visit<'a> for BehaviorVisitor<'a> {
     }
 
     fn visit_string_literal(&mut self, it: &oxc::ast::ast::StringLiteral<'a>) {
-        let v = it.value.as_str();
-        if CRED_PATH_FRAGMENTS.iter().any(|p| v.contains(p)) {
-            self.b.cred_path = true;
-        }
-        let vl = v.to_ascii_lowercase();
-        if SUSPICIOUS_HOST.iter().any(|h| vl.contains(h)) {
-            self.b.suspicious_host = true;
-        }
-        if WORM_MARKER.iter().any(|w| v.contains(w)) {
-            self.b.worm_marker = true;
-        }
-        if SHELL_DOWNLOAD.iter().any(|c| v.contains(c)) {
-            self.b.shell_download = true;
-        }
+        self.check_string(it.value.as_str());
         let _ = looks_base64ish; // reserved for a future blob-entropy signal
+    }
+
+    fn visit_template_literal(&mut self, it: &oxc::ast::ast::TemplateLiteral<'a>) {
+        // Malware builds exfil URLs with interpolation (`api.telegram.org/bot${t}`);
+        // the host lives in the static quasi parts, not a plain string literal.
+        for q in &it.quasis {
+            self.check_string(q.value.raw.as_str());
+        }
+        oxc::ast_visit::walk::walk_template_literal(self, it);
     }
 }
 

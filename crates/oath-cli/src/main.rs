@@ -704,38 +704,31 @@ async fn cmd_install(
                 Ok(r) => r,
                 Err(_) => continue,
             };
+            // Tiered behavioral verdict: capabilities are neutral; only dangerous
+            // combinations escalate. Critical = Block-tier, High = Warn-tier.
             match report.overall_risk {
                 RiskLevel::Critical => {
                     critical += 1;
                     println!();
-                    println!(
-                        "  CRITICAL {}@{} -- {}",
-                        node.name,
-                        node.version,
-                        report
-                            .findings
-                            .first()
-                            .map(|f| f.message.as_str())
-                            .unwrap_or("suspicious behavior")
-                    );
-                    for f in report.findings.iter().filter(|f| f.risk >= RiskLevel::High) {
-                        println!("    [{:?}] {} L{}", f.risk, f.message, f.line);
-                        if let Some(s) = &f.snippet {
-                            println!("      {s}");
-                        }
+                    println!("  \u{26d4} flagged  {}@{}", node.name, node.version);
+                    for r in &report.verdict_reasons {
+                        println!("       - {r}");
+                    }
+                    let caps = fmt_capabilities(&report.capabilities);
+                    if !caps.is_empty() {
+                        println!("       capabilities: {caps}");
                     }
                 }
                 RiskLevel::High => {
                     high += 1;
                     println!(
-                        "  WARN {}@{} -- {}",
+                        "  \u{26a0}  warn     {}@{} -- {}",
                         node.name,
                         node.version,
                         report
-                            .findings
-                            .iter()
-                            .find(|f| f.risk >= RiskLevel::High)
-                            .map(|f| f.message.as_str())
+                            .verdict_reasons
+                            .first()
+                            .map(|s| s.as_str())
                             .unwrap_or("flagged behavior")
                     );
                 }
@@ -746,7 +739,7 @@ async fn cmd_install(
         if critical > 0 {
             println!();
             println!(
-                "  {} critical issue(s) found -- run `oath audit` for details",
+                "  {} package(s) flagged (review with `oath perms <pkg>` / `oath audit`)",
                 critical
             );
         } else if high > 0 {
@@ -1139,12 +1132,19 @@ fn cmd_perms(package: &str) -> Result<()> {
         let version = ver_entry.file_name().to_string_lossy().to_string();
         let report = PackageScanner::scan(package, &version, &pkg_path)?;
 
+        let verdict_label = match report.overall_risk {
+            RiskLevel::Critical => "\u{26d4} flagged -- dangerous behavior combination",
+            RiskLevel::High => "\u{26a0} warning -- review recommended",
+            _ => "ok -- capabilities only, no dangerous combination",
+        };
         println!("{package}@{version}");
-        println!("  risk:    {}", report.overall_risk);
-        println!("  files:   {}", report.files_scanned);
-        println!("  lines:   {}", report.lines_scanned);
+        println!("  verdict: {verdict_label}");
+        for r in &report.verdict_reasons {
+            println!("    - {r}");
+        }
+        println!("  files:   {} ({} lines)", report.files_scanned, report.lines_scanned);
         println!();
-        println!("  PERMISSIONS:");
+        println!("  CAPABILITIES (neutral -- what the package can do):");
         println!("    network:         {}", yn(report.capabilities.network));
         println!("    filesystem:      {}", yn(report.capabilities.filesystem));
         println!("    env vars:        {}", yn(report.capabilities.env_access));
@@ -1154,23 +1154,9 @@ fn cmd_perms(package: &str) -> Result<()> {
             "    install scripts: {}",
             yn(report.capabilities.has_install_scripts)
         );
-
-        if !report.findings.is_empty() {
-            println!();
-            println!("  FINDINGS:");
-            for f in &report.findings {
-                let marker = match f.risk {
-                    RiskLevel::Critical => "!!",
-                    RiskLevel::High => " !",
-                    RiskLevel::Medium => " ~",
-                    _ => "  ",
-                };
-                println!("  {marker} L{:<4} {} -- {}", f.line, f.kind, f.message);
-                if let Some(s) = &f.snippet {
-                    println!("       > {s}");
-                }
-            }
-        }
+        // Legacy per-pattern findings are intentionally not shown here: under the
+        // tiered model the capabilities above are neutral facts and the `verdict`
+        // line is the judgment. `oath audit` still lists detailed findings.
     }
     Ok(())
 }
