@@ -7,6 +7,7 @@ use std::path::Path;
 use walkdir::WalkDir;
 
 use crate::analyzer::Analyzer;
+use crate::behavior::{self, Behavior, Verdict};
 use crate::report::{AnalysisReport, Capabilities, Finding, FindingKind, RiskLevel};
 
 pub struct PackageScanner;
@@ -17,6 +18,8 @@ impl PackageScanner {
         let mut all_findings: Vec<Finding> = Vec::new();
         let mut files_scanned = 0usize;
         let mut lines_scanned = 0usize;
+        let mut pkg_behavior = Behavior::default();
+        let mut has_install_script = false;
 
         // Check for install scripts in package.json first
         let pkg_json_path = package_dir.join("package.json");
@@ -27,6 +30,9 @@ impl PackageScanner {
                 for hook in &["preinstall", "install", "postinstall"] {
                     if let Some(script) = scripts.and_then(|s| s.get(hook)) {
                         if let Some(cmd) = script.as_str() {
+                            has_install_script = true;
+                            // The install command itself is often the payload.
+                            behavior::scan_install_command(cmd, &mut pkg_behavior);
                             all_findings.push(Finding {
                                 kind: FindingKind::InstallScript,
                                 risk: RiskLevel::Medium,
@@ -81,6 +87,9 @@ impl PackageScanner {
             lines_scanned += source.lines().count();
             files_scanned += 1;
 
+            // AST-first behavioral facts (capabilities + dangerous combinations).
+            pkg_behavior.merge(&behavior::analyze_file(&source, &relative_path));
+
             // Obfuscation detection post-pass on already-read source
             let obfuscation_findings = detect_obfuscation(&source, &relative_path);
             all_findings.extend(obfuscation_findings);
@@ -97,7 +106,7 @@ impl PackageScanner {
         // Deduplicate findings by (kind, file, line)
         all_findings.dedup_by(|a, b| a.kind == b.kind && a.file == b.file && a.line == b.line);
 
-        // Aggregate capabilities
+        // Aggregate capabilities (from AST behavior + legacy findings)
         let mut capabilities = Capabilities::default();
         for f in &all_findings {
             match f.kind {
@@ -110,13 +119,24 @@ impl PackageScanner {
                 _ => {}
             }
         }
+        capabilities.network |= pkg_behavior.net;
+        capabilities.filesystem |= pkg_behavior.fs;
+        capabilities.subprocess |= pkg_behavior.subprocess;
+        capabilities.env_access |= pkg_behavior.env_read;
+        capabilities.dynamic_exec |= pkg_behavior.code_exec;
+        capabilities.has_install_scripts |= has_install_script;
 
-        // Overall risk = max finding risk
-        let overall_risk = all_findings
-            .iter()
-            .map(|f| f.risk.clone())
-            .max()
-            .unwrap_or(RiskLevel::Clean);
+        // Overall risk is driven by the AST-first behavioral VERDICT, not the
+        // max of substring findings (which flagged express grade-F for merely
+        // using fs/http/process.env). Capabilities are neutral; only dangerous
+        // combinations -- strong-source->network, decode->exec, install-hook
+        // payloads -- escalate to Warn/Block.
+        let (verdict, _reasons) = behavior::verdict(&pkg_behavior, has_install_script);
+        let overall_risk = match verdict {
+            Verdict::Block => RiskLevel::Critical,
+            Verdict::Warn => RiskLevel::High,
+            Verdict::Info => RiskLevel::Info,
+        };
 
         Ok(AnalysisReport {
             package_name: package_name.to_string(),
