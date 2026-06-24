@@ -6,6 +6,8 @@ use std::sync::Arc;
 use std::time::Instant;
 use tokio::task::JoinSet;
 
+use rayon::prelude::*;
+
 use oath_analyze::{PackageScanner, RiskLevel};
 use oath_core::policy::OathPolicy;
 use oath_fetch::RegistryClient;
@@ -57,6 +59,8 @@ enum Commands {
         #[arg(long, alias = "ci")]
         frozen_lockfile: bool,
     },
+    /// Clean install from the lockfile (like `npm ci`): fail if it is missing or would change
+    Ci,
     /// Add a dependency
     Add {
         package: String,
@@ -66,13 +70,15 @@ enum Commands {
         yes: bool,
     },
     /// Remove a dependency
+    #[command(visible_aliases = ["uninstall", "rm"])]
     Remove { packages: Vec<String> },
     /// Run a script defined in package.json
     Run {
         script: Option<String>,
         args: Vec<String>,
     },
-    /// Execute a package binary (like npx, but with permission checks)
+    /// Execute a package binary (like npx, but scanned first)
+    #[command(visible_alias = "x")]
     Exec {
         package: String,
         #[arg(trailing_var_arg = true)]
@@ -84,8 +90,9 @@ enum Commands {
         #[arg(long)]
         min_age: Option<String>,
     },
-    /// Scan installed packages for malicious behavior
-    Audit {
+    /// Scan installed packages for malicious behavior (behavioral analysis, not a CVE audit)
+    #[command(visible_alias = "audit")]
+    Scan {
         #[arg(long)]
         production: bool,
         /// Show all findings, not just high/critical
@@ -180,11 +187,14 @@ async fn main() -> Result<()> {
         Commands::Init { name } => {
             cmd_init(name.as_deref())?;
         }
-        Commands::Audit {
+        Commands::Scan {
             production,
             verbose,
         } => {
-            cmd_audit(production, verbose).await?;
+            cmd_scan(production, verbose).await?;
+        }
+        Commands::Ci => {
+            cmd_install(vec![], false, false, true, false, false, false, true, None).await?;
         }
         Commands::Perms { package } => {
             cmd_perms(&package)?;
@@ -273,6 +283,12 @@ async fn cmd_install(
             return cmd_install_workspace(ws, dry_run, run_audit, yes_flag, run_scripts).await;
         }
         // If specific packages are listed, fall through to normal install
+    }
+
+    // Root project's own preinstall (trusted, runs like npm/bun) -- only on a
+    // plain `oath install` of the project, not when adding specific packages.
+    if packages.is_empty() {
+        run_root_lifecycle("preinstall");
     }
 
     // ---- Single-package install ---------------------------------------------
@@ -718,28 +734,35 @@ async fn cmd_install(
     // Static analysis on newly downloaded packages
     if run_audit && downloaded > 0 {
         println!("  scanning {} new packages...", downloaded);
+        // Scan new packages in parallel -- each scan is independent and
+        // CPU-bound (oxc AST parse), so this is the cold-install hot path.
+        let nodes: Vec<_> = graph.nodes.values().collect();
+        let scanned: Vec<_> = nodes
+            .par_iter()
+            .filter_map(|node| {
+                // Canonical store layout (name/version).
+                let pkg_dir = store.package_dir(&node.name, &node.version);
+                if !pkg_dir.exists() {
+                    return None;
+                }
+                match PackageScanner::scan(&node.name, &node.version, &pkg_dir) {
+                    Ok(r) => Some((node.name.as_str(), node.version.as_str(), r)),
+                    Err(_) => None,
+                }
+            })
+            .collect();
+
         let mut critical = 0usize;
         let mut high = 0usize;
-
-        for node in graph.nodes.values() {
-            // Use the canonical store layout (name/version). The old
-            // `format!("{}-{}")` path never existed, so the scan silently
-            // skipped every package and always printed "all clear".
-            let pkg_dir = store.package_dir(&node.name, &node.version);
-            if !pkg_dir.exists() {
-                continue;
-            }
-            let report = match PackageScanner::scan(&node.name, &node.version, &pkg_dir) {
-                Ok(r) => r,
-                Err(_) => continue,
-            };
+        // Reporting is serial -- deterministic, ordered output.
+        for (name, version, report) in &scanned {
             // Tiered behavioral verdict: capabilities are neutral; only dangerous
             // combinations escalate. Critical = Block-tier, High = Warn-tier.
             match report.overall_risk {
                 RiskLevel::Critical => {
                     critical += 1;
                     println!();
-                    println!("  \u{26d4} flagged  {}@{}", node.name, node.version);
+                    println!("  \u{26d4} flagged  {name}@{version}");
                     for r in &report.verdict_reasons {
                         println!("       - {r}");
                     }
@@ -751,9 +774,7 @@ async fn cmd_install(
                 RiskLevel::High => {
                     high += 1;
                     println!(
-                        "  \u{26a0}  warn     {}@{} -- {}",
-                        node.name,
-                        node.version,
+                        "  \u{26a0}  warn     {name}@{version} -- {}",
                         report
                             .verdict_reasons
                             .first()
@@ -768,17 +789,25 @@ async fn cmd_install(
         if critical > 0 {
             println!();
             println!(
-                "  {} package(s) flagged (review with `oath perms <pkg>` / `oath audit`)",
+                "  {} package(s) flagged (review with `oath perms <pkg>` / `oath scan`)",
                 critical
             );
         } else if high > 0 {
             println!(
-                "  {} warning(s) -- run `oath audit --verbose` for details",
+                "  {} warning(s) -- run `oath scan --verbose` for details",
                 high
             );
         } else {
             println!("  all clear");
         }
+    }
+
+    // Root project's own post-install lifecycle (trusted, runs like npm/bun) --
+    // covers the common husky `prepare` and any project postinstall.
+    if packages.is_empty() {
+        run_root_lifecycle("install");
+        run_root_lifecycle("postinstall");
+        run_root_lifecycle("prepare");
     }
 
     let total_time = start.elapsed();
@@ -1068,7 +1097,7 @@ fn relative_path_from(from_dir: &std::path::Path, to_path: &std::path::Path) -> 
 
 // ---- AUDIT ------------------------------------------------------------------
 
-async fn cmd_audit(production: bool, verbose: bool) -> Result<()> {
+async fn cmd_scan(production: bool, verbose: bool) -> Result<()> {
     let pkg = read_package_json()?;
     let mut all_deps = extract_deps(&pkg, "dependencies");
     if !production {
@@ -1076,12 +1105,12 @@ async fn cmd_audit(production: bool, verbose: bool) -> Result<()> {
     }
 
     if all_deps.is_empty() {
-        println!("oath audit: no dependencies found");
+        println!("oath scan: no dependencies found");
         return Ok(());
     }
 
     println!(
-        "oath audit: scanning {} direct deps (+ transitive)...",
+        "oath scan: scanning {} direct deps (+ transitive)...",
         all_deps.len()
     );
 
@@ -1097,7 +1126,7 @@ async fn cmd_audit(production: bool, verbose: bool) -> Result<()> {
     let store_entries = match std::fs::read_dir(&store_path) {
         Ok(e) => e,
         Err(_) => {
-            println!("oath audit: nothing installed yet (run `oath install` first)");
+            println!("oath scan: nothing installed yet (run `oath install` first)");
             return Ok(());
         }
     };
@@ -1173,7 +1202,7 @@ async fn cmd_audit(production: bool, verbose: bool) -> Result<()> {
 
     println!();
     println!(
-        "oath audit: {} packages scanned -- {} critical, {} high, {} medium",
+        "oath scan: {} packages scanned -- {} critical, {} high, {} medium",
         total, critical, high, medium
     );
 
@@ -1246,14 +1275,14 @@ fn cmd_perms(package: &str) -> Result<()> {
         );
         // Legacy per-pattern findings are intentionally not shown here: under the
         // tiered model the capabilities above are neutral facts and the `verdict`
-        // line is the judgment. `oath audit` still lists detailed findings.
+        // line is the judgment. `oath scan` still lists detailed findings.
     }
     Ok(())
 }
 
 // ---- ADD --------------------------------------------------------------------
 
-async fn cmd_add(package: &str, _dev: bool) -> Result<()> {
+async fn cmd_add(package: &str, dev: bool) -> Result<()> {
     let (name, spec) = parse_package_spec(package);
     let mut pkg: serde_json::Value = if PathBuf::from("package.json").exists() {
         read_package_json()?
@@ -1265,7 +1294,7 @@ async fn cmd_add(package: &str, _dev: bool) -> Result<()> {
     let packument = client.fetch_packument(&name).await?;
     let resolved = oath_fetch::resolve_version(&packument, &spec)?;
     let version_range = format!("^{}", resolved.version);
-    let key = if _dev {
+    let key = if dev {
         "devDependencies"
     } else {
         "dependencies"
@@ -1283,8 +1312,68 @@ async fn cmd_add(package: &str, _dev: bool) -> Result<()> {
 
 // ---- RUN --------------------------------------------------------------------
 
+/// Build the `npm_package_*` lifecycle env vars that npm/yarn expose to scripts,
+/// from a parsed package.json. Flattens top-level scalar fields (name, version,
+/// description, ...); skips objects/arrays (dependencies, scripts, ...).
+fn npm_package_env(pkg: &serde_json::Value) -> Vec<(String, String)> {
+    let mut vars = Vec::new();
+    if let Some(obj) = pkg.as_object() {
+        for (k, v) in obj {
+            let val = match v {
+                serde_json::Value::String(s) => s.clone(),
+                serde_json::Value::Number(n) => n.to_string(),
+                serde_json::Value::Bool(b) => b.to_string(),
+                _ => continue,
+            };
+            vars.push((format!("npm_package_{k}"), val));
+        }
+    }
+    vars
+}
+
+/// Run a root project lifecycle script (preinstall/postinstall/prepare) if defined.
+/// These are the project's OWN scripts (trusted), so -- unlike third-party
+/// dependency install scripts -- they always run, matching npm/bun. A failure
+/// warns but does not abort the install.
+fn run_root_lifecycle(event: &str) {
+    let pkg = match read_package_json() {
+        Ok(p) => p,
+        Err(_) => return,
+    };
+    let cmd = match pkg
+        .get("scripts")
+        .and_then(|s| s.get(event))
+        .and_then(|v| v.as_str())
+    {
+        Some(c) => c,
+        None => return,
+    };
+    let path_env = format!(
+        "./node_modules/.bin:{}",
+        std::env::var("PATH").unwrap_or_default()
+    );
+    let npm_env = npm_package_env(&pkg);
+    println!("> {event}: {cmd}");
+    let status = std::process::Command::new("sh")
+        .arg("-c")
+        .arg(cmd)
+        .env("PATH", &path_env)
+        .env("npm_lifecycle_event", event)
+        .envs(npm_env.iter().map(|(k, v)| (k, v)))
+        .status();
+    match status {
+        Ok(s) if !s.success() => eprintln!(
+            "  oath: warning -- root {event} script exited with {}",
+            s.code().unwrap_or(-1)
+        ),
+        Err(e) => eprintln!("  oath: warning -- failed to run root {event} script: {e}"),
+        _ => {}
+    }
+}
+
 fn cmd_run(script: Option<&str>, args: &[String]) -> Result<()> {
     let pkg = read_package_json()?;
+    let npm_env = npm_package_env(&pkg);
 
     let scripts_obj = pkg.get("scripts").and_then(|s| s.as_object());
 
@@ -1328,8 +1417,9 @@ fn cmd_run(script: Option<&str>, args: &[String]) -> Result<()> {
     let run_script = |script_name: &str, script_cmd: &str| -> Result<std::process::ExitStatus> {
         println!();
         println!(
-            "> {}@0.0.0 {}",
+            "> {}@{} {}",
             pkg["name"].as_str().unwrap_or("project"),
+            pkg["version"].as_str().unwrap_or("0.0.0"),
             script_name
         );
         println!("> {}", script_cmd);
@@ -1337,6 +1427,8 @@ fn cmd_run(script: Option<&str>, args: &[String]) -> Result<()> {
             .arg("-c")
             .arg(script_cmd)
             .env("PATH", &path_env)
+            .env("npm_lifecycle_event", script_name)
+            .envs(npm_env.iter().map(|(k, v)| (k, v)))
             .status()
             .with_context(|| format!("failed to execute script '{script_name}'"))?;
         Ok(status)
@@ -2072,6 +2164,7 @@ fn run_install_script(pkg_name: &str, pkg_dir: &std::path::Path) {
         Some(s) => s.clone(),
         None => return,
     };
+    let npm_env = npm_package_env(&value);
 
     for hook in &["preinstall", "install", "postinstall"] {
         if let Some(cmd) = scripts.get(*hook).and_then(|v| v.as_str()) {
@@ -2080,6 +2173,8 @@ fn run_install_script(pkg_name: &str, pkg_dir: &std::path::Path) {
                 .arg("-c")
                 .arg(cmd)
                 .current_dir(pkg_dir)
+                .env("npm_lifecycle_event", *hook)
+                .envs(npm_env.iter().map(|(k, v)| (k, v)))
                 .status();
             match status {
                 Ok(s) if !s.success() => {
@@ -3251,4 +3346,27 @@ fn cmd_log(tail: usize) -> Result<()> {
 
     println!("  log path: {}", logger.log_path().display());
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn npm_package_env_flattens_scalars_and_skips_objects() {
+        let pkg = serde_json::json!({
+            "name": "demo",
+            "version": "1.2.3",
+            "private": true,
+            "dependencies": { "left-pad": "^1.0.0" },
+            "scripts": { "build": "tsc" }
+        });
+        let env = npm_package_env(&pkg);
+        assert!(env.contains(&("npm_package_name".to_string(), "demo".to_string())));
+        assert!(env.contains(&("npm_package_version".to_string(), "1.2.3".to_string())));
+        assert!(env.contains(&("npm_package_private".to_string(), "true".to_string())));
+        // objects/arrays (dependencies, scripts) are skipped, not stringified
+        assert!(!env.iter().any(|(k, _)| k == "npm_package_dependencies"));
+        assert!(!env.iter().any(|(k, _)| k == "npm_package_scripts"));
+    }
 }

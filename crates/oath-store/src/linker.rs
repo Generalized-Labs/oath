@@ -124,6 +124,21 @@ impl Linker {
         let nm_dir = project_dir.join("node_modules");
         let oath_dir = nm_dir.join(".oath");
 
+        // No-op fast path: if the previous link's manifest matches this graph
+        // exactly and node_modules is present, skip the nuke-and-rebuild.
+        let manifest_path = oath_dir.join(".link-manifest");
+        let manifest = link_manifest(graph);
+        if nm_dir.exists()
+            && std::fs::read_to_string(&manifest_path)
+                .map(|prev| prev == manifest)
+                .unwrap_or(false)
+        {
+            return Ok(LinkResult {
+                linked: graph.nodes.len(),
+                ..Default::default()
+            });
+        }
+
         // Clean existing
         if nm_dir.exists() {
             std::fs::remove_dir_all(&nm_dir).context("failed to clean node_modules")?;
@@ -362,8 +377,19 @@ impl Linker {
             }
         }
 
+        // Record the manifest so an unchanged re-install can skip the rebuild.
+        let _ = std::fs::write(&manifest_path, &manifest);
+
         Ok(result)
     }
+}
+
+/// A stable fingerprint of the graph's package set, used to skip relinking an
+/// unchanged node_modules. Sorted `name@version` keys, newline-joined.
+fn link_manifest(graph: &DepGraph) -> String {
+    let mut keys: Vec<&str> = graph.nodes.keys().map(|k| k.as_str()).collect();
+    keys.sort_unstable();
+    keys.join("\n")
 }
 
 /// Result of a link operation
