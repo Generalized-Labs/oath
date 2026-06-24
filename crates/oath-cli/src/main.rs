@@ -1609,7 +1609,13 @@ fn cmd_verify() -> Result<()> {
     entries.sort_by_key(|(k, _)| k.as_str());
 
     for (key, node) in &entries {
-        let name = node.get("name").and_then(|n| n.as_str()).unwrap_or("");
+        // The package name lives in the key ("name@version" or "@scope/name@version"),
+        // not in the entry. Reading it from the entry left `name` empty and silently
+        // skipped every package -- the cause of "0 packages verified".
+        let name = match key.rfind('@') {
+            Some(at) if at > 0 => &key[..at],
+            _ => key.as_str(),
+        };
         let version = node.get("version").and_then(|v| v.as_str()).unwrap_or("");
         let integrity = node.get("integrity").and_then(|i| i.as_str()).unwrap_or("");
 
