@@ -116,6 +116,60 @@ fn clean_package_is_clean() {
 }
 
 #[test]
+fn detects_decode_then_execute() {
+    // Adversarial cases (from the scanner red-team): a decode primitive feeding
+    // straight into a code-exec sink. These must be Critical even though
+    // atob/charcode/Buffer.from on their own are only Info. This exercises the
+    // string scanner (detect_advanced_obfuscation), the path perms/score/install
+    // actually use -- not the AST Analyzer that `analyze()` drives.
+    for src in [
+        r#"eval(atob("cmVxdWlyZSgnY2hpbGRfcHJvY2Vzcycp"));"#,
+        r#"const m = require(String.fromCharCode(102,115));"#,
+        "const fn = new Function(Buffer.from(blob, 'base64').toString());",
+    ] {
+        let findings = oath_analyze::scanner::detect_advanced_obfuscation(src, "test.js");
+        assert!(
+            findings
+                .iter()
+                .any(|f| f.kind == FindingKind::DynamicExec && f.risk >= RiskLevel::High),
+            "decode-then-execute must be high/critical, src: {src}\n got: {:?}",
+            findings
+        );
+    }
+}
+
+#[test]
+fn web_framework_is_not_high_risk() {
+    // Reproduces the express false positive: reading NODE_ENV in an HTTP server
+    // that defines app.get/app.post and uses Buffer.from must NOT be flagged as
+    // exfiltration or obfuscation. (express used to score F / HIGH on this.)
+    let findings = analyze(
+        r#"
+        const http = require('http');
+        const fs = require('fs');
+        const env = process.env.NODE_ENV || 'development';
+        app.get('/', (req, res) => res.send(Buffer.from('hello')));
+        app.post('/data', (req, res) => res.send('ok'));
+        switch (c) { case 0x3c: break; }
+    "#,
+    );
+    assert!(
+        !findings
+            .iter()
+            .any(|f| f.kind == FindingKind::DataExfiltration),
+        "NODE_ENV + http server must not be flagged as exfiltration"
+    );
+    assert!(
+        !findings.iter().any(|f| f.risk >= RiskLevel::High),
+        "A normal web handler should have no high-risk findings, got: {:?}",
+        findings
+            .iter()
+            .filter(|f| f.risk >= RiskLevel::High)
+            .collect::<Vec<_>>()
+    );
+}
+
+#[test]
 fn detects_vm_runinnewcontext() {
     let findings = analyze(r#"
         const vm = require('vm');

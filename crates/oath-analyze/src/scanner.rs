@@ -257,11 +257,15 @@ pub fn detect_advanced_obfuscation(source: &str, relative_path: &str) -> Vec<Fin
 
     // 1. Base64 payload detection
     // Buffer.from('...', 'base64') or atob(...) with strings > 50 chars
+    // The high-signal discriminator is the explicit base64 decode (the `'base64'`
+    // arg / atob), not "Buffer.from exists". A hardcoded base64 blob of even
+    // moderate length being decoded is what's suspicious -- so we key on the
+    // decode form, not raw `Buffer.from(`, which every package uses.
     let b64_buf_re = Regex::new(
-        r#"Buffer\.from\(\s*['"]([A-Za-z0-9+/=]{50,})['"]\s*,\s*['"]base64['"]\s*\)"#
+        r#"Buffer\.from\(\s*['"]([A-Za-z0-9+/=]{24,})['"]\s*,\s*['"]base64['"]\s*\)"#
     ).unwrap();
     let atob_re = Regex::new(
-        r#"atob\(\s*['"]([A-Za-z0-9+/=]{50,})['"]\s*\)"#
+        r#"atob\(\s*['"]([A-Za-z0-9+/=]{24,})['"]\s*\)"#
     ).unwrap();
 
     let b64_count = b64_buf_re.find_iter(source).count()
@@ -319,26 +323,76 @@ pub fn detect_advanced_obfuscation(source: &str, relative_path: &str) -> Vec<Fin
         });
     }
 
-    // 4. Environment variable exfiltration: process.env read + HTTP request in same file
-    let has_env_read = source.contains("process.env");
-    let has_http = source.contains("require('http')")
+    // 4. Environment variable exfiltration: reading SENSITIVE env (or enumerating
+    //    the whole environment) together with a real outbound sink in one file.
+    //    The old check fired on any `process.env` + any `.get(`/`.post(`, so every
+    //    web framework reading NODE_ENV and defining app.get/app.post was flagged
+    //    HIGH. Real exfil reads secrets (or all of process.env) and ships them out.
+    let sensitive_env = source.contains("process.env.NPM_TOKEN")
+        || source.contains("process.env.AWS")
+        || source.contains("process.env.GITHUB_TOKEN")
+        || source.contains("process.env.GH_TOKEN")
+        || source.contains("process.env.SECRET")
+        || source.contains("process.env.PRIVATE")
+        || source.contains("process.env.TOKEN")
+        || source.contains("process.env.PASSWORD")
+        // whole-environment capture (JSON.stringify(process.env), {...process.env}, Object.keys(process.env))
+        || source.contains("stringify(process.env")
+        || source.contains("...process.env")
+        || source.contains("keys(process.env")
+        || source.contains("entries(process.env")
+        || source.contains("assign({}, process.env");
+
+    let outbound_sink = source.contains("require('http')")
         || source.contains("require(\"http\")")
         || source.contains("require('https')")
         || source.contains("require(\"https\")")
         || source.contains("fetch(")
-        || source.contains("axios.")
-        || source.contains(".get(")
-        || source.contains(".post(");
+        || source.contains("axios")
+        || source.contains(".request(")
+        || source.contains("net.connect")
+        || source.contains("dns.");
 
-    if has_env_read && has_http {
+    if sensitive_env && outbound_sink {
         findings.push(Finding {
             kind: FindingKind::DataExfiltration,
             risk: RiskLevel::High,
-            message: "Environment variable exfiltration: process.env access combined with HTTP requests in same file".to_string(),
+            message: "Possible secret exfiltration: sensitive environment variables read alongside an outbound network call".to_string(),
             file: relative_path.to_string(),
             line: 1,
             snippet: None,
         });
+    }
+
+    // 4b. Decode-then-execute combos: a decode primitive (base64/charcode) feeding
+    //     straight into a code-exec sink (eval/Function/require). These are near
+    //     zero-false-positive malware signatures -- legitimate code essentially
+    //     never eval()s decoded bytes or require()s a char-code-built name. This
+    //     restores (and sharpens) the signal lost when the loose atob/charcode/
+    //     Buffer.from patterns were downgraded to Info, with full context.
+    let compact: String = source.chars().filter(|c| !c.is_whitespace()).collect();
+    let decode_exec: &[&str] = &[
+        "eval(atob(",
+        "eval(Buffer.from(",
+        "eval(String.fromCharCode(",
+        "Function(atob(",
+        "Function(Buffer.from(",
+        "Function(String.fromCharCode(",
+        "require(atob(",
+        "require(Buffer.from(",
+        "require(String.fromCharCode(",
+    ];
+    for pat in decode_exec {
+        if compact.contains(pat) {
+            findings.push(Finding {
+                kind: FindingKind::DynamicExec,
+                risk: RiskLevel::Critical,
+                message: "Decoded payload executed: a base64/charcode decode feeds directly into eval/Function/require".to_string(),
+                file: relative_path.to_string(),
+                line: 1,
+                snippet: None,
+            });
+        }
     }
 
     // 5. Cryptocurrency wallet patterns

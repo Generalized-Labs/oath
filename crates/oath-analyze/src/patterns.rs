@@ -190,33 +190,26 @@ pub static PATTERNS: &[Pattern] = &[
     },
 
     // ---- OBFUSCATION ----
-    Pattern {
-        id: "obfus-buffer-from",
-        kind: FindingKind::Obfuscation,
-        risk: RiskLevel::Medium,
-        description: "Uses Buffer.from() to decode hidden strings (common obfuscation)",
-        strings: &["Buffer.from(", "Buffer.from ("],
-    },
+    // NOTE: raw `Buffer.from(`, `0x`, `\x`, `atob(`, `fromCharCode(` are far too
+    // common in legitimate code to flag on their own -- they made express score an
+    // F (a parser's `case 0x3c:` and `res.send(Buffer.from('wahoo'))` were called
+    // "obfuscation"). The dangerous *forms* (a long hardcoded base64 being decoded,
+    // eval(String.fromCharCode(...)), eval() of a long hex string) are detected with
+    // context by detect_advanced_obfuscation() in scanner.rs. Keep only low-weight
+    // INFO disclosures for the encode/decode primitives here.
     Pattern {
         id: "obfus-atob",
         kind: FindingKind::Obfuscation,
-        risk: RiskLevel::Medium,
-        description: "Uses atob/btoa for base64 encoding (potential obfuscation)",
+        risk: RiskLevel::Info,
+        description: "Uses atob/btoa base64 encoding",
         strings: &["atob(", "btoa("],
     },
     Pattern {
         id: "obfus-charcode",
         kind: FindingKind::Obfuscation,
-        risk: RiskLevel::Medium,
-        description: "Builds strings from char codes (obfuscation technique)",
+        risk: RiskLevel::Info,
+        description: "Builds strings from char codes",
         strings: &["fromCharCode(", "String.fromCharCode"],
-    },
-    Pattern {
-        id: "obfus-hex-string",
-        kind: FindingKind::Obfuscation,
-        risk: RiskLevel::Low,
-        description: "Contains long hex-encoded strings",
-        strings: &["\\x", "0x", "\\u00"],
     },
 
     // ---- DATA EXFILTRATION ----
