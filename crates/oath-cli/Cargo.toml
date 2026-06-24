@@ -8,10 +8,6 @@ license.workspace = true
 name = "oath"
 path = "src/main.rs"
 
-[[bin]]
-name = "oathx"
-path = "src/oathx.rs"
-
 [dependencies]
 oath-core = { path = "../oath-core" }
 oath-fetch = { path = "../oath-fetch" }

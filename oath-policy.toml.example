@@ -6,7 +6,7 @@
 
 # Block ALL install scripts by default.  Only packages in `allow_install_scripts`
 # may run them without prompting.
-block_install_scripts = false
+block_install_scripts = true
 
 # Highest risk level allowed without aborting.  Packages above this threshold
 # are flagged during install.  Values: "clean" | "info" | "low" | "medium" | "high" | "critical"

@@ -46,19 +46,35 @@ pub struct ScoreContext {
 /// Known-safe package patterns: packages whose ENTIRE PURPOSE is the flagged capability.
 /// We suppress capability penalties for these.
 const KNOWN_NETWORK_PACKAGES: &[&str] = &[
-    "axios", "node-fetch", "undici", "got", "request", "superagent", "ky",
-    "cross-fetch", "isomorphic-fetch", "whatwg-fetch", "needle", "phin",
+    "axios",
+    "node-fetch",
+    "undici",
+    "got",
+    "request",
+    "superagent",
+    "ky",
+    "cross-fetch",
+    "isomorphic-fetch",
+    "whatwg-fetch",
+    "needle",
+    "phin",
 ];
 const KNOWN_FS_PACKAGES: &[&str] = &[
-    "fs-extra", "graceful-fs", "glob", "globby", "chokidar", "rimraf",
-    "del", "mkdirp", "make-dir", "find-up", "locate-path", "fast-glob",
+    "fs-extra",
+    "graceful-fs",
+    "glob",
+    "globby",
+    "chokidar",
+    "rimraf",
+    "del",
+    "mkdirp",
+    "make-dir",
+    "find-up",
+    "locate-path",
+    "fast-glob",
 ];
-const KNOWN_ENV_PACKAGES: &[&str] = &[
-    "dotenv", "cross-env", "env-ci", "envinfo",
-];
-const KNOWN_EXEC_PACKAGES: &[&str] = &[
-    "execa", "cross-spawn", "shelljs", "npm-run-all",
-];
+const KNOWN_ENV_PACKAGES: &[&str] = &["dotenv", "cross-env", "env-ci", "envinfo"];
+const KNOWN_EXEC_PACKAGES: &[&str] = &["execa", "cross-spawn", "shelljs", "npm-run-all"];
 
 fn is_known_safe_for_capability(name: &str, capability: &str) -> bool {
     match capability {
@@ -82,7 +98,7 @@ pub fn compute_safety_score_contextual(
     if ctx.is_dev && score.score < 100 {
         let lost = 100i32 - score.score as i32;
         let recovered = (lost * 40) / 100;
-        score.score = (score.score as i32 + recovered).min(100).max(0) as u8;
+        score.score = (score.score as i32 + recovered).clamp(0, 100) as u8;
         score.grade = score_to_grade(score.score);
         if recovered > 0 {
             score.factors.push(ScoreFactor {
@@ -128,7 +144,7 @@ pub fn compute_safety_score(report: &AnalysisReport, package_dir: &Path) -> Safe
 fn compute_safety_score_inner(
     report: &AnalysisReport,
     package_dir: &Path,
-    ctx: Option<&ScoreContext>,
+    _ctx: Option<&ScoreContext>,
 ) -> SafetyScore {
     let mut factors: Vec<ScoreFactor> = Vec::new();
     let mut raw_score: i32 = 100;
@@ -191,7 +207,7 @@ fn compute_safety_score_inner(
 
     // Capability-based penalties (suppress for known-safe packages)
     let pkg_name = &report.package_name;
-    
+
     if report.capabilities.has_install_scripts {
         factors.push(ScoreFactor {
             name: "install_scripts".into(),
@@ -201,7 +217,8 @@ fn compute_safety_score_inner(
         raw_score -= 10;
     }
 
-    if report.capabilities.network && report.capabilities.env_access
+    if report.capabilities.network
+        && report.capabilities.env_access
         && !is_known_safe_for_capability(pkg_name, "network")
         && !is_known_safe_for_capability(pkg_name, "env_access")
     {
@@ -223,10 +240,10 @@ fn compute_safety_score_inner(
     }
 
     // Check for HIGH/CRITICAL obfuscation findings only (Medium ones are often false positives)
-    let high_obfuscation = report
-        .findings
-        .iter()
-        .any(|f| f.kind == FindingKind::Obfuscation && matches!(f.risk, RiskLevel::High | RiskLevel::Critical));
+    let high_obfuscation = report.findings.iter().any(|f| {
+        f.kind == FindingKind::Obfuscation
+            && matches!(f.risk, RiskLevel::High | RiskLevel::Critical)
+    });
     if high_obfuscation {
         factors.push(ScoreFactor {
             name: "obfuscated_code".into(),
@@ -238,7 +255,9 @@ fn compute_safety_score_inner(
 
     // ---- Advanced obfuscation scoring (Feature 2) ----
     // Base64 payload: High obfuscation findings containing "Base64 payload"
-    let base64_payload_count = report.findings.iter()
+    let base64_payload_count = report
+        .findings
+        .iter()
         .filter(|f| f.kind == FindingKind::Obfuscation && f.message.contains("Base64 payload"))
         .count() as i32;
     if base64_payload_count > 0 {
@@ -246,13 +265,18 @@ fn compute_safety_score_inner(
         factors.push(ScoreFactor {
             name: "base64_payload".into(),
             weight: penalty,
-            description: format!("{} base64 payload detection(s) (Buffer.from/atob with encoded data)", base64_payload_count),
+            description: format!(
+                "{} base64 payload detection(s) (Buffer.from/atob with encoded data)",
+                base64_payload_count
+            ),
         });
         raw_score += penalty as i32;
     }
 
     // Dynamic require obfuscation
-    let dyn_req_count = report.findings.iter()
+    let dyn_req_count = report
+        .findings
+        .iter()
         .filter(|f| f.kind == FindingKind::Obfuscation && f.message.contains("Dynamic require"))
         .count() as i32;
     if dyn_req_count > 0 {
@@ -260,41 +284,61 @@ fn compute_safety_score_inner(
         factors.push(ScoreFactor {
             name: "dynamic_require_obfuscation".into(),
             weight: penalty,
-            description: format!("{} dynamic require obfuscation(s) (concatenated module names)", dyn_req_count),
+            description: format!(
+                "{} dynamic require obfuscation(s) (concatenated module names)",
+                dyn_req_count
+            ),
         });
         raw_score += penalty as i32;
     }
 
     // Hex string execution
-    let hex_exec_count = report.findings.iter()
-        .filter(|f| f.kind == FindingKind::Obfuscation && f.message.contains("Hex string execution"))
+    let hex_exec_count = report
+        .findings
+        .iter()
+        .filter(|f| {
+            f.kind == FindingKind::Obfuscation && f.message.contains("Hex string execution")
+        })
         .count() as i32;
     if hex_exec_count > 0 {
         let penalty = -(hex_exec_count * 40).min(80) as i16;
         factors.push(ScoreFactor {
             name: "hex_string_execution".into(),
             weight: penalty,
-            description: format!("{} hex string execution(s) (eval+fromCharCode or hex eval)", hex_exec_count),
+            description: format!(
+                "{} hex string execution(s) (eval+fromCharCode or hex eval)",
+                hex_exec_count
+            ),
         });
         raw_score += penalty as i32;
     }
 
     // Env exfiltration combo
-    let env_exfil_count = report.findings.iter()
-        .filter(|f| f.kind == FindingKind::DataExfiltration && f.message.contains("Environment variable exfiltration"))
+    let env_exfil_count = report
+        .findings
+        .iter()
+        .filter(|f| {
+            f.kind == FindingKind::DataExfiltration
+                && f.message.contains("Environment variable exfiltration")
+        })
         .count() as i32;
     if env_exfil_count > 0 {
         let penalty = -(env_exfil_count * 35).min(70) as i16;
         factors.push(ScoreFactor {
             name: "env_exfiltration_combo".into(),
             weight: penalty,
-            description: format!("{} file(s) with process.env read + HTTP request (possible exfiltration)", env_exfil_count),
+            description: format!(
+                "{} file(s) with process.env read + HTTP request (possible exfiltration)",
+                env_exfil_count
+            ),
         });
         raw_score += penalty as i32;
     }
 
     // Cryptocurrency wallet patterns
-    let crypto_wallet_count = report.findings.iter()
+    let crypto_wallet_count = report
+        .findings
+        .iter()
         .filter(|f| f.kind == FindingKind::CryptoMiner && f.message.contains("wallet address"))
         .count() as i32;
     if crypto_wallet_count > 0 {
@@ -302,7 +346,10 @@ fn compute_safety_score_inner(
         factors.push(ScoreFactor {
             name: "crypto_wallet_patterns".into(),
             weight: penalty,
-            description: format!("{} cryptocurrency wallet address(es) detected", crypto_wallet_count),
+            description: format!(
+                "{} cryptocurrency wallet address(es) detected",
+                crypto_wallet_count
+            ),
         });
         raw_score += penalty as i32;
     }
@@ -346,10 +393,10 @@ fn compute_safety_score_inner(
         .filter(|e| e.file_type().is_file())
         .any(|e| {
             let path = e.path();
-            if let Some(name) = path.file_name().and_then(|n| n.to_str()) {
-                if name.ends_with(".min.js") || name.ends_with(".min.cjs") {
-                    return true;
-                }
+            if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && (name.ends_with(".min.js") || name.ends_with(".min.cjs"))
+            {
+                return true;
             }
             false
         });

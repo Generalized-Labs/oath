@@ -11,7 +11,7 @@ use tokio::sync::RwLock;
 use tracing::{debug, info, warn};
 
 use node_semver::{Range, Version};
-use oath_fetch::{resolve_version, Packument, RegistryClient};
+use oath_fetch::{Packument, RegistryClient, resolve_version};
 
 use crate::git::{is_git_spec, parse_git_spec, resolve_git_spec};
 use crate::graph::{DepGraph, DepNode, PeerReport, PeerResolution};
@@ -108,7 +108,12 @@ struct PendingDep {
 
 /// Find the resolved key in the graph that matches a dependency name.
 /// Since we resolve one version per package, just look for name@* in the keys.
-fn find_matching_key(all_keys: &[String], graph: &DepGraph, dep_name: &str, _dep_spec: &str) -> Option<String> {
+fn find_matching_key(
+    all_keys: &[String],
+    graph: &DepGraph,
+    dep_name: &str,
+    _dep_spec: &str,
+) -> Option<String> {
     // Check for alias-resolved packages first
     for key in all_keys {
         if let Some(node) = graph.nodes.get(key) {
@@ -125,14 +130,11 @@ fn find_matching_key(all_keys: &[String], graph: &DepGraph, dep_name: &str, _dep
 /// Parse an npm alias specifier like "npm:real-package@^1.0.0"
 /// Returns (real_name, version_spec) or None if not an alias
 fn parse_alias_spec(specifier: &str) -> Option<(String, String)> {
-    if !specifier.starts_with("npm:") {
-        return None;
-    }
-    let rest = &specifier[4..]; // after "npm:"
+    let rest = specifier.strip_prefix("npm:")?; // after "npm:"
     // Handle scoped: npm:@scope/pkg@version
-    if rest.starts_with('@') {
+    if let Some(stripped) = rest.strip_prefix('@') {
         // Find second @ (version separator)
-        if let Some(at_pos) = rest[1..].find('@').map(|p| p + 1) {
+        if let Some(at_pos) = stripped.find('@').map(|p| p + 1) {
             let real_name = rest[..at_pos].to_string();
             let version = rest[at_pos + 1..].to_string();
             return Some((real_name, version));
@@ -141,12 +143,12 @@ fn parse_alias_spec(specifier: &str) -> Option<(String, String)> {
         return Some((rest.to_string(), "latest".to_string()));
     }
     // Non-scoped: npm:pkg@version
-    if let Some(at_pos) = rest.rfind('@') {
-        if at_pos > 0 {
-            let real_name = rest[..at_pos].to_string();
-            let version = rest[at_pos + 1..].to_string();
-            return Some((real_name, version));
-        }
+    if let Some(at_pos) = rest.rfind('@')
+        && at_pos > 0
+    {
+        let real_name = rest[..at_pos].to_string();
+        let version = rest[at_pos + 1..].to_string();
+        return Some((real_name, version));
     }
     Some((rest.to_string(), "latest".to_string()))
 }
@@ -210,11 +212,12 @@ impl Resolver {
 
         if self.options.include_dev {
             for (name, spec) in dev_dependencies {
-                let (real_name, real_spec, alias) = if let Some((real, ver)) = parse_alias_spec(spec) {
-                    (real, ver, Some(name.clone()))
-                } else {
-                    (name.clone(), spec.clone(), None)
-                };
+                let (real_name, real_spec, alias) =
+                    if let Some((real, ver)) = parse_alias_spec(spec) {
+                        (real, ver, Some(name.clone()))
+                    } else {
+                        (name.clone(), spec.clone(), None)
+                    };
                 current_level.push(PendingDep {
                     name: real_name,
                     specifier: real_spec,
@@ -290,7 +293,16 @@ impl Resolver {
 
                 // Handle git dependencies (github:, git+https://, etc.)
                 if is_git_spec(&pending.specifier) {
-                    match self.resolve_git_dep(&pending, &mut graph, &mut resolved, &mut next_level, packages_resolved).await {
+                    match self
+                        .resolve_git_dep(
+                            &pending,
+                            &mut graph,
+                            &mut resolved,
+                            &mut next_level,
+                            packages_resolved,
+                        )
+                        .await
+                    {
                         Ok(count) => {
                             packages_resolved = count;
                         }
@@ -299,7 +311,10 @@ impl Resolver {
                                 debug!("skipping optional git dep {}: {e}", pending.name);
                             } else {
                                 return Err(e).with_context(|| {
-                                    format!("resolving git dep {}@{}", pending.name, pending.specifier)
+                                    format!(
+                                        "resolving git dep {}@{}",
+                                        pending.name, pending.specifier
+                                    )
                                 });
                             }
                         }
@@ -355,7 +370,7 @@ impl Resolver {
                 }
 
                 packages_resolved += 1;
-                if packages_resolved % 50 == 0 {
+                if packages_resolved.is_multiple_of(50) {
                     info!("resolved {packages_resolved} packages...");
                 }
 
@@ -363,7 +378,10 @@ impl Resolver {
 
                 // Skip platform-incompatible packages (only for optional deps)
                 if pending.optional && !is_platform_compatible(&info.os, &info.cpu) {
-                    debug!("skipping {} (platform mismatch: os={:?} cpu={:?})", pending.name, info.os, info.cpu);
+                    debug!(
+                        "skipping {} (platform mismatch: os={:?} cpu={:?})",
+                        pending.name, info.os, info.cpu
+                    );
                     continue;
                 }
 
@@ -374,11 +392,12 @@ impl Resolver {
                 for (dep_name, dep_spec) in &info.dependencies {
                     node_deps.insert(dep_name.clone(), dep_spec.clone());
 
-                    let (real_dep_name, real_dep_spec, dep_alias) = if let Some((real, ver)) = parse_alias_spec(dep_spec) {
-                        (real, ver, Some(dep_name.clone()))
-                    } else {
-                        (dep_name.clone(), dep_spec.clone(), None)
-                    };
+                    let (real_dep_name, real_dep_spec, dep_alias) =
+                        if let Some((real, ver)) = parse_alias_spec(dep_spec) {
+                            (real, ver, Some(dep_name.clone()))
+                        } else {
+                            (dep_name.clone(), dep_spec.clone(), None)
+                        };
 
                     next_level.push(PendingDep {
                         name: real_dep_name,
@@ -395,11 +414,12 @@ impl Resolver {
                     for (dep_name, dep_spec) in &info.optional_dependencies {
                         node_deps.insert(dep_name.clone(), dep_spec.clone());
 
-                        let (real_dep_name, real_dep_spec, dep_alias) = if let Some((real, ver)) = parse_alias_spec(dep_spec) {
-                            (real, ver, Some(dep_name.clone()))
-                        } else {
-                            (dep_name.clone(), dep_spec.clone(), None)
-                        };
+                        let (real_dep_name, real_dep_spec, dep_alias) =
+                            if let Some((real, ver)) = parse_alias_spec(dep_spec) {
+                                (real, ver, Some(dep_name.clone()))
+                            } else {
+                                (dep_name.clone(), dep_spec.clone(), None)
+                            };
 
                         next_level.push(PendingDep {
                             name: real_dep_name,
@@ -470,10 +490,7 @@ impl Resolver {
             }
         }
 
-        info!(
-            "resolution complete: {} packages",
-            graph.package_count()
-        );
+        info!("resolution complete: {} packages", graph.package_count());
 
         // Post-BFS peer resolution pass
         graph.peer_report = resolve_peers(&mut graph);
@@ -520,7 +537,7 @@ impl Resolver {
         }
 
         packages_resolved += 1;
-        if packages_resolved % 50 == 0 {
+        if packages_resolved.is_multiple_of(50) {
             info!("resolved {packages_resolved} packages...");
         }
 
@@ -528,11 +545,12 @@ impl Resolver {
         let mut node_deps = HashMap::new();
         for (dep_name, dep_spec) in &git_resolved.dependencies {
             node_deps.insert(dep_name.clone(), dep_spec.clone());
-            let (real_dep_name, real_dep_spec, dep_alias) = if let Some((real, ver)) = parse_alias_spec(dep_spec) {
-                (real, ver, Some(dep_name.clone()))
-            } else {
-                (dep_name.clone(), dep_spec.clone(), None)
-            };
+            let (real_dep_name, real_dep_spec, dep_alias) =
+                if let Some((real, ver)) = parse_alias_spec(dep_spec) {
+                    (real, ver, Some(dep_name.clone()))
+                } else {
+                    (dep_name.clone(), dep_spec.clone(), None)
+                };
             next_level.push(PendingDep {
                 name: real_dep_name,
                 specifier: real_dep_spec,
@@ -546,11 +564,12 @@ impl Resolver {
         if self.options.include_optional {
             for (dep_name, dep_spec) in &git_resolved.optional_dependencies {
                 node_deps.insert(dep_name.clone(), dep_spec.clone());
-                let (real_dep_name, real_dep_spec, dep_alias) = if let Some((real, ver)) = parse_alias_spec(dep_spec) {
-                    (real, ver, Some(dep_name.clone()))
-                } else {
-                    (dep_name.clone(), dep_spec.clone(), None)
-                };
+                let (real_dep_name, real_dep_spec, dep_alias) =
+                    if let Some((real, ver)) = parse_alias_spec(dep_spec) {
+                        (real, ver, Some(dep_name.clone()))
+                    } else {
+                        (dep_name.clone(), dep_spec.clone(), None)
+                    };
                 next_level.push(PendingDep {
                     name: real_dep_name,
                     specifier: real_dep_spec,
@@ -585,13 +604,16 @@ impl Resolver {
         // without re-fetching from the network.
         // Path: ~/.oath/git-cache/{safe_name}-{version}.tgz
         let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        let cache_dir = std::path::PathBuf::from(&home).join(".oath").join("git-cache");
+        let cache_dir = std::path::PathBuf::from(&home)
+            .join(".oath")
+            .join("git-cache");
         std::fs::create_dir_all(&cache_dir).ok();
         let safe_name = git_resolved.name.replace('/', "+");
         let cache_file = cache_dir.join(format!("{}-{}.tgz", safe_name, git_resolved.version));
         if !cache_file.exists() {
-            std::fs::write(&cache_file, &git_resolved.tarball_data)
-                .with_context(|| format!("failed to cache git tarball at {}", cache_file.display()))?;
+            std::fs::write(&cache_file, &git_resolved.tarball_data).with_context(|| {
+                format!("failed to cache git tarball at {}", cache_file.display())
+            })?;
         }
 
         Ok(packages_resolved)
@@ -633,7 +655,7 @@ fn build_parent_map(graph: &DepGraph) -> HashMap<String, Vec<String>> {
 }
 
 enum PeerLookupResult {
-    Found(String),   // peer key that satisfies the range
+    Found(String),    // peer key that satisfies the range
     Conflict(String), // peer found but version doesn't satisfy
     Missing,
 }
@@ -715,10 +737,10 @@ fn find_peer_in_context(
 /// Extract the version portion from a "name@version" or "@scope/name@version" key
 fn extract_version_from_key(key: &str) -> &str {
     // For scoped packages like "@scope/name@1.0.0", the last '@' splits name from version
-    if let Some(at) = key.rfind('@') {
-        if at > 0 {
-            return &key[at + 1..];
-        }
+    if let Some(at) = key.rfind('@')
+        && at > 0
+    {
+        return &key[at + 1..];
     }
     key
 }
@@ -746,7 +768,8 @@ fn resolve_peers(graph: &mut DepGraph) -> PeerReport {
         match result {
             PeerLookupResult::Found(peer_key) => {
                 if let Some(node) = graph.nodes.get_mut(&pkg_key) {
-                    node.resolved_peers.insert(peer_name.clone(), peer_key.clone());
+                    node.resolved_peers
+                        .insert(peer_name.clone(), peer_key.clone());
                 }
                 report.satisfied.push(PeerResolution::Satisfied {
                     required_by: pkg_key.clone(),
@@ -788,4 +811,3 @@ fn resolve_peers(graph: &mut DepGraph) -> PeerReport {
 
     report
 }
-

@@ -6,7 +6,6 @@
 //!
 //! Glob expansion, workspace:* specifier parsing, and local package resolution.
 
-use anyhow::Result;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
@@ -130,25 +129,22 @@ pub fn detect_workspace_root(start: &Path) -> Option<WorkspaceRoot> {
 
         // Check for package.json with "workspaces" field
         let pkg_json = current.join("package.json");
-        if pkg_json.exists() {
-            if let Ok(content) = std::fs::read_to_string(&pkg_json) {
-                if let Ok(manifest) = serde_json::from_str::<Manifest>(&content) {
-                    if let Some(ws) = &manifest.workspaces {
-                        let patterns: Vec<String> = ws.patterns().to_vec();
-                        debug!(
-                            "found package.json workspaces at {}: {:?}",
-                            current.display(),
-                            patterns
-                        );
-                        let packages =
-                            expand_and_load_packages(current, &patterns);
-                        return Some(WorkspaceRoot {
-                            root: current.to_path_buf(),
-                            packages,
-                        });
-                    }
-                }
-            }
+        if pkg_json.exists()
+            && let Ok(content) = std::fs::read_to_string(&pkg_json)
+            && let Ok(manifest) = serde_json::from_str::<Manifest>(&content)
+            && let Some(ws) = &manifest.workspaces
+        {
+            let patterns: Vec<String> = ws.patterns().to_vec();
+            debug!(
+                "found package.json workspaces at {}: {:?}",
+                current.display(),
+                patterns
+            );
+            let packages = expand_and_load_packages(current, &patterns);
+            return Some(WorkspaceRoot {
+                root: current.to_path_buf(),
+                packages,
+            });
         }
 
         // Move up one directory
@@ -222,10 +218,10 @@ pub fn expand_workspace_globs(root: &Path, patterns: &[String]) -> Vec<PathBuf> 
                 }
                 // Skip if matches a negation pattern
                 let entry_str = entry.to_string_lossy();
-                if negations.iter().any(|neg| {
-                    neg.matches(&entry_str)
-                        || entry_str.contains("node_modules")
-                }) {
+                if negations
+                    .iter()
+                    .any(|neg| neg.matches(&entry_str) || entry_str.contains("node_modules"))
+                {
                     continue;
                 }
                 // Must contain a package.json to be a valid workspace package
@@ -262,7 +258,9 @@ fn load_workspace_package(path: &Path) -> Option<WorkspacePackage> {
 
 fn expand_and_load_packages(root: &Path, patterns: &[String]) -> Vec<WorkspacePackage> {
     let dirs = expand_workspace_globs(root, patterns);
-    dirs.iter().filter_map(|p| load_workspace_package(p)).collect()
+    dirs.iter()
+        .filter_map(|p| load_workspace_package(p))
+        .collect()
 }
 
 // ---- Workspace specifier parsing --------------------------------------------
@@ -299,10 +297,7 @@ pub fn is_workspace_spec(spec: &str) -> bool {
 impl WorkspaceRoot {
     /// Build a name -> WorkspacePackage map for quick lookups
     pub fn package_map(&self) -> HashMap<String, &WorkspacePackage> {
-        self.packages
-            .iter()
-            .map(|p| (p.name.clone(), p))
-            .collect()
+        self.packages.iter().map(|p| (p.name.clone(), p)).collect()
     }
 
     /// Find a workspace package by name
@@ -313,6 +308,7 @@ impl WorkspaceRoot {
     /// Collect all external (non-workspace) dependencies across all packages
     /// Returns a merged HashMap<name, spec> with workspace:* entries stripped out.
     /// Workspace deps are returned separately as a Vec<(consumer_name, dep_name)>.
+    #[allow(clippy::type_complexity)]
     pub fn collect_external_deps(
         &self,
         include_dev: bool,
@@ -326,12 +322,6 @@ impl WorkspaceRoot {
         let root_manifest: Option<Manifest> = std::fs::read_to_string(&root_pkg_json)
             .ok()
             .and_then(|c| serde_json::from_str(&c).ok());
-
-        let mut all_manifests: Vec<(&str, &Manifest)> = self
-            .packages
-            .iter()
-            .map(|p| (p.name.as_str(), &p.package_json))
-            .collect();
 
         // We need to handle root manifest separately (owned value)
         let root_deps;
@@ -422,7 +412,9 @@ fn process_dep(
         ));
     } else {
         // External registry dep -- merge, keeping the first seen spec
-        external.entry(dep_name.to_string()).or_insert_with(|| spec.to_string());
+        external
+            .entry(dep_name.to_string())
+            .or_insert_with(|| spec.to_string());
     }
 }
 
@@ -436,22 +428,29 @@ mod tests {
 
     fn write_pkg(dir: &Path, name: &str, version: &str, extra: &str) {
         fs::create_dir_all(dir).unwrap();
-        let content = format!(
-            r#"{{"name":"{name}","version":"{version}"{extra}}}"#
-        );
+        let content = format!(r#"{{"name":"{name}","version":"{version}"{extra}}}"#);
         fs::write(dir.join("package.json"), content).unwrap();
     }
 
     #[test]
     fn test_parse_workspace_spec() {
         assert_eq!(parse_workspace_spec("workspace:*"), WorkspaceSpecifier::Any);
-        assert_eq!(parse_workspace_spec("workspace:^"), WorkspaceSpecifier::Caret);
-        assert_eq!(parse_workspace_spec("workspace:~"), WorkspaceSpecifier::Tilde);
+        assert_eq!(
+            parse_workspace_spec("workspace:^"),
+            WorkspaceSpecifier::Caret
+        );
+        assert_eq!(
+            parse_workspace_spec("workspace:~"),
+            WorkspaceSpecifier::Tilde
+        );
         assert_eq!(
             parse_workspace_spec("workspace:1.2.3"),
             WorkspaceSpecifier::Exact("1.2.3".to_string())
         );
-        assert_eq!(parse_workspace_spec("^1.0.0"), WorkspaceSpecifier::NotWorkspace);
+        assert_eq!(
+            parse_workspace_spec("^1.0.0"),
+            WorkspaceSpecifier::NotWorkspace
+        );
         assert_eq!(parse_workspace_spec("*"), WorkspaceSpecifier::NotWorkspace);
     }
 
@@ -477,12 +476,7 @@ mod tests {
             "0.0.0",
             r#","dependencies":{"react":"^18.0.0"}"#,
         );
-        write_pkg(
-            &root.join("packages/utils"),
-            "@repo/utils",
-            "0.0.0",
-            "",
-        );
+        write_pkg(&root.join("packages/utils"), "@repo/utils", "0.0.0", "");
         write_pkg(
             &root.join("apps/web"),
             "web",
@@ -532,7 +526,10 @@ mod tests {
 
         // Should find a and b but NOT node_modules/c
         assert_eq!(dirs.len(), 2);
-        let names: Vec<_> = dirs.iter().map(|d| d.file_name().unwrap().to_str().unwrap()).collect();
+        let names: Vec<_> = dirs
+            .iter()
+            .map(|d| d.file_name().unwrap().to_str().unwrap())
+            .collect();
         assert!(names.contains(&"a"));
         assert!(names.contains(&"b"));
         assert!(!names.contains(&"node_modules"));

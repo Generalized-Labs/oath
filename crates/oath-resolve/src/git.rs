@@ -34,8 +34,8 @@ pub fn is_git_spec(spec: &str) -> bool {
 
 /// Parse a git dependency spec into a GitSpec
 pub fn parse_git_spec(spec: &str) -> Option<GitSpec> {
-    if spec.starts_with("github:") {
-        let rest = &spec[7..]; // after "github:"
+    if let Some(rest) = spec.strip_prefix("github:") {
+        // after "github:"
         let (repo_path, git_ref) = split_ref(rest);
         // Skip semver: prefix refs for now -- treat as HEAD
         let git_ref = git_ref.and_then(|r| {
@@ -59,8 +59,7 @@ pub fn parse_git_spec(spec: &str) -> Option<GitSpec> {
         });
     }
 
-    if spec.starts_with("gitlab:") {
-        let rest = &spec[7..];
+    if let Some(rest) = spec.strip_prefix("gitlab:") {
         let (repo_path, git_ref) = split_ref(rest);
         let git_ref = git_ref.map(|r| r.to_string());
         let parts: Vec<&str> = repo_path.splitn(2, '/').collect();
@@ -77,8 +76,7 @@ pub fn parse_git_spec(spec: &str) -> Option<GitSpec> {
         });
     }
 
-    if spec.starts_with("bitbucket:") {
-        let rest = &spec[10..];
+    if let Some(rest) = spec.strip_prefix("bitbucket:") {
         let (repo_path, git_ref) = split_ref(rest);
         let git_ref = git_ref.map(|r| r.to_string());
         let parts: Vec<&str> = repo_path.splitn(2, '/').collect();
@@ -108,17 +106,14 @@ pub fn parse_git_spec(spec: &str) -> Option<GitSpec> {
         });
     }
 
-    if spec.starts_with("git+ssh://") {
+    if let Some(url_part) = spec.strip_prefix("git+ssh://") {
         // git+ssh://git@github.com/user/repo.git
-        let url_part = &spec[10..]; // strip "git+ssh://"
+        // strip "git+ssh://"
         let (url_no_ref, git_ref) = split_ref(url_part);
         let git_ref = git_ref.map(|r| r.to_string());
         // Convert ssh to https for downloading
-        let https_url = if url_no_ref.starts_with("git@github.com:") {
-            let repo = &url_no_ref[15..];
+        let https_url = if let Some(repo) = url_no_ref.strip_prefix("git@github.com:") {
             format!("https://github.com/{}", repo)
-        } else if url_no_ref.starts_with("github.com/") {
-            format!("https://{}", url_no_ref)
         } else {
             format!("https://{}", url_no_ref)
         };
@@ -130,8 +125,8 @@ pub fn parse_git_spec(spec: &str) -> Option<GitSpec> {
         });
     }
 
-    if spec.starts_with("git://") {
-        let url_part = &spec[6..]; // strip "git://"
+    if let Some(url_part) = spec.strip_prefix("git://") {
+        // strip "git://"
         let (url_no_ref, git_ref) = split_ref(url_part);
         let git_ref = git_ref.map(|r| r.to_string());
         let https_url = format!("https://{}", url_no_ref);
@@ -181,10 +176,7 @@ pub struct GitResolved {
 }
 
 /// Resolve a git spec: download the tarball and read package.json
-pub async fn resolve_git_spec(
-    spec: &GitSpec,
-    http: &reqwest::Client,
-) -> Result<GitResolved> {
+pub async fn resolve_git_spec(spec: &GitSpec, http: &reqwest::Client) -> Result<GitResolved> {
     let git_ref = spec.git_ref.as_deref().unwrap_or("HEAD");
 
     // For GitHub repos, use the tarball API
@@ -207,7 +199,10 @@ async fn resolve_github_tarball(
     let api_url = if git_ref == "HEAD" {
         format!("https://api.github.com/repos/{}/{}/tarball", user, repo)
     } else {
-        format!("https://api.github.com/repos/{}/{}/tarball/{}", user, repo, git_ref)
+        format!(
+            "https://api.github.com/repos/{}/{}/tarball/{}",
+            user, repo, git_ref
+        )
     };
 
     tracing::debug!("fetching github tarball: {}", api_url);
@@ -223,10 +218,20 @@ async fn resolve_github_tarball(
     if !resp.status().is_success() {
         let status = resp.status();
         let body = resp.text().await.unwrap_or_default();
-        anyhow::bail!("GitHub API returned {}: {} for {}/{}", status, body, user, repo);
+        anyhow::bail!(
+            "GitHub API returned {}: {} for {}/{}",
+            status,
+            body,
+            user,
+            repo
+        );
     }
 
-    let data = resp.bytes().await.context("failed to read tarball")?.to_vec();
+    let data = resp
+        .bytes()
+        .await
+        .context("failed to read tarball")?
+        .to_vec();
 
     parse_git_tarball(
         data,
@@ -248,7 +253,15 @@ async fn resolve_via_git_clone(url: &str, git_ref: &str) -> Result<GitResolved> 
             .output()
     } else {
         Command::new("git")
-            .args(["clone", "--depth", "1", "--branch", git_ref, url, clone_dir.to_str().unwrap()])
+            .args([
+                "clone",
+                "--depth",
+                "1",
+                "--branch",
+                git_ref,
+                url,
+                clone_dir.to_str().unwrap(),
+            ])
             .output()
     };
 
@@ -260,14 +273,14 @@ async fn resolve_via_git_clone(url: &str, git_ref: &str) -> Result<GitResolved> 
 
     // Read package.json from clone dir
     let pkg_json_path = clone_dir.join("package.json");
-    let pkg_json_data = std::fs::read(&pkg_json_path)
-        .with_context(|| format!("no package.json in {}", url))?;
+    let pkg_json_data =
+        std::fs::read(&pkg_json_path).with_context(|| format!("no package.json in {}", url))?;
 
     // Create tarball from the clone dir
     let mut tar_data: Vec<u8> = Vec::new();
     {
-        use flate2::write::GzEncoder;
         use flate2::Compression;
+        use flate2::write::GzEncoder;
         let enc = GzEncoder::new(&mut tar_data, Compression::default());
         let mut tar = tar::Builder::new(enc);
         tar.append_dir_all("package", &clone_dir)
@@ -278,11 +291,7 @@ async fn resolve_via_git_clone(url: &str, git_ref: &str) -> Result<GitResolved> 
     parse_git_tarball_from_json(tar_data, &pkg_json_data, url, git_ref)
 }
 
-fn parse_git_tarball(
-    data: Vec<u8>,
-    resolved_url: &str,
-    _git_ref: &str,
-) -> Result<GitResolved> {
+fn parse_git_tarball(data: Vec<u8>, resolved_url: &str, _git_ref: &str) -> Result<GitResolved> {
     // Extract to tempdir and read package.json
     let tmp = tempfile::tempdir().context("failed to create tempdir for git tarball")?;
     oath_fetch::tarball::extract_tarball(&data, tmp.path())
@@ -302,27 +311,27 @@ fn parse_git_tarball_from_json(
     resolved_url: &str,
     _git_ref: &str,
 ) -> Result<GitResolved> {
-    let pkg_json: serde_json::Value =
-        serde_json::from_slice(pkg_json_data).context("failed to parse package.json from git repo")?;
+    let pkg_json: serde_json::Value = serde_json::from_slice(pkg_json_data)
+        .context("failed to parse package.json from git repo")?;
 
     let name = pkg_json["name"]
         .as_str()
         .with_context(|| format!("no 'name' in package.json from {}", resolved_url))?
         .to_string();
 
-    let version = pkg_json["version"]
-        .as_str()
-        .unwrap_or("0.0.0")
-        .to_string();
+    let version = pkg_json["version"].as_str().unwrap_or("0.0.0").to_string();
 
     let dependencies = extract_deps_from_json(&pkg_json, "dependencies");
     let optional_dependencies = extract_deps_from_json(&pkg_json, "optionalDependencies");
 
-    let has_install_script = pkg_json.get("scripts").and_then(|s| s.as_object()).map_or(false, |scripts| {
-        scripts.contains_key("install")
-            || scripts.contains_key("preinstall")
-            || scripts.contains_key("postinstall")
-    });
+    let has_install_script = pkg_json
+        .get("scripts")
+        .and_then(|s| s.as_object())
+        .is_some_and(|scripts| {
+            scripts.contains_key("install")
+                || scripts.contains_key("preinstall")
+                || scripts.contains_key("postinstall")
+        });
 
     Ok(GitResolved {
         name,

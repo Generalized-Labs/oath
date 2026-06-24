@@ -1,7 +1,7 @@
 //! Integration tests for oath-sandbox
 
+use oath_sandbox::executor::SandboxExecutor;
 use oath_sandbox::policy::{Permission, SandboxPolicy};
-use oath_sandbox::executor::{SandboxExecutor, SandboxMethod};
 use std::path::PathBuf;
 
 fn test_workdir() -> PathBuf {
@@ -23,7 +23,9 @@ fn test_minimal_policy() {
 fn test_network_permission() {
     let workdir = test_workdir();
     let mut policy = SandboxPolicy::minimal("test-pkg", workdir);
-    policy.permissions.push(Permission::Network(vec!["api.example.com".to_string()]));
+    policy
+        .permissions
+        .push(Permission::Network(vec!["api.example.com".to_string()]));
     assert!(policy.allows_network());
 }
 
@@ -33,7 +35,9 @@ fn test_env_permission() {
     let mut policy = SandboxPolicy::minimal("test-pkg", workdir);
     assert!(!policy.allows_env("SECRET_KEY"));
 
-    policy.permissions.push(Permission::Env(vec!["NODE_ENV".to_string()]));
+    policy
+        .permissions
+        .push(Permission::Env(vec!["NODE_ENV".to_string()]));
     assert!(policy.allows_env("NODE_ENV"));
     assert!(!policy.allows_env("SECRET_KEY"));
 }
@@ -69,7 +73,8 @@ fn test_run_echo_sandboxed() {
         std::path::Path::new("/bin/echo"),
         &["hello", "oath"],
         &policy,
-    ).unwrap();
+    )
+    .unwrap();
 
     assert_eq!(result.exit_code, 0);
     assert!(result.stdout.contains("hello oath"));
@@ -84,15 +89,16 @@ fn test_sandbox_blocks_network() {
     std::fs::create_dir_all(&workdir).ok();
 
     let policy = SandboxPolicy::minimal("test", workdir);
-    let result = SandboxExecutor::run(
+    // Fallback mode (macOS 15+ / no Landlock) runs the command but cannot block
+    // network. Reaching here (the executor returned Ok) is the structural
+    // guarantee; the exit code is environment-dependent, so we don't assert it.
+    // Real network blocking is covered on Linux with Landlock.
+    let _result = SandboxExecutor::run(
         std::path::Path::new("/usr/bin/curl"),
         &["-s", "--max-time", "3", "https://example.com"],
         &policy,
-    ).unwrap();
-
-    // In fallback mode, network isn't actually blocked (just env is stripped)
-    // On Linux with Landlock, this would fail
-    assert!(result.exit_code == 0 || result.exit_code != 0); // always passes -- structural test
+    )
+    .unwrap();
 }
 
 #[test]
@@ -105,11 +111,24 @@ fn test_sandbox_allows_network_when_granted() {
 
     let result = SandboxExecutor::run(
         std::path::Path::new("/usr/bin/curl"),
-        &["-s", "--max-time", "5", "-o", "/dev/null", "-w", "%{http_code}", "https://example.com"],
+        &[
+            "-s",
+            "--max-time",
+            "5",
+            "-o",
+            "/dev/null",
+            "-w",
+            "%{http_code}",
+            "https://example.com",
+        ],
         &policy,
-    ).unwrap();
+    )
+    .unwrap();
 
-    assert_eq!(result.exit_code, 0, "curl should succeed with network permission");
+    assert_eq!(
+        result.exit_code, 0,
+        "curl should succeed with network permission"
+    );
     assert!(result.stdout.contains("200") || result.stdout.contains("301"));
 }
 
@@ -121,16 +140,15 @@ fn test_timeout_kills_process() {
     let mut policy = SandboxPolicy::minimal("test", workdir);
     policy.timeout_secs = 2;
 
-    let result = SandboxExecutor::run(
-        std::path::Path::new("/bin/sleep"),
-        &["10"],
-        &policy,
-    );
+    let result = SandboxExecutor::run(std::path::Path::new("/bin/sleep"), &["10"], &policy);
 
     // Should error with timeout
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
-    assert!(err.contains("timed out"), "expected timeout error, got: {err}");
+    assert!(
+        err.contains("timed out"),
+        "expected timeout error, got: {err}"
+    );
 }
 
 #[test]
@@ -140,7 +158,9 @@ fn test_env_stripping() {
 
     // Set a test env var
     // SAFETY: single-threaded test
-    unsafe { std::env::set_var("OATH_TEST_SECRET", "hunter2"); }
+    unsafe {
+        std::env::set_var("OATH_TEST_SECRET", "hunter2");
+    }
 
     let policy = SandboxPolicy::minimal("test", workdir);
     // No env permission granted
@@ -149,10 +169,16 @@ fn test_env_stripping() {
         std::path::Path::new("/bin/sh"),
         &["-c", "echo $OATH_TEST_SECRET"],
         &policy,
-    ).unwrap();
+    )
+    .unwrap();
 
     // Should NOT see the secret (env was stripped)
-    assert!(!result.stdout.contains("hunter2"), "secret leaked through sandbox!");
+    assert!(
+        !result.stdout.contains("hunter2"),
+        "secret leaked through sandbox!"
+    );
 
-    unsafe { std::env::remove_var("OATH_TEST_SECRET"); }
+    unsafe {
+        std::env::remove_var("OATH_TEST_SECRET");
+    }
 }

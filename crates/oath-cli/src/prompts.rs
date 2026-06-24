@@ -10,8 +10,6 @@ use oath_core::policy::OathPolicy;
 pub enum ScriptDecision {
     /// Allow this script to run normally
     Allow,
-    /// Allow but run inside the sandbox executor
-    Sandbox,
     /// Always allow (appended to local policy allowlist)
     Always,
     /// Deny -- do not run the script
@@ -51,7 +49,7 @@ fn fmt_caps(caps: &Capabilities) -> String {
 ///   script:  node install.js
 ///   wants:   network, filesystem
 ///
-///   Allow? [y/N/s(andbox)/a(lways)]
+///   Allow? [y/N/a(lways)]
 ///
 /// Returns the user's decision.
 ///
@@ -83,7 +81,7 @@ pub fn prompt_install_script(
     println!();
 
     loop {
-        print!("  Allow? [y/N/s(andbox)/a(lways)] ");
+        print!("  Allow? [y/N/a(lways)] ");
         io::stdout().flush().unwrap_or(());
 
         let mut input = String::new();
@@ -101,13 +99,12 @@ pub fn prompt_install_script(
         match answer.as_str() {
             "y" | "yes" => return ScriptDecision::Allow,
             "" | "n" | "no" => return ScriptDecision::Deny,
-            "s" | "sandbox" => return ScriptDecision::Sandbox,
             "a" | "always" => {
                 append_to_policy_allowlist(package_name);
                 return ScriptDecision::Always;
             }
             _ => {
-                println!("  Please enter y, N, s, or a.");
+                println!("  Please enter y, N, or a.");
             }
         }
     }

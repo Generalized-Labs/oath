@@ -19,11 +19,11 @@ pub enum RiskLevel {
 impl std::fmt::Display for RiskLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Clean    => write!(f, "clean"),
-            Self::Info     => write!(f, "info"),
-            Self::Low      => write!(f, "low"),
-            Self::Medium   => write!(f, "medium"),
-            Self::High     => write!(f, "high"),
+            Self::Clean => write!(f, "clean"),
+            Self::Info => write!(f, "info"),
+            Self::Low => write!(f, "low"),
+            Self::Medium => write!(f, "medium"),
+            Self::High => write!(f, "high"),
             Self::Critical => write!(f, "critical"),
         }
     }
@@ -61,9 +61,9 @@ pub struct OathPolicy {
     pub max_risk_level: String,
 }
 
-impl OathPolicy {
+impl Default for OathPolicy {
     /// Permissive defaults -- nothing banned, nothing blocked.
-    pub fn default() -> Self {
+    fn default() -> Self {
         Self {
             banned_packages: vec![],
             banned_licenses: vec![],
@@ -73,7 +73,9 @@ impl OathPolicy {
             max_risk_level: "critical".to_string(),
         }
     }
+}
 
+impl OathPolicy {
     /// Load policy by merging:
     ///   1. Permissive defaults
     ///   2. Global ~/.oath/policy.toml (if it exists)
@@ -86,19 +88,19 @@ impl OathPolicy {
         // Global policy
         if let Some(home) = std::env::var_os("HOME") {
             let global_path = PathBuf::from(home).join(".oath").join("policy.toml");
-            if let Ok(text) = std::fs::read_to_string(&global_path) {
-                if let Ok(raw) = toml::from_str::<RawPolicy>(&text) {
-                    policy.merge(raw);
-                }
+            if let Ok(text) = std::fs::read_to_string(&global_path)
+                && let Ok(raw) = toml::from_str::<RawPolicy>(&text)
+            {
+                policy.merge(raw);
             }
         }
 
         // Local project policy (overrides / extends global)
         let local_path = PathBuf::from("oath-policy.toml");
-        if let Ok(text) = std::fs::read_to_string(&local_path) {
-            if let Ok(raw) = toml::from_str::<RawPolicy>(&text) {
-                policy.merge(raw);
-            }
+        if let Ok(text) = std::fs::read_to_string(&local_path)
+            && let Ok(raw) = toml::from_str::<RawPolicy>(&text)
+        {
+            policy.merge(raw);
         }
 
         policy
@@ -154,7 +156,8 @@ impl OathPolicy {
     /// When `block_install_scripts` is true, only packages in `allow_install_scripts` pass.
     /// When false, all packages are allowed (prompting happens at the CLI layer).
     pub fn allows_install_script(&self, name: &str) -> bool {
-        if self.allow_install_scripts
+        if self
+            .allow_install_scripts
             .iter()
             .any(|a| a.eq_ignore_ascii_case(name))
         {
@@ -168,13 +171,13 @@ impl OathPolicy {
     /// Returns `RiskLevel::Critical` on unknown values (permissive fallback).
     pub fn max_risk(&self) -> RiskLevel {
         match self.max_risk_level.to_lowercase().as_str() {
-            "clean"    => RiskLevel::Clean,
-            "info"     => RiskLevel::Info,
-            "low"      => RiskLevel::Low,
-            "medium"   => RiskLevel::Medium,
-            "high"     => RiskLevel::High,
+            "clean" => RiskLevel::Clean,
+            "info" => RiskLevel::Info,
+            "low" => RiskLevel::Low,
+            "medium" => RiskLevel::Medium,
+            "high" => RiskLevel::High,
             "critical" => RiskLevel::Critical,
-            _          => RiskLevel::Critical,
+            _ => RiskLevel::Critical,
         }
     }
 }
@@ -211,8 +214,10 @@ mod tests {
 
     #[test]
     fn test_allows_install_script_blocked_by_default() {
-        let mut p = OathPolicy::default();
-        p.block_install_scripts = true;
+        let mut p = OathPolicy {
+            block_install_scripts: true,
+            ..Default::default()
+        };
         assert!(!p.allows_install_script("some-pkg"));
         p.allow_install_scripts.push("esbuild".to_string());
         assert!(p.allows_install_script("esbuild"));
@@ -220,8 +225,10 @@ mod tests {
 
     #[test]
     fn test_max_risk_parse() {
-        let mut p = OathPolicy::default();
-        p.max_risk_level = "high".to_string();
+        let mut p = OathPolicy {
+            max_risk_level: "high".to_string(),
+            ..Default::default()
+        };
         assert_eq!(p.max_risk(), RiskLevel::High);
         p.max_risk_level = "medium".to_string();
         assert_eq!(p.max_risk(), RiskLevel::Medium);

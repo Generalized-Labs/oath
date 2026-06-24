@@ -5,7 +5,7 @@ A security-first npm/npx replacement. Faster. Safer. No surprises.
 ## Install
 
 ```sh
-curl -fsSL https://oath.sh/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Generalized-Labs/oath/master/install.sh | sh
 ```
 
 Or via Homebrew:
@@ -21,6 +21,8 @@ brew install generalized-labs/tap/oath
 - **Faster** — 0.9s cold, 0.2s warm (abbreviated packuments, 5-min TTL cache, content-addressable store)
 - **Full npm compatibility** — workspaces, git deps, global install, publish, lifecycle scripts
 
+Detection is measured: see the [scanner threat model](docs/scanner-threat-model.md) for the false-positive rate (1.1%), recall (54.1% on 928 popular + 313 real-malware packages), and honest limits. Speed numbers are in [BENCHMARKS.md](BENCHMARKS.md).
+
 ## Commands
 
 ```sh
@@ -31,7 +33,7 @@ oath install -g typescript # global install
 oath add lodash            # add dependency
 oath remove lodash         # remove dependency
 oath run build            # run script with pre/post hooks
-oath exec -- prettier .   # run package binary (npx replacement)
+oath exec prettier .      # run package binary (npx replacement)
 oath publish              # publish to npm registry
 oath log                  # view transparency log
 oath score <pkg>          # security score for a package

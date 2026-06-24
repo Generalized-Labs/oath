@@ -9,12 +9,12 @@ use tokio::task::JoinSet;
 use oath_analyze::{PackageScanner, RiskLevel};
 use oath_core::policy::OathPolicy;
 use oath_fetch::RegistryClient;
-use oath_resolve::resolver::{ResolveOptions, Resolver};
-use oath_resolve::graph::PeerResolution;
 use oath_resolve::Lockfile;
+use oath_resolve::graph::PeerResolution;
+use oath_resolve::resolver::{ResolveOptions, Resolver};
 use oath_store::cas::ContentStore;
 use oath_store::linker::Linker;
-use oath_workspace::{detect_workspace_root, WorkspaceRoot};
+use oath_workspace::{WorkspaceRoot, detect_workspace_root};
 
 mod prompts;
 
@@ -77,14 +77,9 @@ enum Commands {
         package: String,
         #[arg(trailing_var_arg = true)]
         args: Vec<String>,
-        #[arg(long)]
-        allow_net: bool,
-        #[arg(long)]
-        allow_read: Option<Vec<String>>,
-        #[arg(long)]
-        allow_write: Option<Vec<String>>,
-        #[arg(long)]
-        allow_env: Option<Vec<String>>,
+        /// Skip the risk prompt and run without asking (like npm's --yes)
+        #[arg(short = 'y', long)]
+        yes: bool,
         /// Minimum release age required (e.g. '7d', '24h', '30d'). Block if newer.
         #[arg(long)]
         min_age: Option<String>,
@@ -114,13 +109,9 @@ enum Commands {
         depth: usize,
     },
     /// Show safety score and metadata for a package
-    Score {
-        package: String,
-    },
+    Score { package: String },
     /// Show info about a package (author, downloads, publish date)
-    Info {
-        package: String,
-    },
+    Info { package: String },
     /// Publish the current package to the npm registry
     Publish {
         /// Tag to use (default: "latest")
@@ -163,9 +154,24 @@ async fn main() -> Result<()> {
             global,
             frozen_lockfile,
         } => {
-            cmd_install(packages, dev, dry_run, !no_audit, yes, run_scripts, global, frozen_lockfile, min_age).await?;
+            cmd_install(
+                packages,
+                dev,
+                dry_run,
+                !no_audit,
+                yes,
+                run_scripts,
+                global,
+                frozen_lockfile,
+                min_age,
+            )
+            .await?;
         }
-        Commands::Add { package, dev, yes: _ } => {
+        Commands::Add {
+            package,
+            dev,
+            yes: _,
+        } => {
             cmd_add(&package, dev).await?;
         }
         Commands::Run { script, args } => {
@@ -198,13 +204,10 @@ async fn main() -> Result<()> {
         Commands::Exec {
             package,
             args,
-            allow_net,
-            allow_read,
-            allow_write,
-            allow_env,
+            yes,
             min_age,
         } => {
-            cmd_exec(&package, &args, allow_net, allow_read, allow_write, allow_env, min_age.as_deref()).await?;
+            cmd_exec(&package, &args, yes, min_age.as_deref()).await?;
         }
         Commands::Score { package } => {
             cmd_score(&package).await?;
@@ -212,7 +215,11 @@ async fn main() -> Result<()> {
         Commands::Info { package } => {
             cmd_info(&package).await?;
         }
-        Commands::Publish { tag, access, dry_run } => {
+        Commands::Publish {
+            tag,
+            access,
+            dry_run,
+        } => {
             cmd_publish(tag.as_deref(), access.as_deref(), dry_run).await?;
         }
         Commands::Log { tail } => {
@@ -221,9 +228,6 @@ async fn main() -> Result<()> {
         Commands::Remove { packages } => {
             cmd_remove(packages).await?;
         }
-        _ => {
-            println!("oath: command not yet implemented");
-        }
     }
 
     Ok(())
@@ -231,6 +235,7 @@ async fn main() -> Result<()> {
 
 // ---- INSTALL ----------------------------------------------------------------
 
+#[allow(clippy::too_many_arguments)]
 async fn cmd_install(
     packages: Vec<String>,
     dev: bool,
@@ -261,10 +266,7 @@ async fn cmd_install(
     if let Some(ref ws) = workspace {
         // Workspace mode: install all packages together with hoisted graph
         if packages.is_empty() {
-            println!(
-                "oath: workspace mode, {} packages",
-                ws.packages.len()
-            );
+            println!("oath: workspace mode, {} packages", ws.packages.len());
             for pkg in &ws.packages {
                 println!("  - {} ({})", pkg.name, pkg.path.display());
             }
@@ -301,7 +303,11 @@ async fn cmd_install(
         let pkg = read_package_json().unwrap_or_default();
         pkg.get("trustedDependencies")
             .and_then(|v| v.as_array())
-            .map(|arr| arr.iter().filter_map(|v| v.as_str().map(String::from)).collect())
+            .map(|arr| {
+                arr.iter()
+                    .filter_map(|v| v.as_str().map(String::from))
+                    .collect()
+            })
             .unwrap_or_default()
     };
 
@@ -322,7 +328,10 @@ async fn cmd_install(
             store_check.has_package(name, &entry.version)
         });
         if all_cached && !lockfile.packages.is_empty() {
-            println!("oath: lockfile up-to-date ({} packages)", lockfile.packages.len());
+            println!(
+                "oath: lockfile up-to-date ({} packages)",
+                lockfile.packages.len()
+            );
             lockfile.to_graph()
         } else {
             println!("oath: resolving {total_direct} dependencies...");
@@ -381,7 +390,7 @@ async fn cmd_install(
 
     let mut to_download = vec![];
     let mut cached = 0usize;
-    for (_key, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         if store.has_package(&node.name, &node.version) {
             cached += 1;
         } else {
@@ -437,10 +446,10 @@ async fn cmd_install(
                 let mut violations: Vec<(String, String, u64)> = Vec::new();
                 while let Some(res) = age_set.join_next().await {
                     let (name, version, age) = res?;
-                    if let Some(age_secs) = age {
-                        if age_secs < min_age_secs {
-                            violations.push((name, version, age_secs / 86400));
-                        }
+                    if let Some(age_secs) = age
+                        && age_secs < min_age_secs
+                    {
+                        violations.push((name, version, age_secs / 86400));
                     }
                 }
                 if !violations.is_empty() {
@@ -483,20 +492,26 @@ async fn cmd_install(
             set.spawn(async move {
                 // For git dependencies, the resolved URL is git+https:// or similar.
                 // Try to find the cached tarball from the git cache directory.
-                if resolved.starts_with("git+") || resolved.starts_with("github:")
-                    || resolved.starts_with("gitlab:") || resolved.starts_with("bitbucket:")
+                if resolved.starts_with("git+")
+                    || resolved.starts_with("github:")
+                    || resolved.starts_with("gitlab:")
+                    || resolved.starts_with("bitbucket:")
                 {
                     let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
                     let safe_name = name.replace('/', "+");
                     let cache_file = std::path::PathBuf::from(&home)
-                        .join(".oath").join("git-cache")
+                        .join(".oath")
+                        .join("git-cache")
                         .join(format!("{}-{}.tgz", safe_name, version));
                     if cache_file.exists() {
-                        let data = std::fs::read(&cache_file)
-                            .with_context(|| format!("reading git cache {}", cache_file.display()))?;
+                        let data = std::fs::read(&cache_file).with_context(|| {
+                            format!("reading git cache {}", cache_file.display())
+                        })?;
                         return Ok((name, version, data));
                     }
-                    anyhow::bail!("git dep {name}@{version} not in cache and no tarball URL available");
+                    anyhow::bail!(
+                        "git dep {name}@{version} not in cache and no tarball URL available"
+                    );
                 }
                 let data = client
                     .fetch_tarball(&resolved, integrity.as_deref())
@@ -546,8 +561,8 @@ async fn cmd_install(
     let lockfile = Lockfile::from_graph(&graph, &project_name, &project_version);
     if frozen_lockfile {
         // Compare new lockfile with existing; error if they differ
-        let existing_content = std::fs::read_to_string("oath-lock.json")
-            .context("failed to read oath-lock.json")?;
+        let existing_content =
+            std::fs::read_to_string("oath-lock.json").context("failed to read oath-lock.json")?;
         let new_content = serde_json::to_string_pretty(&lockfile)?;
         // Parse both to compare semantically (ignore key ordering differences)
         let existing_val: serde_json::Value = serde_json::from_str(&existing_content)
@@ -567,13 +582,19 @@ async fn cmd_install(
         } else {
             serde_json::json!({"name": "project", "version": "1.0.0"})
         };
-        let dep_key = if dev { "devDependencies" } else { "dependencies" };
+        let dep_key = if dev {
+            "devDependencies"
+        } else {
+            "dependencies"
+        };
         if pkg_json.get(dep_key).is_none() {
             pkg_json[dep_key] = serde_json::json!({});
         }
-        for (pkg_name, _spec) in &deps {
+        for pkg_name in deps.keys() {
             // Find resolved version from graph
-            let resolved_version = graph.nodes.values()
+            let resolved_version = graph
+                .nodes
+                .values()
                 .find(|n| &n.name == pkg_name)
                 .map(|n| n.version.clone())
                 .unwrap_or_else(|| "0.0.0".to_string());
@@ -586,7 +607,12 @@ async fn cmd_install(
     // -- Peer dependency warnings ---------------------------------------------
     let peer = &graph.peer_report;
     for r in &peer.missing {
-        if let PeerResolution::Missing { required_by, peer_name, range } = r {
+        if let PeerResolution::Missing {
+            required_by,
+            peer_name,
+            range,
+        } = r
+        {
             eprintln!(
                 "\x1b[33mwarn\x1b[0m peer dep missing: {}@{}, required by {}",
                 peer_name, range, required_by
@@ -594,7 +620,13 @@ async fn cmd_install(
         }
     }
     for r in &peer.conflicts {
-        if let PeerResolution::Conflict { required_by, peer_name, range, found_version } = r {
+        if let PeerResolution::Conflict {
+            required_by,
+            peer_name,
+            range,
+            found_version,
+        } = r
+        {
             eprintln!(
                 "\x1b[33mwarn\x1b[0m peer dep conflict: {}@{} installed, {} requires {}",
                 peer_name, found_version, required_by, range
@@ -608,7 +640,7 @@ async fn cmd_install(
     let store_path = store.store_path();
 
     let mut scripts_blocked = 0;
-    for (_key, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         if !node.has_install_script {
             continue;
         }
@@ -653,8 +685,8 @@ async fn cmd_install(
                 Ok(r) => r,
                 Err(_) => continue,
             };
-            let script_display = detect_install_script(&pkg_dir)
-                .unwrap_or_else(|| "node install.js".to_string());
+            let script_display =
+                detect_install_script(&pkg_dir).unwrap_or_else(|| "node install.js".to_string());
             let decision = prompts::prompt_install_script(
                 &node.name,
                 &node.version,
@@ -666,9 +698,6 @@ async fn cmd_install(
             match decision {
                 prompts::ScriptDecision::Allow | prompts::ScriptDecision::Always => {
                     run_install_script(&node.name, &pkg_dir);
-                }
-                prompts::ScriptDecision::Sandbox => {
-                    run_install_script_sandboxed(&node.name, &pkg_dir);
                 }
                 prompts::ScriptDecision::Deny => {}
             }
@@ -692,7 +721,7 @@ async fn cmd_install(
         let mut critical = 0usize;
         let mut high = 0usize;
 
-        for (_key, node) in &graph.nodes {
+        for node in graph.nodes.values() {
             // Use the canonical store layout (name/version). The old
             // `format!("{}-{}")` path never existed, so the scan silently
             // skipped every package and always printed "all clear".
@@ -759,7 +788,9 @@ async fn cmd_install(
     let project_path = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
-    let pkg_entries: Vec<(String, String, Option<String>)> = graph.nodes.values()
+    let pkg_entries: Vec<(String, String, Option<String>)> = graph
+        .nodes
+        .values()
         .map(|n| (n.name.clone(), n.version.clone(), n.integrity.clone()))
         .collect();
     if let Ok(logger) = oath_transparency::TransparencyLogger::default_logger() {
@@ -782,7 +813,7 @@ async fn cmd_install_workspace(
     ws: &WorkspaceRoot,
     dry_run: bool,
     run_audit: bool,
-    yes_flag: bool,
+    _yes_flag: bool,
     _run_scripts: bool,
 ) -> Result<()> {
     let start = Instant::now();
@@ -802,15 +833,24 @@ async fn cmd_install_workspace(
     }
 
     if dry_run {
-        println!("  (dry run) would resolve {} external deps", external_deps.len());
+        println!(
+            "  (dry run) would resolve {} external deps",
+            external_deps.len()
+        );
         for (consumer, dep, path) in &workspace_links {
-            println!("  (dry run) workspace link: {} -> {} ({})", dep, path, consumer);
+            println!(
+                "  (dry run) workspace link: {} -> {} ({})",
+                dep, path, consumer
+            );
         }
         return Ok(());
     }
 
     // Resolve the unified dep graph
-    println!("  resolving {} external dependencies...", external_deps.len());
+    println!(
+        "  resolving {} external dependencies...",
+        external_deps.len()
+    );
     let client = RegistryClient::default_client()?;
     let options = ResolveOptions {
         include_dev: true,
@@ -837,7 +877,7 @@ async fn cmd_install_workspace(
 
     let mut to_download = vec![];
     let mut cached = 0usize;
-    for (_key, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         if store.has_package(&node.name, &node.version) {
             cached += 1;
         } else {
@@ -907,10 +947,10 @@ async fn cmd_install_workspace(
         let symlink_path = nm_dir.join(install_name);
 
         // Handle scoped packages: create @scope dir
-        if install_name.contains('/') {
-            if let Some(scope) = install_name.split('/').next() {
-                std::fs::create_dir_all(nm_dir.join(scope))?;
-            }
+        if install_name.contains('/')
+            && let Some(scope) = install_name.split('/').next()
+        {
+            std::fs::create_dir_all(nm_dir.join(scope))?;
         }
 
         // Remove existing symlink if present
@@ -953,7 +993,12 @@ async fn cmd_install_workspace(
     // -- Peer dependency warnings ---------------------------------------------
     let peer = &graph.peer_report;
     for r in &peer.missing {
-        if let PeerResolution::Missing { required_by, peer_name, range } = r {
+        if let PeerResolution::Missing {
+            required_by,
+            peer_name,
+            range,
+        } = r
+        {
             eprintln!(
                 "\x1b[33mwarn\x1b[0m peer dep missing: {}@{}, required by {}",
                 peer_name, range, required_by
@@ -961,7 +1006,13 @@ async fn cmd_install_workspace(
         }
     }
     for r in &peer.conflicts {
-        if let PeerResolution::Conflict { required_by, peer_name, range, found_version } = r {
+        if let PeerResolution::Conflict {
+            required_by,
+            peer_name,
+            range,
+            found_version,
+        } = r
+        {
             eprintln!(
                 "\x1b[33mwarn\x1b[0m peer dep conflict: {}@{} installed, {} requires {}",
                 peer_name, found_version, required_by, range
@@ -980,7 +1031,9 @@ async fn cmd_install_workspace(
 
     // ---- Transparency log ---------------------------------------------------
     let project_path = ws.root.to_string_lossy().to_string();
-    let pkg_entries: Vec<(String, String, Option<String>)> = graph.nodes.values()
+    let pkg_entries: Vec<(String, String, Option<String>)> = graph
+        .nodes
+        .values()
         .map(|n| (n.name.clone(), n.version.clone(), n.integrity.clone()))
         .collect();
     if let Ok(logger) = oath_transparency::TransparencyLogger::default_logger() {
@@ -1051,7 +1104,9 @@ async fn cmd_audit(production: bool, verbose: bool) -> Result<()> {
 
     for name_entry in store_entries.filter_map(|e| e.ok()) {
         let name_path = name_entry.path();
-        if !name_path.is_dir() { continue; }
+        if !name_path.is_dir() {
+            continue;
+        }
         let name = name_entry.file_name().to_string_lossy().replace('+', "/");
 
         let ver_entries = match std::fs::read_dir(&name_path) {
@@ -1060,7 +1115,9 @@ async fn cmd_audit(production: bool, verbose: bool) -> Result<()> {
         };
         for ver_entry in ver_entries.filter_map(|e| e.ok()) {
             let pkg_path = ver_entry.path();
-            if !pkg_path.is_dir() { continue; }
+            if !pkg_path.is_dir() {
+                continue;
+            }
             let version = ver_entry.file_name().to_string_lossy().to_string();
 
             let report = match PackageScanner::scan(&name, &version, &pkg_path) {
@@ -1071,9 +1128,18 @@ async fn cmd_audit(production: bool, verbose: bool) -> Result<()> {
             total += 1;
 
             let show = match report.overall_risk {
-                RiskLevel::Critical => { critical += 1; true }
-                RiskLevel::High => { high += 1; true }
-                RiskLevel::Medium => { medium += 1; verbose }
+                RiskLevel::Critical => {
+                    critical += 1;
+                    true
+                }
+                RiskLevel::High => {
+                    high += 1;
+                    true
+                }
+                RiskLevel::Medium => {
+                    medium += 1;
+                    verbose
+                }
                 _ => verbose,
             };
 
@@ -1086,9 +1152,16 @@ async fn cmd_audit(production: bool, verbose: bool) -> Result<()> {
                 };
                 println!();
                 println!("[{risk_label}] {name}@{version}");
-                println!("  files: {}  lines: {}", report.files_scanned, report.lines_scanned);
+                println!(
+                    "  files: {}  lines: {}",
+                    report.files_scanned, report.lines_scanned
+                );
                 println!("  capabilities: {}", fmt_capabilities(&report.capabilities));
-                for f in report.findings.iter().filter(|f| verbose || f.risk >= RiskLevel::High) {
+                for f in report
+                    .findings
+                    .iter()
+                    .filter(|f| verbose || f.risk >= RiskLevel::High)
+                {
                     println!("  - [{:?}] L{} {} -- {}", f.risk, f.line, f.file, f.message);
                     if let Some(s) = &f.snippet {
                         println!("    > {s}");
@@ -1128,7 +1201,9 @@ fn cmd_perms(package: &str) -> Result<()> {
 
     for ver_entry in std::fs::read_dir(&pkg_name_dir)?.filter_map(|e| e.ok()) {
         let pkg_path = ver_entry.path();
-        if !pkg_path.is_dir() { continue; }
+        if !pkg_path.is_dir() {
+            continue;
+        }
         let version = ver_entry.file_name().to_string_lossy().to_string();
         let report = PackageScanner::scan(package, &version, &pkg_path)?;
 
@@ -1142,14 +1217,29 @@ fn cmd_perms(package: &str) -> Result<()> {
         for r in &report.verdict_reasons {
             println!("    - {r}");
         }
-        println!("  files:   {} ({} lines)", report.files_scanned, report.lines_scanned);
+        println!(
+            "  files:   {} ({} lines)",
+            report.files_scanned, report.lines_scanned
+        );
         println!();
         println!("  CAPABILITIES (neutral -- what the package can do):");
         println!("    network:         {}", yn(report.capabilities.network));
-        println!("    filesystem:      {}", yn(report.capabilities.filesystem));
-        println!("    env vars:        {}", yn(report.capabilities.env_access));
-        println!("    subprocess:      {}", yn(report.capabilities.subprocess));
-        println!("    dynamic exec:    {}", yn(report.capabilities.dynamic_exec));
+        println!(
+            "    filesystem:      {}",
+            yn(report.capabilities.filesystem)
+        );
+        println!(
+            "    env vars:        {}",
+            yn(report.capabilities.env_access)
+        );
+        println!(
+            "    subprocess:      {}",
+            yn(report.capabilities.subprocess)
+        );
+        println!(
+            "    dynamic exec:    {}",
+            yn(report.capabilities.dynamic_exec)
+        );
         println!(
             "    install scripts: {}",
             yn(report.capabilities.has_install_scripts)
@@ -1175,7 +1265,11 @@ async fn cmd_add(package: &str, _dev: bool) -> Result<()> {
     let packument = client.fetch_packument(&name).await?;
     let resolved = oath_fetch::resolve_version(&packument, &spec)?;
     let version_range = format!("^{}", resolved.version);
-    let key = if _dev { "devDependencies" } else { "dependencies" };
+    let key = if _dev {
+        "devDependencies"
+    } else {
+        "dependencies"
+    };
 
     if pkg.get(key).is_none() {
         pkg[key] = serde_json::json!({});
@@ -1192,9 +1286,7 @@ async fn cmd_add(package: &str, _dev: bool) -> Result<()> {
 fn cmd_run(script: Option<&str>, args: &[String]) -> Result<()> {
     let pkg = read_package_json()?;
 
-    let scripts_obj = pkg
-        .get("scripts")
-        .and_then(|s| s.as_object());
+    let scripts_obj = pkg.get("scripts").and_then(|s| s.as_object());
 
     // No script name: list all available scripts
     let script = match script {
@@ -1235,7 +1327,11 @@ fn cmd_run(script: Option<&str>, args: &[String]) -> Result<()> {
     // Helper to run a single script command and return the exit status
     let run_script = |script_name: &str, script_cmd: &str| -> Result<std::process::ExitStatus> {
         println!();
-        println!("> {}@0.0.0 {}", pkg["name"].as_str().unwrap_or("project"), script_name);
+        println!(
+            "> {}@0.0.0 {}",
+            pkg["name"].as_str().unwrap_or("project"),
+            script_name
+        );
         println!("> {}", script_cmd);
         let status = std::process::Command::new("sh")
             .arg("-c")
@@ -1287,14 +1383,12 @@ fn cmd_run(script: Option<&str>, args: &[String]) -> Result<()> {
 // ---- INIT -------------------------------------------------------------------
 
 fn cmd_init(name: Option<&str>) -> Result<()> {
-    let project_name = name
-        .map(|n| n.to_string())
-        .unwrap_or_else(|| {
-            std::env::current_dir()
-                .ok()
-                .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
-                .unwrap_or_else(|| "project".to_string())
-        });
+    let project_name = name.map(|n| n.to_string()).unwrap_or_else(|| {
+        std::env::current_dir()
+            .ok()
+            .and_then(|p| p.file_name().map(|n| n.to_string_lossy().to_string()))
+            .unwrap_or_else(|| "project".to_string())
+    });
 
     let pkg = serde_json::json!({
         "name": project_name,
@@ -1336,8 +1430,7 @@ fn cmd_why(package: &str) -> Result<()> {
         .iter()
         .filter(|(key, _)| {
             let k = key.as_str();
-            k == package
-                || k.starts_with(&format!("{package}@"))
+            k == package || k.starts_with(&format!("{package}@"))
         })
         .map(|(k, v)| (k.as_str(), v))
         .collect();
@@ -1409,8 +1502,14 @@ fn cmd_why(package: &str) -> Result<()> {
             match PackageScanner::scan(name, version, &pkg_dir) {
                 Ok(report) => {
                     println!("    risk: {}", report.overall_risk);
-                    println!("    capabilities: {}", fmt_capabilities(&report.capabilities));
-                    println!("    install script: {}", yn(report.capabilities.has_install_scripts || has_install));
+                    println!(
+                        "    capabilities: {}",
+                        fmt_capabilities(&report.capabilities)
+                    );
+                    println!(
+                        "    install script: {}",
+                        yn(report.capabilities.has_install_scripts || has_install)
+                    );
                 }
                 Err(_) => {
                     println!("    (could not scan package)");
@@ -1431,10 +1530,11 @@ fn cmd_why(package: &str) -> Result<()> {
 fn find_dep_path(
     start: &str,
     rdeps: &HashMap<String, Vec<String>>,
-    all_keys: &HashSet<&str>,
+    _all_keys: &HashSet<&str>,
 ) -> Vec<String> {
     // BFS
-    let mut queue: std::collections::VecDeque<(String, Vec<String>)> = std::collections::VecDeque::new();
+    let mut queue: std::collections::VecDeque<(String, Vec<String>)> =
+        std::collections::VecDeque::new();
     queue.push_back((start.to_string(), vec![]));
     let mut visited: HashSet<String> = HashSet::new();
     visited.insert(start.to_string());
@@ -1508,7 +1608,9 @@ fn cmd_licenses() -> Result<()> {
                                     .map(|l| {
                                         if let Some(s) = l.as_str() {
                                             s.to_string()
-                                        } else if let Some(t) = l.get("type").and_then(|t| t.as_str()) {
+                                        } else if let Some(t) =
+                                            l.get("type").and_then(|t| t.as_str())
+                                        {
                                             t.to_string()
                                         } else {
                                             "UNKNOWN".to_string()
@@ -1633,26 +1735,25 @@ fn cmd_verify() -> Result<()> {
         // cross-check the name/version fields match what's locked.
         if !integrity.is_empty() {
             match std::fs::read_to_string(&pkg_json) {
-                Ok(pj_content) => {
-                    match serde_json::from_str::<serde_json::Value>(&pj_content) {
-                        Ok(pj) => {
-                            let stored_name = pj.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                            let stored_version = pj.get("version").and_then(|v| v.as_str()).unwrap_or("");
-                            if stored_name != name || stored_version != version {
-                                println!(
-                                    "  TAMPERED: {key} -- package.json name/version mismatch (got {stored_name}@{stored_version})"
-                                );
-                                tampered += 1;
-                                continue;
-                            }
-                        }
-                        Err(_) => {
-                            println!("  TAMPERED: {key} -- package.json is not valid JSON");
+                Ok(pj_content) => match serde_json::from_str::<serde_json::Value>(&pj_content) {
+                    Ok(pj) => {
+                        let stored_name = pj.get("name").and_then(|n| n.as_str()).unwrap_or("");
+                        let stored_version =
+                            pj.get("version").and_then(|v| v.as_str()).unwrap_or("");
+                        if stored_name != name || stored_version != version {
+                            println!(
+                                "  TAMPERED: {key} -- package.json name/version mismatch (got {stored_name}@{stored_version})"
+                            );
                             tampered += 1;
                             continue;
                         }
                     }
-                }
+                    Err(_) => {
+                        println!("  TAMPERED: {key} -- package.json is not valid JSON");
+                        tampered += 1;
+                        continue;
+                    }
+                },
                 Err(_) => {
                     println!("  TAMPERED: {key} -- could not read package.json");
                     tampered += 1;
@@ -1714,7 +1815,8 @@ fn cmd_graph(max_depth: usize) -> Result<()> {
             println!("  {name}@{version}");
 
             let mut direct_deps: Vec<String> = {
-                let mut d: Vec<String> = extract_deps(&pkg, "dependencies").keys().cloned().collect();
+                let mut d: Vec<String> =
+                    extract_deps(&pkg, "dependencies").keys().cloned().collect();
                 d.extend(extract_deps(&pkg, "devDependencies").keys().cloned());
                 d.sort();
                 d
@@ -1731,11 +1833,18 @@ fn cmd_graph(max_depth: usize) -> Result<()> {
                             let k = k.as_str();
                             k == dep_name || k.starts_with(&format!("{dep_name}@"))
                         })
-                        .map(|k| k.clone())
+                        .cloned()
                 })
                 .collect();
 
-            print_graph_children(&root_children, packages, 1, max_depth, &mut HashSet::new(), "");
+            print_graph_children(
+                &root_children,
+                packages,
+                1,
+                max_depth,
+                &mut HashSet::new(),
+                "",
+            );
             println!();
             return Ok(());
         } else {
@@ -1747,7 +1856,12 @@ fn cmd_graph(max_depth: usize) -> Result<()> {
                         let dep_ver_str = dep_ver.as_str().unwrap_or("");
                         let dep_key = format!("{dep_name}@{dep_ver_str}");
                         if packages.contains_key(&dep_key) {
-                            has_parent.insert(packages.get_key_value(&dep_key).map(|(k, _)| k.as_str()).unwrap_or(""));
+                            has_parent.insert(
+                                packages
+                                    .get_key_value(&dep_key)
+                                    .map(|(k, _)| k.as_str())
+                                    .unwrap_or(""),
+                            );
                         }
                     }
                 }
@@ -1767,18 +1881,18 @@ fn cmd_graph(max_depth: usize) -> Result<()> {
 
     for root_key in &roots {
         println!("  {root_key}");
-        if let Some(root_node) = packages.get(root_key) {
-            if let Some(deps) = root_node.get("dependencies").and_then(|d| d.as_object()) {
-                let mut dep_keys: Vec<String> = deps
-                    .iter()
-                    .map(|(dep_name, dep_ver)| {
-                        let dep_ver_str = dep_ver.as_str().unwrap_or("");
-                        format!("{dep_name}@{dep_ver_str}")
-                    })
-                    .collect();
-                dep_keys.sort();
-                print_graph_children(&dep_keys, packages, 1, max_depth, &mut HashSet::new(), "");
-            }
+        if let Some(root_node) = packages.get(root_key)
+            && let Some(deps) = root_node.get("dependencies").and_then(|d| d.as_object())
+        {
+            let mut dep_keys: Vec<String> = deps
+                .iter()
+                .map(|(dep_name, dep_ver)| {
+                    let dep_ver_str = dep_ver.as_str().unwrap_or("");
+                    format!("{dep_name}@{dep_ver_str}")
+                })
+                .collect();
+            dep_keys.sort();
+            print_graph_children(&dep_keys, packages, 1, max_depth, &mut HashSet::new(), "");
         }
     }
     println!();
@@ -1796,7 +1910,7 @@ fn print_graph_children(
     let count = children.len();
     for (i, child_key) in children.iter().enumerate() {
         let is_last = i == count - 1;
-        let connector = if is_last { "+--" } else { "+--" };
+        let connector = "+--";
         let child_prefix = if is_last {
             format!("{prefix}    ")
         } else {
@@ -1807,12 +1921,14 @@ fn print_graph_children(
 
         if depth >= max_depth {
             // Check if there are deeper deps but we're truncating
-            if let Some(node) = packages.get(child_key) {
-                if let Some(deps) = node.get("dependencies").and_then(|d| d.as_object()) {
-                    if !deps.is_empty() {
-                        println!("  {child_prefix}... ({} more deps, use --depth to show)", deps.len());
-                    }
-                }
+            if let Some(node) = packages.get(child_key)
+                && let Some(deps) = node.get("dependencies").and_then(|d| d.as_object())
+                && !deps.is_empty()
+            {
+                println!(
+                    "  {child_prefix}... ({} more deps, use --depth to show)",
+                    deps.len()
+                );
             }
             continue;
         }
@@ -1824,18 +1940,25 @@ fn print_graph_children(
 
         visited.insert(child_key.clone());
 
-        if let Some(node) = packages.get(child_key) {
-            if let Some(deps) = node.get("dependencies").and_then(|d| d.as_object()) {
-                let mut dep_keys: Vec<String> = deps
-                    .iter()
-                    .map(|(dep_name, dep_ver)| {
-                        let dep_ver_str = dep_ver.as_str().unwrap_or("");
-                        format!("{dep_name}@{dep_ver_str}")
-                    })
-                    .collect();
-                dep_keys.sort();
-                print_graph_children(&dep_keys, packages, depth + 1, max_depth, visited, &child_prefix);
-            }
+        if let Some(node) = packages.get(child_key)
+            && let Some(deps) = node.get("dependencies").and_then(|d| d.as_object())
+        {
+            let mut dep_keys: Vec<String> = deps
+                .iter()
+                .map(|(dep_name, dep_ver)| {
+                    let dep_ver_str = dep_ver.as_str().unwrap_or("");
+                    format!("{dep_name}@{dep_ver_str}")
+                })
+                .collect();
+            dep_keys.sort();
+            print_graph_children(
+                &dep_keys,
+                packages,
+                depth + 1,
+                max_depth,
+                visited,
+                &child_prefix,
+            );
         }
 
         visited.remove(child_key);
@@ -1878,18 +2001,31 @@ fn parse_package_spec(spec: &str) -> (String, String) {
     (spec.to_string(), "latest".to_string())
 }
 
-/// Split a store dirname like "express-4.18.2" -> ("express", "4.18.2")
-/// (no longer used -- store is name/version/ layout)
-
 fn fmt_capabilities(c: &oath_analyze::Capabilities) -> String {
     let mut parts = vec![];
-    if c.network { parts.push("network"); }
-    if c.filesystem { parts.push("filesystem"); }
-    if c.env_access { parts.push("env"); }
-    if c.subprocess { parts.push("subprocess"); }
-    if c.dynamic_exec { parts.push("eval/dynamic"); }
-    if c.has_install_scripts { parts.push("install-scripts"); }
-    if parts.is_empty() { "none".to_string() } else { parts.join(", ") }
+    if c.network {
+        parts.push("network");
+    }
+    if c.filesystem {
+        parts.push("filesystem");
+    }
+    if c.env_access {
+        parts.push("env");
+    }
+    if c.subprocess {
+        parts.push("subprocess");
+    }
+    if c.dynamic_exec {
+        parts.push("eval/dynamic");
+    }
+    if c.has_install_scripts {
+        parts.push("install-scripts");
+    }
+    if parts.is_empty() {
+        "none".to_string()
+    } else {
+        parts.join(", ")
+    }
 }
 
 fn yn(b: bool) -> &'static str {
@@ -1961,26 +2097,9 @@ fn run_install_script(pkg_name: &str, pkg_dir: &std::path::Path) {
     }
 }
 
-/// Run a package's install scripts inside the oath sandbox.
-fn run_install_script_sandboxed(pkg_name: &str, pkg_dir: &std::path::Path) {
-    // For now, fall back to unsandboxed with a warning.
-    // A full implementation would use oath_sandbox::SandboxExecutor.
-    // We keep the dependency graph lean here and defer to a follow-up.
-    eprintln!("  oath: sandbox mode for {pkg_name} (using restricted shell for now)");
-    run_install_script(pkg_name, pkg_dir);
-}
+// ---- EXEC -------------------------------------------------------------------
 
-// ---- EXEC (oathx) -----------------------------------------------------------
-
-async fn cmd_exec(
-    package: &str,
-    args: &[String],
-    allow_net: bool,
-    allow_read: Option<Vec<String>>,
-    allow_write: Option<Vec<String>>,
-    allow_env: Option<Vec<String>>,
-    min_age: Option<&str>,
-) -> Result<()> {
+async fn cmd_exec(package: &str, args: &[String], yes: bool, min_age: Option<&str>) -> Result<()> {
     use oath_analyze::{PackageScanner, RiskLevel};
     use std::io::Write;
 
@@ -2003,7 +2122,9 @@ async fn cmd_exec(
     // Need to fetch the package
     println!("oath exec: fetching {}@{}...", pkg_name, pkg_version);
     let client = RegistryClient::default_client()?;
-    let packument = client.fetch_packument(&pkg_name).await
+    let packument = client
+        .fetch_packument(&pkg_name)
+        .await
         .with_context(|| format!("fetching {pkg_name}"))?;
     let resolved = oath_fetch::resolve_version(&packument, &pkg_version)
         .with_context(|| format!("resolving {pkg_name}@{pkg_version}"))?;
@@ -2031,30 +2152,36 @@ async fn cmd_exec(
                 println!("  published {} hours ago", age_hours);
             }
 
-            if let Some(min_age_str) = min_age {
-                if let Some(min_age_secs) = parse_duration_secs(min_age_str) {
-                    if age_secs < min_age_secs {
-                        let min_days = min_age_secs / 86400;
-                        anyhow::bail!(
-                            "oath exec: BLOCKED -- {}@{} was published only {} days ago (minimum required: {} days)",
-                            pkg_name, version, age_days,
-                            if min_days > 0 { min_days } else { 1 }
-                        );
-                    }
-                }
+            if let Some(min_age_str) = min_age
+                && let Some(min_age_secs) = parse_duration_secs(min_age_str)
+                && age_secs < min_age_secs
+            {
+                let min_days = min_age_secs / 86400;
+                anyhow::bail!(
+                    "oath exec: BLOCKED -- {}@{} was published only {} days ago (minimum required: {} days)",
+                    pkg_name,
+                    version,
+                    age_days,
+                    if min_days > 0 { min_days } else { 1 }
+                );
             }
         }
     } else if min_age.is_some() {
-        println!("  warning: no publish time available for {}@{}", pkg_name, version);
+        println!(
+            "  warning: no publish time available for {}@{}",
+            pkg_name, version
+        );
     }
 
     // Check store first
     let store = ContentStore::default_store()?;
-    let pkg_dir = if store.has_package(&pkg_name, &version) {
+    let _pkg_dir = if store.has_package(&pkg_name, &version) {
         store.package_dir(&pkg_name, &version)
     } else {
         // Download and store
-        let data = client.fetch_tarball(&info.dist.tarball, info.dist.integrity.as_deref()).await
+        let data = client
+            .fetch_tarball(&info.dist.tarball, info.dist.integrity.as_deref())
+            .await
             .with_context(|| format!("downloading {pkg_name}@{version}"))?;
         let tmp = tempfile::tempdir()?;
         oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
@@ -2070,7 +2197,10 @@ async fn cmd_exec(
         "version": "0.0.0",
         "dependencies": { &pkg_name: &version }
     });
-    std::fs::write(exec_path.join("package.json"), serde_json::to_string(&exec_pkg)?)?;
+    std::fs::write(
+        exec_path.join("package.json"),
+        serde_json::to_string(&exec_pkg)?,
+    )?;
 
     // Resolve full dep tree
     let mut deps_map = HashMap::new();
@@ -2085,9 +2215,11 @@ async fn cmd_exec(
 
     // Download any missing packages
     let store2 = ContentStore::default_store()?;
-    for (_key, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         if !store2.has_package(&node.name, &node.version) {
-            let data = client.fetch_tarball(&node.resolved, node.integrity.as_deref()).await?;
+            let data = client
+                .fetch_tarball(&node.resolved, node.integrity.as_deref())
+                .await?;
             let tmp = tempfile::tempdir()?;
             oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
             store2.store_package(&node.name, &node.version, tmp.path())?;
@@ -2106,20 +2238,34 @@ async fn cmd_exec(
     let caps = &report.capabilities;
 
     let has_risks = !report.findings.is_empty();
-    let needs_prompt = has_risks && !allow_net && std::env::var("OATH_ALLOW_ALL").is_err();
+    let needs_prompt = has_risks && !yes && std::env::var("OATH_ALLOW_ALL").is_err();
 
     if has_risks {
         println!("\n  oath exec: {} v{}", pkg_name, version);
         println!("  capabilities detected:");
-        if caps.network { println!("    network access"); }
-        if caps.filesystem { println!("    filesystem access"); }
-        if caps.env_access { println!("    env variable reads"); }
-        if caps.subprocess { println!("    subprocess spawn"); }
-        if caps.dynamic_exec { println!("    dynamic code eval"); }
-        if caps.has_install_scripts { println!("    install scripts"); }
+        if caps.network {
+            println!("    network access");
+        }
+        if caps.filesystem {
+            println!("    filesystem access");
+        }
+        if caps.env_access {
+            println!("    env variable reads");
+        }
+        if caps.subprocess {
+            println!("    subprocess spawn");
+        }
+        if caps.dynamic_exec {
+            println!("    dynamic code eval");
+        }
+        if caps.has_install_scripts {
+            println!("    install scripts");
+        }
 
         // Show high/critical findings
-        let serious: Vec<_> = report.findings.iter()
+        let serious: Vec<_> = report
+            .findings
+            .iter()
             .filter(|f| matches!(f.risk, RiskLevel::High | RiskLevel::Critical))
             .collect();
         if !serious.is_empty() {
@@ -2144,14 +2290,19 @@ async fn cmd_exec(
     // Find the binary
     let pkg_json_path = pkg_dir.join("package.json");
     let bin_name = if pkg_json_path.exists() {
-        let pkg_json: serde_json::Value = serde_json::from_str(&std::fs::read_to_string(&pkg_json_path)?)?;
+        let pkg_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&pkg_json_path)?)?;
         // Check "bin" field
         match &pkg_json["bin"] {
             serde_json::Value::String(s) => Some(s.clone()),
-            serde_json::Value::Object(map) => {
-                map.get(&pkg_name).and_then(|v| v.as_str().map(|s| s.to_string()))
-                    .or_else(|| map.values().next().and_then(|v| v.as_str().map(|s| s.to_string())))
-            }
+            serde_json::Value::Object(map) => map
+                .get(&pkg_name)
+                .and_then(|v| v.as_str().map(|s| s.to_string()))
+                .or_else(|| {
+                    map.values()
+                        .next()
+                        .and_then(|v| v.as_str().map(|s| s.to_string()))
+                }),
             _ => None,
         }
     } else {
@@ -2163,7 +2314,8 @@ async fn cmd_exec(
         None => {
             // Fallback: check common locations
             let candidates = ["cli.js", "bin/index.js", "index.js", "bin.js"];
-            candidates.iter()
+            candidates
+                .iter()
                 .map(|c| pkg_dir.join(c))
                 .find(|p| p.exists())
                 .unwrap_or_else(|| {
@@ -2209,7 +2361,9 @@ async fn cmd_score(package: &str) -> Result<()> {
     let pkg_dir = if store.has_package(&pkg_name, &version) {
         store.package_dir(&pkg_name, &version)
     } else {
-        let data = client.fetch_tarball(&info.dist.tarball, info.dist.integrity.as_deref()).await?;
+        let data = client
+            .fetch_tarball(&info.dist.tarball, info.dist.integrity.as_deref())
+            .await?;
         let tmp = tempfile::tempdir()?;
         oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
         store.store_package(&pkg_name, &version, tmp.path())?;
@@ -2226,14 +2380,16 @@ async fn cmd_score(package: &str) -> Result<()> {
         'B' => "\x1b[36m", // cyan
         'C' => "\x1b[33m", // yellow
         'D' => "\x1b[33m", // yellow
-        _   => "\x1b[31m", // red
+        _ => "\x1b[31m",   // red
     };
     let reset = "\x1b[0m";
 
     println!();
     println!("  {}@{}", pkg_name, version);
-    println!("  safety score: {}{}/100 (grade {}){}",
-        grade_color, score.score, score.grade, reset);
+    println!(
+        "  safety score: {}{}/100 (grade {}){}",
+        grade_color, score.score, score.grade, reset
+    );
     println!();
     println!("  factors:");
     for factor in &score.factors {
@@ -2244,21 +2400,50 @@ async fn cmd_score(package: &str) -> Result<()> {
 
     // Capabilities summary
     let caps = &report.capabilities;
-    if caps.network || caps.filesystem || caps.env_access || caps.subprocess || caps.dynamic_exec || caps.has_install_scripts {
+    if caps.network
+        || caps.filesystem
+        || caps.env_access
+        || caps.subprocess
+        || caps.dynamic_exec
+        || caps.has_install_scripts
+    {
         println!("  capabilities:");
-        if caps.network { println!("    network access"); }
-        if caps.filesystem { println!("    filesystem access"); }
-        if caps.env_access { println!("    env variable reads"); }
-        if caps.subprocess { println!("    subprocess spawn"); }
-        if caps.dynamic_exec { println!("    dynamic code eval"); }
-        if caps.has_install_scripts { println!("    install scripts"); }
+        if caps.network {
+            println!("    network access");
+        }
+        if caps.filesystem {
+            println!("    filesystem access");
+        }
+        if caps.env_access {
+            println!("    env variable reads");
+        }
+        if caps.subprocess {
+            println!("    subprocess spawn");
+        }
+        if caps.dynamic_exec {
+            println!("    dynamic code eval");
+        }
+        if caps.has_install_scripts {
+            println!("    install scripts");
+        }
         println!();
     }
 
-    println!("  files scanned: {}  |  lines: {}", report.files_scanned, report.lines_scanned);
-    println!("  findings: {} total ({} high/critical)",
+    println!(
+        "  files scanned: {}  |  lines: {}",
+        report.files_scanned, report.lines_scanned
+    );
+    println!(
+        "  findings: {} total ({} high/critical)",
         report.findings.len(),
-        report.findings.iter().filter(|f| matches!(f.risk, oath_analyze::RiskLevel::High | oath_analyze::RiskLevel::Critical)).count()
+        report
+            .findings
+            .iter()
+            .filter(|f| matches!(
+                f.risk,
+                oath_analyze::RiskLevel::High | oath_analyze::RiskLevel::Critical
+            ))
+            .count()
     );
 
     Ok(())
@@ -2314,7 +2499,10 @@ async fn cmd_info(package: &str) -> Result<()> {
     if let Some(ref repo) = meta.repository {
         println!("  repository: {}", repo);
     }
-    println!("  has readme: {}", if meta.has_readme { "yes" } else { "no" });
+    println!(
+        "  has readme: {}",
+        if meta.has_readme { "yes" } else { "no" }
+    );
 
     Ok(())
 }
@@ -2350,20 +2538,20 @@ fn parse_iso_age_secs(iso: &str) -> Option<u64> {
     // Days in each month (non-leap)
     let days_before_month: [u64; 12] = [0, 31, 59, 90, 120, 151, 181, 212, 243, 273, 304, 334];
     let mut days = (year - 1970) * 365 + (year - 1969) / 4; // approx leap years
-    if month >= 1 && month <= 12 {
+    if (1..=12).contains(&month) {
         days += days_before_month[(month - 1) as usize];
     }
     // Add leap day for current year if applicable
-    if month > 2 && year % 4 == 0 && (year % 100 != 0 || year % 400 == 0) {
+    if month > 2
+        && year.is_multiple_of(4)
+        && (!year.is_multiple_of(100) || year.is_multiple_of(400))
+    {
         days += 1;
     }
     days += day - 1;
     let publish_ts = days * 86400 + hour * 3600 + min * 60 + sec;
 
-    let now_ts = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .ok()?
-        .as_secs();
+    let now_ts = SystemTime::now().duration_since(UNIX_EPOCH).ok()?.as_secs();
 
     if now_ts > publish_ts {
         Some(now_ts - publish_ts)
@@ -2378,12 +2566,12 @@ fn parse_duration_secs(s: &str) -> Option<u64> {
     if s.is_empty() {
         return None;
     }
-    let (num_str, unit) = if s.ends_with('d') {
-        (&s[..s.len() - 1], 'd')
-    } else if s.ends_with('h') {
-        (&s[..s.len() - 1], 'h')
-    } else if s.ends_with('w') {
-        (&s[..s.len() - 1], 'w')
+    let (num_str, unit) = if let Some(stripped) = s.strip_suffix('d') {
+        (stripped, 'd')
+    } else if let Some(stripped) = s.strip_suffix('h') {
+        (stripped, 'h')
+    } else if let Some(stripped) = s.strip_suffix('w') {
+        (stripped, 'w')
     } else {
         // Default to days if no unit
         (s, 'd')
@@ -2419,10 +2607,10 @@ async fn cmd_remove(packages: Vec<String>) -> Result<()> {
         // Remove from dependencies and devDependencies
         let mut removed = false;
         for dep_key in &["dependencies", "devDependencies"] {
-            if let Some(deps) = pkg.get_mut(dep_key).and_then(|d| d.as_object_mut()) {
-                if deps.remove(&name).is_some() {
-                    removed = true;
-                }
+            if let Some(deps) = pkg.get_mut(dep_key).and_then(|d| d.as_object_mut())
+                && deps.remove(&name).is_some()
+            {
+                removed = true;
             }
         }
 
@@ -2492,10 +2680,10 @@ async fn cmd_remove(packages: Vec<String>) -> Result<()> {
 
 async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> Result<()> {
     use base64::Engine;
-    use flate2::write::GzEncoder;
     use flate2::Compression;
-    use sha2::{Digest, Sha512};
+    use flate2::write::GzEncoder;
     use sha1::Sha1;
+    use sha2::{Digest, Sha512};
 
     let dist_tag = tag.unwrap_or("latest");
 
@@ -2518,13 +2706,8 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
     let cwd = std::env::current_dir()?;
 
     // Default excludes
-    let default_excludes: Vec<&str> = vec![
-        "node_modules",
-        ".git",
-        "test",
-        ".oath",
-        "oath-lock.json",
-    ];
+    let default_excludes: Vec<&str> =
+        vec!["node_modules", ".git", "test", ".oath", "oath-lock.json"];
 
     // Read .npmignore
     let npmignore_patterns: Vec<String> = {
@@ -2542,10 +2725,8 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
     };
 
     // Get `files` field from package.json
-    let files_whitelist: Option<Vec<String>> = pkg
-        .get("files")
-        .and_then(|f| f.as_array())
-        .map(|arr| {
+    let files_whitelist: Option<Vec<String>> =
+        pkg.get("files").and_then(|f| f.as_array()).map(|arr| {
             arr.iter()
                 .filter_map(|v| v.as_str().map(|s| s.to_string()))
                 .collect()
@@ -2555,7 +2736,7 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
     let mut files_to_pack: Vec<PathBuf> = vec![];
 
     // Always include these if they exist
-    let always_include = ["package.json", "README.md", "README", "LICENSE", "LICENCE"];
+    let _always_include = ["package.json", "README.md", "README", "LICENSE", "LICENCE"];
 
     fn should_exclude(rel: &str, excludes: &[&str], npmignore: &[String]) -> bool {
         // Check default excludes
@@ -2611,9 +2792,16 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
             // If whitelist is set, only include whitelisted paths (at top level)
             if let Some(wl) = whitelist {
                 let top = rel.split('/').next().unwrap_or(&rel);
-                if !wl.iter().any(|w| w.trim_end_matches('/') == top || w.trim_end_matches('/') == &rel) {
+                if !wl
+                    .iter()
+                    .any(|w| w.trim_end_matches('/') == top || w.trim_end_matches('/') == rel)
+                {
                     // Still include always-include files
-                    let fname = path.file_name().unwrap_or_default().to_string_lossy().to_string();
+                    let fname = path
+                        .file_name()
+                        .unwrap_or_default()
+                        .to_string_lossy()
+                        .to_string();
                     let always = ["package.json", "README.md", "README", "LICENSE", "LICENCE"];
                     if !always.contains(&fname.as_str()) {
                         continue;
@@ -2721,35 +2909,36 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
     let registry_url = "https://registry.npmjs.org";
     let pkg_url = format!("{}/{}", registry_url, name);
 
-    let existing = http_client.get(&pkg_url)
+    let existing = http_client
+        .get(&pkg_url)
         .header("Accept", "application/json")
         .send()
         .await;
 
-    if let Ok(resp) = existing {
-        if resp.status().is_success() {
-            let body: serde_json::Value = resp.json().await.unwrap_or_default();
-            if let Some(versions) = body.get("versions").and_then(|v| v.as_object()) {
-                if versions.contains_key(&version) {
-                    anyhow::bail!(
-                        "oath publish: {}@{} is already published. Bump the version to publish again.",
-                        name, version
-                    );
-                }
-            }
+    if let Ok(resp) = existing
+        && resp.status().is_success()
+    {
+        let body: serde_json::Value = resp.json().await.unwrap_or_default();
+        if let Some(versions) = body.get("versions").and_then(|v| v.as_object())
+            && versions.contains_key(&version)
+        {
+            anyhow::bail!(
+                "oath publish: {}@{} is already published. Bump the version to publish again.",
+                name,
+                version
+            );
         }
     }
 
     // 6. Read auth token
     let token = std::env::var("NPM_TOKEN").ok().or_else(|| {
-        let npmrc_path = PathBuf::from(
-            std::env::var("HOME").unwrap_or_else(|_| "/".into())
-        ).join(".npmrc");
+        let npmrc_path =
+            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into())).join(".npmrc");
         let content = std::fs::read_to_string(&npmrc_path).ok()?;
         for line in content.lines() {
             let line = line.trim();
-            if line.starts_with("//registry.npmjs.org/:_authToken=") {
-                return Some(line["//registry.npmjs.org/:_authToken=".len()..].to_string());
+            if let Some(token) = line.strip_prefix("//registry.npmjs.org/:_authToken=") {
+                return Some(token.to_string());
             }
         }
         None
@@ -2760,9 +2949,16 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
     )?;
 
     // 7. Build publish payload
-    let tarball_url = format!("{}/{}-/-/{}-{}.tgz", registry_url, name, name.split('/').last().unwrap_or(&name), version);
-    let attachment_name = format!("{}-{}.tgz",
-        name.split('/').last().unwrap_or(&name),
+    let tarball_url = format!(
+        "{}/{}-/-/{}-{}.tgz",
+        registry_url,
+        name,
+        name.split('/').next_back().unwrap_or(&name),
+        version
+    );
+    let attachment_name = format!(
+        "{}-{}.tgz",
+        name.split('/').next_back().unwrap_or(&name),
         version
     );
 
@@ -2794,7 +2990,10 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
     }
 
     // 8. PUT to registry
-    println!("oath publish: publishing {}@{} (dist-tag: {})...", name, version, dist_tag);
+    println!(
+        "oath publish: publishing {}@{} (dist-tag: {})...",
+        name, version, dist_tag
+    );
 
     let resp = http_client
         .put(&pkg_url)
@@ -2814,7 +3013,6 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
         anyhow::bail!("oath publish: registry returned {}: {}", status, body)
     }
 }
-
 
 // ---- GLOBAL INSTALL ---------------------------------------------------------
 
@@ -2859,7 +3057,11 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
     let mut resolver = Resolver::new(client, options);
     let graph = resolver.resolve(&deps, &HashMap::new()).await?;
 
-    println!("  resolved {} packages in {:.1}s", graph.package_count(), start.elapsed().as_secs_f64());
+    println!(
+        "  resolved {} packages in {:.1}s",
+        graph.package_count(),
+        start.elapsed().as_secs_f64()
+    );
 
     // Download missing packages
     let store = Arc::new(ContentStore::default_store()?);
@@ -2867,7 +3069,7 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
     let mut downloaded = 0usize;
 
     let mut to_download = vec![];
-    for (_key, node) in &graph.nodes {
+    for node in graph.nodes.values() {
         if !store.has_package(&node.name, &node.version) {
             to_download.push(node.clone());
         }
@@ -2909,7 +3111,7 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
 
     // Create bin symlinks for the top-level (directly requested) packages
     let mut bins_created = 0usize;
-    for (pkg_name, _) in &deps {
+    for pkg_name in deps.keys() {
         // Find the resolved version for this package name
         let node = graph.nodes.values().find(|n| &n.name == pkg_name);
         let node = match node {
@@ -2933,14 +3135,17 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
         // Collect bin entries: Vec<(bin_name, relative_bin_path)>
         let bin_entries: Vec<(String, String)> = match &pkg_json["bin"] {
             serde_json::Value::String(s) => {
-                let bin_name = pkg_name.split('/').last().unwrap_or(pkg_name).to_string();
+                let bin_name = pkg_name
+                    .split('/')
+                    .next_back()
+                    .unwrap_or(pkg_name)
+                    .to_string();
                 vec![(bin_name, s.clone())]
             }
-            serde_json::Value::Object(map) => {
-                map.iter()
-                    .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                    .collect()
-            }
+            serde_json::Value::Object(map) => map
+                .iter()
+                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
+                .collect(),
             _ => vec![],
         };
 
@@ -2967,7 +3172,10 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
             }
 
             // Create symlink: bin_dir/bin_name -> ../node_modules/<pkg>/<rel_path>
-            let target = PathBuf::from("..").join("node_modules").join(pkg_name).join(rel_path);
+            let target = PathBuf::from("..")
+                .join("node_modules")
+                .join(pkg_name)
+                .join(rel_path);
             std::os::unix::fs::symlink(&target, &link_path)
                 .with_context(|| format!("failed to create symlink for {bin_name}"))?;
             bins_created += 1;
@@ -2979,7 +3187,11 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
 
     if bins_created > 0 {
         println!();
-        println!("  {} bin(s) installed to {}", bins_created, bin_dir.display());
+        println!(
+            "  {} bin(s) installed to {}",
+            bins_created,
+            bin_dir.display()
+        );
         println!("  Add {} to your PATH to use them", bin_dir.display());
     }
 
@@ -3004,21 +3216,29 @@ fn cmd_log(tail: usize) -> Result<()> {
     println!();
 
     for entry in &entries {
-        use std::time::{UNIX_EPOCH, Duration};
-        let dt = UNIX_EPOCH + Duration::from_secs(entry.ts);
+        use std::time::{Duration, UNIX_EPOCH};
+        let _dt = UNIX_EPOCH + Duration::from_secs(entry.ts);
         let secs = entry.ts;
         // Format as simple timestamp
-        let mins = (secs % 3600) / 60;
-        let hours = (secs % 86400) / 3600;
-        let days_since_epoch = secs / 86400;
+        let _mins = (secs % 3600) / 60;
+        let _hours = (secs % 86400) / 3600;
+        let _days_since_epoch = secs / 86400;
         // Approximate date (not perfect but sufficient for display)
-        println!("  --- {} packages | {}ms | {}", entry.pkg_count, entry.duration_ms, entry.project);
+        println!(
+            "  --- {} packages | {}ms | {}",
+            entry.pkg_count, entry.duration_ms, entry.project
+        );
         println!("      ts: {}", entry.ts);
         // Show first few packages
         let show_count = entry.packages.len().min(5);
         for pkg in entry.packages.iter().take(show_count) {
             if let Some(ref int) = pkg.integrity {
-                println!("      {}@{}  {}", pkg.name, pkg.version, &int[..int.len().min(30)]);
+                println!(
+                    "      {}@{}  {}",
+                    pkg.name,
+                    pkg.version,
+                    &int[..int.len().min(30)]
+                );
             } else {
                 println!("      {}@{}", pkg.name, pkg.version);
             }
@@ -3032,4 +3252,3 @@ fn cmd_log(tail: usize) -> Result<()> {
     println!("  log path: {}", logger.log_path().display());
     Ok(())
 }
-
