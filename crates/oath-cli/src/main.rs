@@ -342,6 +342,14 @@ async fn cmd_install(
             );
             g
         }
+    } else if packages.is_empty() && PathBuf::from("package-lock.json").exists() {
+        // Migration: no oath-lock yet, but an npm lockfile is present. Honour the
+        // versions it already pinned instead of re-resolving ranges to newer ones,
+        // so an existing repo installs the same tree it had under npm.
+        println!("oath: importing package-lock.json (migration)...");
+        let g = oath_resolve::import_npm_lockfile(&PathBuf::from("package-lock.json"))?;
+        println!("  imported {} packages", g.package_count());
+        g
     } else {
         println!("oath: resolving {total_direct} dependencies...");
         let client = RegistryClient::default_client()?;
