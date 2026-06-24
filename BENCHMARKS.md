@@ -51,8 +51,8 @@ $ oath score chalk
   chalk@5.6.2 -- 100/100 (A)
 
 $ oath score express
-  express@5.2.1 -- 96/100 (A)
+  express@5.2.1 -- 88/100 (B)
 
 $ oath score lodash
-  lodash@4.18.1 -- 73/100 (C) [large surface area, medium findings]
+  lodash@4.18.1 -- 80/100 (B)
 ```

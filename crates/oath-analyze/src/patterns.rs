@@ -39,11 +39,16 @@ pub static PATTERNS: &[Pattern] = &[
         risk: RiskLevel::Low,
         description: "Requires http/https/net module",
         strings: &[
-            "require('http')", "require(\"http\")",
-            "require('https')", "require(\"https\")",
-            "require('net')", "require(\"net\")",
-            "require('tls')", "require(\"tls\")",
-            "require('dns')", "require(\"dns\")",
+            "require('http')",
+            "require(\"http\")",
+            "require('https')",
+            "require(\"https\")",
+            "require('net')",
+            "require(\"net\")",
+            "require('tls')",
+            "require(\"tls\")",
+            "require('dns')",
+            "require(\"dns\")",
         ],
     },
     Pattern {
@@ -51,14 +56,24 @@ pub static PATTERNS: &[Pattern] = &[
         kind: FindingKind::Network,
         risk: RiskLevel::Info,
         description: "Uses axios for HTTP requests",
-        strings: &["require('axios')", "require(\"axios\")", "from 'axios'", "from \"axios\""],
+        strings: &[
+            "require('axios')",
+            "require(\"axios\")",
+            "from 'axios'",
+            "from \"axios\"",
+        ],
     },
     Pattern {
         id: "net-got",
         kind: FindingKind::Network,
         risk: RiskLevel::Info,
         description: "Uses got/node-fetch for HTTP requests",
-        strings: &["require('got')", "require('node-fetch')", "require(\"got\")", "require(\"node-fetch\")"],
+        strings: &[
+            "require('got')",
+            "require('node-fetch')",
+            "require(\"got\")",
+            "require(\"node-fetch\")",
+        ],
     },
     Pattern {
         id: "net-socket-connect",
@@ -67,7 +82,6 @@ pub static PATTERNS: &[Pattern] = &[
         description: "Creates raw TCP/socket connection",
         strings: &[".connect(", "net.createConnection", "new net.Socket"],
     },
-
     // ---- FILESYSTEM ----
     Pattern {
         id: "fs-require",
@@ -75,9 +89,12 @@ pub static PATTERNS: &[Pattern] = &[
         risk: RiskLevel::Low,
         description: "Requires fs module",
         strings: &[
-            "require('fs')", "require(\"fs\")",
-            "require('fs/promises')", "require(\"fs/promises\")",
-            "require('node:fs')", "require(\"node:fs\")",
+            "require('fs')",
+            "require(\"fs\")",
+            "require('fs/promises')",
+            "require(\"fs/promises\")",
+            "require('node:fs')",
+            "require(\"node:fs\")",
         ],
     },
     Pattern {
@@ -86,9 +103,13 @@ pub static PATTERNS: &[Pattern] = &[
         risk: RiskLevel::High,
         description: "Writes to home directory or system paths",
         strings: &[
-            "process.env.HOME", "os.homedir()",
-            "~/.ssh", "~/.aws", "~/.npmrc",
-            "/.ssh/", "/.aws/credentials",
+            "process.env.HOME",
+            "os.homedir()",
+            "~/.ssh",
+            "~/.aws",
+            "~/.npmrc",
+            "/.ssh/",
+            "/.aws/credentials",
         ],
     },
     Pattern {
@@ -97,12 +118,14 @@ pub static PATTERNS: &[Pattern] = &[
         risk: RiskLevel::High,
         description: "Reads SSH keys, credential paths, or /etc/passwd",
         strings: &[
-            "id_rsa", "id_ed25519",
-            "/.ssh/", "/.aws/credentials",
-            "/etc/passwd", "/etc/shadow",
+            "id_rsa",
+            "id_ed25519",
+            "/.ssh/",
+            "/.aws/credentials",
+            "/etc/passwd",
+            "/etc/shadow",
         ],
     },
-
     // ---- ENV ACCESS ----
     Pattern {
         id: "env-sensitive",
@@ -131,7 +154,6 @@ pub static PATTERNS: &[Pattern] = &[
         description: "Reads environment variables",
         strings: &["process.env"],
     },
-
     // ---- SUBPROCESS ----
     Pattern {
         id: "subprocess-require",
@@ -139,8 +161,10 @@ pub static PATTERNS: &[Pattern] = &[
         risk: RiskLevel::Medium,
         description: "Requires child_process module",
         strings: &[
-            "require('child_process')", "require(\"child_process\")",
-            "require('node:child_process')", "require(\"node:child_process\")",
+            "require('child_process')",
+            "require(\"child_process\")",
+            "require('node:child_process')",
+            "require(\"node:child_process\")",
         ],
     },
     Pattern {
@@ -149,12 +173,16 @@ pub static PATTERNS: &[Pattern] = &[
         risk: RiskLevel::High,
         description: "Executes shell commands",
         strings: &[
-            ".execSync(", ".spawnSync(", ".execFileSync(",
-            "child_process.exec(", "shelljs", "shell.exec(",
-            "require('shelljs')", "require(\"shelljs\")",
+            ".execSync(",
+            ".spawnSync(",
+            ".execFileSync(",
+            "child_process.exec(",
+            "shelljs",
+            "shell.exec(",
+            "require('shelljs')",
+            "require(\"shelljs\")",
         ],
     },
-
     // ---- DYNAMIC EXEC ----
     Pattern {
         id: "eval-direct",
@@ -176,8 +204,10 @@ pub static PATTERNS: &[Pattern] = &[
         risk: RiskLevel::High,
         description: "Uses Node.js vm module for dynamic execution",
         strings: &[
-            "require('vm')", "require(\"vm\")",
-            "vm.runInNewContext", "vm.runInThisContext",
+            "require('vm')",
+            "require(\"vm\")",
+            "vm.runInNewContext",
+            "vm.runInThisContext",
             "vm.Script",
         ],
     },
@@ -186,39 +216,35 @@ pub static PATTERNS: &[Pattern] = &[
         kind: FindingKind::DynamicExec,
         risk: RiskLevel::High,
         description: "Passes string to setTimeout/setInterval (dynamic exec)",
-        strings: &["setTimeout(\"", "setInterval(\"", "setTimeout('", "setInterval('"],
+        strings: &[
+            "setTimeout(\"",
+            "setInterval(\"",
+            "setTimeout('",
+            "setInterval('",
+        ],
     },
-
     // ---- OBFUSCATION ----
-    Pattern {
-        id: "obfus-buffer-from",
-        kind: FindingKind::Obfuscation,
-        risk: RiskLevel::Medium,
-        description: "Uses Buffer.from() to decode hidden strings (common obfuscation)",
-        strings: &["Buffer.from(", "Buffer.from ("],
-    },
+    // NOTE: raw `Buffer.from(`, `0x`, `\x`, `atob(`, `fromCharCode(` are far too
+    // common in legitimate code to flag on their own -- they made express score an
+    // F (a parser's `case 0x3c:` and `res.send(Buffer.from('wahoo'))` were called
+    // "obfuscation"). The dangerous *forms* (a long hardcoded base64 being decoded,
+    // eval(String.fromCharCode(...)), eval() of a long hex string) are detected with
+    // context by detect_advanced_obfuscation() in scanner.rs. Keep only low-weight
+    // INFO disclosures for the encode/decode primitives here.
     Pattern {
         id: "obfus-atob",
         kind: FindingKind::Obfuscation,
-        risk: RiskLevel::Medium,
-        description: "Uses atob/btoa for base64 encoding (potential obfuscation)",
+        risk: RiskLevel::Info,
+        description: "Uses atob/btoa base64 encoding",
         strings: &["atob(", "btoa("],
     },
     Pattern {
         id: "obfus-charcode",
         kind: FindingKind::Obfuscation,
-        risk: RiskLevel::Medium,
-        description: "Builds strings from char codes (obfuscation technique)",
+        risk: RiskLevel::Info,
+        description: "Builds strings from char codes",
         strings: &["fromCharCode(", "String.fromCharCode"],
     },
-    Pattern {
-        id: "obfus-hex-string",
-        kind: FindingKind::Obfuscation,
-        risk: RiskLevel::Low,
-        description: "Contains long hex-encoded strings",
-        strings: &["\\x", "0x", "\\u00"],
-    },
-
     // ---- DATA EXFILTRATION ----
     Pattern {
         id: "exfil-dns",
@@ -226,8 +252,11 @@ pub static PATTERNS: &[Pattern] = &[
         risk: RiskLevel::Critical,
         description: "DNS exfiltration pattern detected",
         strings: &[
-            "dns.lookup(", "dns.resolve(",
-            ".nip.io", ".burpcollaborator", ".ngrok.io",
+            "dns.lookup(",
+            "dns.resolve(",
+            ".nip.io",
+            ".burpcollaborator",
+            ".ngrok.io",
         ],
     },
     // ---- CRYPTO MINING ----
@@ -237,13 +266,19 @@ pub static PATTERNS: &[Pattern] = &[
         risk: RiskLevel::High,
         description: "Possible cryptocurrency mining code",
         strings: &[
-            "coinhive", "CoinHive", "CryptoNight", "cryptonight",
-            "stratum+tcp://", "monero", "xmrig",
-            "wasm-pack-template", "WebAssembly.instantiate",
-            "mining", "hashrate",
+            "coinhive",
+            "CoinHive",
+            "CryptoNight",
+            "cryptonight",
+            "stratum+tcp://",
+            "monero",
+            "xmrig",
+            "wasm-pack-template",
+            "WebAssembly.instantiate",
+            "mining",
+            "hashrate",
         ],
     },
-
     // ---- SECOND-STAGE PAYLOAD DOWNLOAD ----
     // Downloads code at runtime then executes it -- the #1 supply-chain evasion technique.
     // Static scanners see nothing malicious in the published package; the real payload
@@ -268,7 +303,6 @@ pub static PATTERNS: &[Pattern] = &[
             "/tmp/",
         ],
     },
-
     // ---- CREDENTIAL HARVESTING ----
     Pattern {
         id: "credential-harvest",
@@ -276,15 +310,20 @@ pub static PATTERNS: &[Pattern] = &[
         risk: RiskLevel::Critical,
         description: "Reads SSH keys, cloud credentials, browser cookies, or registry tokens",
         strings: &[
-            ".ssh/id_rsa", ".ssh/id_ed25519",
-            ".aws/credentials", ".aws/config",
+            ".ssh/id_rsa",
+            ".ssh/id_ed25519",
+            ".aws/credentials",
+            ".aws/config",
             "Library/Application Support/Google/Chrome",
-            "npm_token", "NPM_TOKEN",
-            "AWS_ACCESS_KEY_ID", "AWS_SECRET_ACCESS_KEY",
-            "GITHUB_TOKEN", ".npmrc", "keychain",
+            "npm_token",
+            "NPM_TOKEN",
+            "AWS_ACCESS_KEY_ID",
+            "AWS_SECRET_ACCESS_KEY",
+            "GITHUB_TOKEN",
+            ".npmrc",
+            "keychain",
         ],
     },
-
     // ---- DATA EXFILTRATION: ENV OVER NETWORK ----
     // Same-file detection only: process.env reads combined with outbound HTTP in one source file.
     // Cross-file combos require dataflow analysis (handled by a separate AST pass, not here).
@@ -296,12 +335,14 @@ pub static PATTERNS: &[Pattern] = &[
         // Require very specific patterns: env var value interpolated into a URL or request body
         // Not just any file that happens to use both process.env and fetch
         strings: &[
-            "process.env.AWS_SECRET", "process.env.GITHUB_TOKEN",
-            "process.env.NPM_TOKEN", "process.env.CI_JOB_TOKEN",
-            "process.env.DATABASE_URL", "process.env.SECRET_KEY",
+            "process.env.AWS_SECRET",
+            "process.env.GITHUB_TOKEN",
+            "process.env.NPM_TOKEN",
+            "process.env.CI_JOB_TOKEN",
+            "process.env.DATABASE_URL",
+            "process.env.SECRET_KEY",
         ],
     },
-
     // ---- POSTINSTALL SCRIPT ABUSE ----
     Pattern {
         id: "postinstall-heavy",
@@ -315,7 +356,6 @@ pub static PATTERNS: &[Pattern] = &[
             "INIT_CWD",
         ],
     },
-
     // ---- PROTESTWARE / CONDITIONAL PAYLOAD ----
     // Code that gates destructive/exfil behaviour on locale, timezone, country, or
     // IP geolocation (see node-ipc 2022, peacenotwar 2022).
@@ -329,11 +369,13 @@ pub static PATTERNS: &[Pattern] = &[
             "process.env.LANG",
             "process.env.TZ",
             "geoiplookup",
-            "ipapi.co", "ip-api.com", "ipinfo.io",
-            "freegeoip", "geolocation-db.com",
+            "ipapi.co",
+            "ip-api.com",
+            "ipinfo.io",
+            "freegeoip",
+            "geolocation-db.com",
         ],
     },
-
     // ---- NEW PATTERN 1: BRACKET NOTATION ----
     // process['env'] / require['child_process'] bypass StaticMemberExpression visitors.
     // String-level pre-filter; AST visitor in analyzer.rs catches the ComputedMemberExpression.
@@ -343,12 +385,14 @@ pub static PATTERNS: &[Pattern] = &[
         risk: RiskLevel::Medium,
         description: "Bracket notation property access used to evade static string detection",
         strings: &[
-            "process['env']", "process[\"env\"]",
-            "require['child_process']", "require[\"child_process\"]",
-            "process['env']['", "process[\"env\"][\"",
+            "process['env']",
+            "process[\"env\"]",
+            "require['child_process']",
+            "require[\"child_process\"]",
+            "process['env']['",
+            "process[\"env\"][\"",
         ],
     },
-
     // ---- NEW PATTERN 3: CI ENVIRONMENT TARGETING ----
     // Attackers check for CI=true to know they're running in a pipeline where tokens are populated.
     Pattern {
@@ -368,7 +412,6 @@ pub static PATTERNS: &[Pattern] = &[
             "CIRCLECI",
         ],
     },
-
     // ---- NEW PATTERN 5: ENV PATH OVERWRITE ----
     // Overwriting PATH or LD_PRELOAD can redirect system executables to malicious binaries.
     Pattern {
@@ -387,7 +430,6 @@ pub static PATTERNS: &[Pattern] = &[
             "LD_PRELOAD=",
         ],
     },
-
     // ---- NEW PATTERN 6: MODULE LOADER PATCH ----
     // Hijacking require() intercepts ALL module loads by any code in the process.
     Pattern {
@@ -405,7 +447,6 @@ pub static PATTERNS: &[Pattern] = &[
             "prototype.require =",
         ],
     },
-
     // ---- NEW PATTERN 9: EXFIL DOMAINS ----
     // Hardcoded domains used exclusively for data exfiltration / attacker infrastructure.
     Pattern {
@@ -424,7 +465,6 @@ pub static PATTERNS: &[Pattern] = &[
             "freemyip.com",
         ],
     },
-
     // ---- DNS EXFILTRATION ----
     // Only flag DNS resolve/lookup calls combined with attacker infrastructure domains,
     // or direct dns.resolve(btoa/Buffer combos (encoding data INTO a hostname).
@@ -445,29 +485,87 @@ pub static PATTERNS: &[Pattern] = &[
 /// Popular package names that are typosquatting targets
 /// If a package name is similar to these but NOT these, flag it
 pub static POPULAR_PACKAGES: &[&str] = &[
-    "react", "vue", "angular", "svelte",
-    "express", "fastify", "koa", "hapi",
-    "lodash", "underscore", "ramda",
-    "axios", "got", "node-fetch", "superagent",
-    "webpack", "vite", "rollup", "esbuild", "parcel",
-    "typescript", "babel", "eslint", "prettier",
-    "jest", "mocha", "vitest", "ava",
-    "mongoose", "sequelize", "prisma", "typeorm",
-    "socket.io", "ws", "socket",
-    "moment", "dayjs", "date-fns",
-    "dotenv", "config", "convict",
-    "colors", "chalk", "kleur", "picocolors",
-    "commander", "yargs", "minimist", "meow",
-    "uuid", "nanoid", "shortid",
-    "bcrypt", "bcryptjs", "jsonwebtoken", "passport",
-    "multer", "busboy", "formidable",
-    "nodemailer", "sendgrid",
-    "redis", "ioredis", "memcached",
-    "aws-sdk", "@aws-sdk/client-s3",
-    "stripe", "paypal",
-    "sharp", "jimp", "canvas",
-    "cheerio", "puppeteer", "playwright",
-    "cross-env", "dotenv-cli",
-    "rimraf", "mkdirp", "glob", "minimatch",
-    "semver", "nvm", "node-gyp",
+    "react",
+    "vue",
+    "angular",
+    "svelte",
+    "express",
+    "fastify",
+    "koa",
+    "hapi",
+    "lodash",
+    "underscore",
+    "ramda",
+    "axios",
+    "got",
+    "node-fetch",
+    "superagent",
+    "webpack",
+    "vite",
+    "rollup",
+    "esbuild",
+    "parcel",
+    "typescript",
+    "babel",
+    "eslint",
+    "prettier",
+    "jest",
+    "mocha",
+    "vitest",
+    "ava",
+    "mongoose",
+    "sequelize",
+    "prisma",
+    "typeorm",
+    "socket.io",
+    "ws",
+    "socket",
+    "moment",
+    "dayjs",
+    "date-fns",
+    "dotenv",
+    "config",
+    "convict",
+    "colors",
+    "chalk",
+    "kleur",
+    "picocolors",
+    "commander",
+    "yargs",
+    "minimist",
+    "meow",
+    "uuid",
+    "nanoid",
+    "shortid",
+    "bcrypt",
+    "bcryptjs",
+    "jsonwebtoken",
+    "passport",
+    "multer",
+    "busboy",
+    "formidable",
+    "nodemailer",
+    "sendgrid",
+    "redis",
+    "ioredis",
+    "memcached",
+    "aws-sdk",
+    "@aws-sdk/client-s3",
+    "stripe",
+    "paypal",
+    "sharp",
+    "jimp",
+    "canvas",
+    "cheerio",
+    "puppeteer",
+    "playwright",
+    "cross-env",
+    "dotenv-cli",
+    "rimraf",
+    "mkdirp",
+    "glob",
+    "minimatch",
+    "semver",
+    "nvm",
+    "node-gyp",
 ];

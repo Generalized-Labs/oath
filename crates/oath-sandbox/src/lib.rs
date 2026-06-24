@@ -8,10 +8,10 @@
 //! This is what makes `oathx` safe: you run arbitrary package binaries but they
 //! can only touch what you explicitly allow.
 
-pub mod policy;
 pub mod executor;
-pub mod macos;
 pub mod linux;
+pub mod macos;
+pub mod policy;
 
-pub use policy::{SandboxPolicy, Permission};
-pub use executor::{SandboxExecutor, ExecResult};
+pub use executor::{ExecResult, SandboxExecutor};
+pub use policy::{Permission, SandboxPolicy};

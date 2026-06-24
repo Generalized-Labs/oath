@@ -4,16 +4,17 @@
 //! etag caching, and multiple registry sources.
 
 use anyhow::{Context, Result};
-use reqwest::header::{HeaderMap, HeaderValue, ACCEPT, ETAG, IF_NONE_MATCH};
+use reqwest::header::{ACCEPT, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH};
 use std::collections::HashMap;
-use std::path::PathBuf;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
 use tokio::sync::RwLock;
 
 use crate::packument::Packument;
 
 /// Abbreviated packument Accept header (much smaller than full application/json)
-const ABBREVIATED_ACCEPT: &str = "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8";
+const ABBREVIATED_ACCEPT: &str =
+    "application/vnd.npm.install-v1+json; q=1.0, application/json; q=0.8";
 
 /// TTL for disk cache in seconds: if the cached file is younger than this,
 /// return it directly without any HTTP request.
@@ -22,11 +23,15 @@ const CACHE_TTL_SECS: u64 = 300; // 5 minutes
 /// Registry client configuration
 #[derive(Debug, Clone)]
 pub struct RegistryConfig {
-    /// Registry URL (default: https://registry.npmjs.org)
+    /// Default registry URL (default: https://registry.npmjs.org)
     pub registry_url: String,
+    /// Per-scope registry overrides: "@scope" -> registry URL.
+    pub scoped_registries: HashMap<String, String>,
+    /// Per-host auth tokens: host -> token.
+    pub tokens: HashMap<String, String>,
     /// Directory for cached packuments
     pub cache_dir: PathBuf,
-    /// Optional auth token
+    /// Legacy single auth token (applied to the default registry host).
     pub token: Option<String>,
     /// Request timeout in seconds
     pub timeout_secs: u64,
@@ -34,12 +39,11 @@ pub struct RegistryConfig {
 
 impl Default for RegistryConfig {
     fn default() -> Self {
-        let cache_dir = dirs_home()
-            .join(".oath")
-            .join("cache")
-            .join("registry");
+        let cache_dir = dirs_home().join(".oath").join("cache").join("registry");
         Self {
             registry_url: "https://registry.npmjs.org".to_string(),
+            scoped_registries: HashMap::new(),
+            tokens: HashMap::new(),
             cache_dir,
             token: None,
             timeout_secs: 10,
@@ -47,8 +51,30 @@ impl Default for RegistryConfig {
     }
 }
 
+impl RegistryConfig {
+    /// Build config from the project's and user's `.npmrc` (+ OATH_REGISTRY env).
+    /// This is what enables private/scoped/mirror registries.
+    pub fn from_npmrc(project_dir: &Path) -> Self {
+        let npmrc = crate::npmrc::NpmrcConfig::load(project_dir);
+        let mut cfg = RegistryConfig::default();
+        if let Some(reg) = npmrc.default_registry {
+            cfg.registry_url = reg;
+        }
+        cfg.scoped_registries = npmrc.scoped_registries;
+        cfg.tokens = npmrc.tokens;
+        cfg
+    }
+}
+
 fn dirs_home() -> PathBuf {
     PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
+}
+
+/// Extract the host from a URL (for per-host auth lookup).
+fn host_of(url: &str) -> Option<String> {
+    url::Url::parse(url)
+        .ok()
+        .and_then(|u| u.host_str().map(String::from))
 }
 
 /// The main registry client. Thread-safe, cloneable.
@@ -62,22 +88,20 @@ pub struct RegistryClient {
 
 impl RegistryClient {
     /// Create a new registry client
-    pub fn new(config: RegistryConfig) -> Result<Self> {
+    pub fn new(mut config: RegistryConfig) -> Result<Self> {
         let mut headers = HeaderMap::new();
 
         // Use abbreviated packument format -- much smaller than full application/json
         // vnd.npm.install-v1+json is ~100x smaller for large packages like babel
-        headers.insert(
-            ACCEPT,
-            HeaderValue::from_static(ABBREVIATED_ACCEPT),
-        );
+        headers.insert(ACCEPT, HeaderValue::from_static(ABBREVIATED_ACCEPT));
 
-        if let Some(ref token) = config.token {
-            headers.insert(
-                "Authorization",
-                HeaderValue::from_str(&format!("Bearer {token}"))
-                    .context("invalid auth token")?,
-            );
+        // Fold a legacy single token into the per-host map (keyed by the default
+        // registry's host). Auth is attached per-request by host, because a
+        // scoped package may route to a different registry than the default.
+        if let Some(token) = config.token.clone()
+            && let Some(host) = host_of(&config.registry_url)
+        {
+            config.tokens.entry(host).or_insert(token);
         }
 
         let http = reqwest::Client::builder()
@@ -99,9 +123,11 @@ impl RegistryClient {
         })
     }
 
-    /// Create a client with default config
+    /// Create a client, loading registry + auth config from `.npmrc` (project and
+    /// home) plus the OATH_REGISTRY env var. Falls back to registry.npmjs.org.
     pub fn default_client() -> Result<Self> {
-        Self::new(RegistryConfig::default())
+        let cwd = std::env::current_dir().unwrap_or_else(|_| PathBuf::from("."));
+        Self::new(RegistryConfig::from_npmrc(&cwd))
     }
 
     /// Fetch a packument (package metadata) from the registry.
@@ -113,23 +139,25 @@ impl RegistryClient {
         // Fast path: check disk cache first with TTL
         // If the cached file is fresh (< CACHE_TTL_SECS), use it directly without HTTP
         let cache_path = self.cache_path(name);
-        if let Ok(meta) = std::fs::metadata(&cache_path) {
-            if let Ok(modified) = meta.modified() {
-                let age = std::time::SystemTime::now()
-                    .duration_since(modified)
-                    .unwrap_or_default();
-                if age.as_secs() < CACHE_TTL_SECS {
-                    if let Ok(data) = std::fs::read(&cache_path) {
-                        if let Ok(packument) = serde_json::from_slice::<Packument>(&data) {
-                            tracing::debug!("{name}: disk cache hit ({}s old)", age.as_secs());
-                            return Ok(packument);
-                        }
-                    }
-                }
+        if let Ok(meta) = std::fs::metadata(&cache_path)
+            && let Ok(modified) = meta.modified()
+        {
+            let age = std::time::SystemTime::now()
+                .duration_since(modified)
+                .unwrap_or_default();
+            if age.as_secs() < CACHE_TTL_SECS
+                && let Ok(data) = std::fs::read(&cache_path)
+                && let Ok(packument) = serde_json::from_slice::<Packument>(&data)
+            {
+                tracing::debug!("{name}: disk cache hit ({}s old)", age.as_secs());
+                return Ok(packument);
             }
         }
 
         let mut req = self.http.get(&url);
+        if let Some(tok) = self.token_for_url(&url) {
+            req = req.bearer_auth(tok);
+        }
 
         // Attach etag for conditional request
         let etag_cache = self.etag_cache.read().await;
@@ -166,14 +194,14 @@ impl RegistryClient {
         }
 
         // Store new etag
-        if let Some(etag) = resp.headers().get(ETAG) {
-            if let Ok(etag_str) = etag.to_str() {
-                let mut cache = self.etag_cache.write().await;
-                cache.insert(name.to_string(), etag_str.to_string());
-                // Persist etag to disk for use across process restarts
-                let etag_path = self.etag_path(name);
-                tokio::fs::write(&etag_path, etag_str).await.ok();
-            }
+        if let Some(etag) = resp.headers().get(ETAG)
+            && let Ok(etag_str) = etag.to_str()
+        {
+            let mut cache = self.etag_cache.write().await;
+            cache.insert(name.to_string(), etag_str.to_string());
+            // Persist etag to disk for use across process restarts
+            let etag_path = self.etag_path(name);
+            tokio::fs::write(&etag_path, etag_str).await.ok();
         }
 
         let body = resp.bytes().await.context("failed to read response body")?;
@@ -192,13 +220,11 @@ impl RegistryClient {
     pub async fn fetch_packument_full(&self, name: &str) -> Result<serde_json::Value> {
         let url = self.package_url(name);
 
-        let resp = self
-            .http
-            .get(&url)
-            .header(ACCEPT, "application/json")
-            .send()
-            .await
-            .context("registry request failed")?;
+        let mut req = self.http.get(&url).header(ACCEPT, "application/json");
+        if let Some(tok) = self.token_for_url(&url) {
+            req = req.bearer_auth(tok);
+        }
+        let resp = req.send().await.context("registry request failed")?;
 
         if resp.status() == reqwest::StatusCode::NOT_FOUND {
             anyhow::bail!("package not found: {name}");
@@ -212,22 +238,31 @@ impl RegistryClient {
     }
 
     /// Download a tarball, verify integrity, return bytes
-    pub async fn fetch_tarball(&self, url: &str, expected_integrity: Option<&str>) -> Result<Vec<u8>> {
+    pub async fn fetch_tarball(
+        &self,
+        url: &str,
+        expected_integrity: Option<&str>,
+    ) -> Result<Vec<u8>> {
         tracing::debug!("downloading tarball: {url}");
 
-        let resp = self
+        let mut req = self
             .http
             .get(url)
-            .header(ACCEPT, "application/octet-stream")
-            .send()
-            .await
-            .context("tarball download failed")?;
+            .header(ACCEPT, "application/octet-stream");
+        if let Some(tok) = self.token_for_url(url) {
+            req = req.bearer_auth(tok);
+        }
+        let resp = req.send().await.context("tarball download failed")?;
 
         if !resp.status().is_success() {
             anyhow::bail!("tarball download returned {}", resp.status());
         }
 
-        let bytes = resp.bytes().await.context("failed to read tarball")?.to_vec();
+        let bytes = resp
+            .bytes()
+            .await
+            .context("failed to read tarball")?
+            .to_vec();
 
         // Verify integrity if provided
         if let Some(sri) = expected_integrity {
@@ -246,22 +281,40 @@ impl RegistryClient {
             limit
         );
 
-        let resp = self
-            .http
-            .get(&url)
-            .header(ACCEPT, "application/json")
-            .send()
-            .await?;
+        let mut req = self.http.get(&url).header(ACCEPT, "application/json");
+        if let Some(tok) = self.token_for_url(&url) {
+            req = req.bearer_auth(tok);
+        }
+        let resp = req.send().await?;
 
         resp.json().await.context("failed to parse search results")
     }
 
     // -- Private helpers --
 
+    /// Pick the registry for a package (per-scope override or default) and build
+    /// the packument URL. Scoped packages keep the `@scope/name` path -- npm
+    /// registries accept it directly.
     fn package_url(&self, name: &str) -> String {
-        // Scoped packages: @scope/name -> @scope%2fname or just @scope/name
-        // npm registry accepts both, so we use the path directly
-        format!("{}/{}", self.config.registry_url, name)
+        format!("{}/{}", self.registry_for(name), name)
+    }
+
+    /// The registry a package should be fetched from: a `@scope:registry`
+    /// override if one matches, otherwise the default registry.
+    fn registry_for(&self, name: &str) -> &str {
+        if name.starts_with('@')
+            && let Some(scope) = name.split('/').next()
+            && let Some(reg) = self.config.scoped_registries.get(scope)
+        {
+            return reg;
+        }
+        &self.config.registry_url
+    }
+
+    /// The auth token for a request URL, matched by host.
+    fn token_for_url(&self, url: &str) -> Option<String> {
+        let host = host_of(url)?;
+        self.config.tokens.get(&host).cloned()
     }
 
     async fn write_cache(&self, name: &str, data: &[u8]) {
@@ -307,5 +360,56 @@ mod urlencoding {
             }
         }
         result
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn client_with(scoped: &[(&str, &str)], tokens: &[(&str, &str)]) -> RegistryClient {
+        let mut cfg = RegistryConfig::default();
+        for (k, v) in scoped {
+            cfg.scoped_registries.insert(k.to_string(), v.to_string());
+        }
+        for (k, v) in tokens {
+            cfg.tokens.insert(k.to_string(), v.to_string());
+        }
+        RegistryClient::new(cfg).unwrap()
+    }
+
+    #[test]
+    fn routes_scoped_packages_to_their_registry() {
+        let c = client_with(&[("@myorg", "https://private.example")], &[]);
+        assert_eq!(c.registry_for("@myorg/pkg"), "https://private.example");
+        assert_eq!(c.registry_for("lodash"), "https://registry.npmjs.org");
+        assert_eq!(
+            c.package_url("@myorg/pkg"),
+            "https://private.example/@myorg/pkg"
+        );
+        assert_eq!(c.package_url("lodash"), "https://registry.npmjs.org/lodash");
+    }
+
+    #[test]
+    fn attaches_token_by_host() {
+        let c = client_with(&[], &[("private.example", "tok-1")]);
+        assert_eq!(
+            c.token_for_url("https://private.example/@myorg/pkg"),
+            Some("tok-1".to_string())
+        );
+        assert_eq!(c.token_for_url("https://registry.npmjs.org/lodash"), None);
+    }
+
+    #[test]
+    fn legacy_token_maps_to_default_registry_host() {
+        let cfg = RegistryConfig {
+            token: Some("legacy".to_string()),
+            ..Default::default()
+        };
+        let c = RegistryClient::new(cfg).unwrap();
+        assert_eq!(
+            c.token_for_url("https://registry.npmjs.org/lodash"),
+            Some("legacy".to_string())
+        );
     }
 }

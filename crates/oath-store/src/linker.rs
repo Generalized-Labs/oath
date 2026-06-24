@@ -94,7 +94,11 @@ impl Linker {
             for (dep_name, dep_key) in &parent_node.dependencies {
                 // Determine the install_name for this dep
                 let dep_install_name = if let Some(dep_node) = graph.nodes.get(dep_key) {
-                    dep_node.alias.as_deref().unwrap_or(&dep_node.name).to_string()
+                    dep_node
+                        .alias
+                        .as_deref()
+                        .unwrap_or(&dep_node.name)
+                        .to_string()
                 } else {
                     dep_name.clone()
                 };
@@ -107,11 +111,7 @@ impl Linker {
 
                 if !is_hoisted {
                     // This dep needs to be nested under parent
-                    nested.push((
-                        parent_key.clone(),
-                        dep_install_name,
-                        dep_key.clone(),
-                    ));
+                    nested.push((parent_key.clone(), dep_install_name, dep_key.clone()));
                 }
             }
         }
@@ -145,10 +145,7 @@ impl Linker {
             }
 
             let install_name = node.alias.as_deref().unwrap_or(&node.name);
-            let virtual_dir = oath_dir
-                .join(key)
-                .join("node_modules")
-                .join(install_name);
+            let virtual_dir = oath_dir.join(key).join("node_modules").join(install_name);
             std::fs::create_dir_all(virtual_dir.parent().unwrap())?;
 
             // Hardlink all files from store into virtual dir
@@ -166,7 +163,8 @@ impl Linker {
             // so the symlink's parent dir is node_modules/@scope/ -- one level deeper.
             // Relative symlink target must go up one extra level with "../"
             let symlink_target = if install_name.contains('/') {
-                PathBuf::from("..").join(".oath")
+                PathBuf::from("..")
+                    .join(".oath")
                     .join(key)
                     .join("node_modules")
                     .join(install_name)
@@ -179,10 +177,10 @@ impl Linker {
             let symlink_path = nm_dir.join(install_name);
 
             // Handle scoped packages: ensure @scope dir exists
-            if install_name.contains('/') {
-                if let Some(scope) = install_name.split('/').next() {
-                    std::fs::create_dir_all(nm_dir.join(scope))?;
-                }
+            if install_name.contains('/')
+                && let Some(scope) = install_name.split('/').next()
+            {
+                std::fs::create_dir_all(nm_dir.join(scope))?;
             }
 
             // Create relative symlink
@@ -206,10 +204,7 @@ impl Linker {
                 continue;
             }
 
-            let parent_install_name = parent_node
-                .alias
-                .as_deref()
-                .unwrap_or(&parent_node.name);
+            let parent_install_name = parent_node.alias.as_deref().unwrap_or(&parent_node.name);
 
             // Create: node_modules/<parent_install_name>/node_modules/<install_name>/
             // as a symlink to .oath/<child_key>/node_modules/<install_name>
@@ -227,7 +222,11 @@ impl Linker {
             // The symlink target is relative from nested_symlink's parent dir.
             // If parent is scoped: node_modules/@scope/pkg/node_modules/ -> depth 3
             // If child is scoped: nested_symlink's parent is .../@scope/ -> add 1 more
-            let base_depth = if parent_install_name.contains('/') { 3 } else { 2 };
+            let base_depth = if parent_install_name.contains('/') {
+                3
+            } else {
+                2
+            };
             let child_extra = if install_name.contains('/') { 1 } else { 0 };
             let depth = base_depth + child_extra;
             let mut rel_target = PathBuf::new();
@@ -256,7 +255,11 @@ impl Linker {
             for (dep_name, dep_key) in &node.dependencies {
                 // Determine install name for the dep
                 let dep_install_name = if let Some(dep_node) = graph.nodes.get(dep_key) {
-                    dep_node.alias.as_deref().unwrap_or(&dep_node.name).to_string()
+                    dep_node
+                        .alias
+                        .as_deref()
+                        .unwrap_or(&dep_node.name)
+                        .to_string()
                 } else {
                     dep_name.clone()
                 };
@@ -265,16 +268,19 @@ impl Linker {
                     .join(dep_key)
                     .join("node_modules")
                     .join(&dep_install_name);
-                let target = oath_dir.join(key).join("node_modules").join(&dep_install_name);
+                let target = oath_dir
+                    .join(key)
+                    .join("node_modules")
+                    .join(&dep_install_name);
 
                 if source.exists() && !target.exists() {
                     // Handle scoped packages in dep name
-                    if dep_install_name.contains('/') {
-                        if let Some(scope) = dep_install_name.split('/').next() {
-                            std::fs::create_dir_all(
-                                oath_dir.join(key).join("node_modules").join(scope),
-                            )?;
-                        }
+                    if dep_install_name.contains('/')
+                        && let Some(scope) = dep_install_name.split('/').next()
+                    {
+                        std::fs::create_dir_all(
+                            oath_dir.join(key).join("node_modules").join(scope),
+                        )?;
                     }
                     // Symlink to the dep's virtual package
                     let relative = pathdiff_relative(&target, &source);
@@ -285,7 +291,7 @@ impl Linker {
 
         // Phase 4b: Create peer dep symlinks within each package's .oath node_modules
         for (key, node) in &graph.nodes {
-            for (_peer_name, peer_key) in &node.resolved_peers {
+            for peer_key in node.resolved_peers.values() {
                 let peer_node = match graph.nodes.get(peer_key) {
                     Some(n) => n,
                     None => continue,
@@ -303,12 +309,12 @@ impl Linker {
 
                 if source.exists() && !target.exists() {
                     // Handle scoped peer package
-                    if peer_install_name.contains('/') {
-                        if let Some(scope) = peer_install_name.split('/').next() {
-                            std::fs::create_dir_all(
-                                oath_dir.join(key).join("node_modules").join(scope),
-                            )?;
-                        }
+                    if peer_install_name.contains('/')
+                        && let Some(scope) = peer_install_name.split('/').next()
+                    {
+                        std::fs::create_dir_all(
+                            oath_dir.join(key).join("node_modules").join(scope),
+                        )?;
                     }
                     let relative = pathdiff_relative(&target, &source);
                     std::os::unix::fs::symlink(&relative, &target).ok();
@@ -320,25 +326,25 @@ impl Linker {
         // Phase 5: Create .bin symlinks for packages with bin entries
         let bin_dir = nm_dir.join(".bin");
         std::fs::create_dir_all(&bin_dir)?;
-        
+
         for (install_name, key) in &plan.hoisted {
             if !graph.nodes.contains_key(key) {
                 continue;
             }
-            
+
             // Read package.json from the linked location to get bin field
             let pkg_json_path = nm_dir.join(install_name).join("package.json");
             let bins = read_bin_entries(&pkg_json_path, install_name);
-            
+
             for (bin_name, bin_path) in &bins {
                 let target = nm_dir.join(install_name).join(bin_path);
                 let link_path = bin_dir.join(bin_name);
-                
+
                 if target.exists() && !link_path.exists() {
                     // Create relative symlink from .bin/name -> ../pkg/bin/path
                     let rel = PathBuf::from("..").join(install_name).join(bin_path);
                     std::os::unix::fs::symlink(&rel, &link_path).ok();
-                    
+
                     // Make executable
                     #[cfg(unix)]
                     {
@@ -350,7 +356,7 @@ impl Linker {
                             std::fs::set_permissions(&target, perms).ok();
                         }
                     }
-                    
+
                     result.bins += 1;
                 }
             }
@@ -393,7 +399,7 @@ fn read_bin_entries(pkg_json_path: &Path, install_name: &str) -> Vec<(String, St
         match bin {
             serde_json::Value::String(path) => {
                 // Single bin: use package name (last segment) as bin name
-                let bin_name = install_name.split('/').last().unwrap_or(install_name);
+                let bin_name = install_name.split('/').next_back().unwrap_or(install_name);
                 bins.push((bin_name.to_string(), path.clone()));
             }
             serde_json::Value::Object(map) => {
@@ -408,13 +414,12 @@ fn read_bin_entries(pkg_json_path: &Path, install_name: &str) -> Vec<(String, St
     }
 
     // Also check "directories.bin" (less common)
-    if bins.is_empty() {
-        if let Some(dirs) = json.get("directories") {
-            if let Some(bin_dir) = dirs.get("bin").and_then(|v| v.as_str()) {
-                // Would need to list files in that dir - skip for now
-                let _ = bin_dir;
-            }
-        }
+    if bins.is_empty()
+        && let Some(dirs) = json.get("directories")
+        && let Some(bin_dir) = dirs.get("bin").and_then(|v| v.as_str())
+    {
+        // Would need to list files in that dir - skip for now
+        let _ = bin_dir;
     }
 
     bins

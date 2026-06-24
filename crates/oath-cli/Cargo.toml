@@ -8,15 +8,11 @@ license.workspace = true
 name = "oath"
 path = "src/main.rs"
 
-[[bin]]
-name = "oathx"
-path = "src/oathx.rs"
-
 [dependencies]
 oath-core = { path = "../oath-core" }
 oath-fetch = { path = "../oath-fetch" }
 oath-workspace = { path = "../oath-workspace" }
-reqwest = { version = "0.12", features = ["json"] }
+reqwest.workspace = true
 oath-resolve = { path = "../oath-resolve" }
 oath-store = { path = "../oath-store" }
 oath-analyze = { path = "../oath-analyze" }

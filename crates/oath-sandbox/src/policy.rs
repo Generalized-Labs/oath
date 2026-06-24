@@ -52,7 +52,9 @@ impl SandboxPolicy {
 
     /// Check if a specific permission type is granted
     pub fn allows_network(&self) -> bool {
-        self.permissions.iter().any(|p| matches!(p, Permission::Network(_) | Permission::Unrestricted))
+        self.permissions
+            .iter()
+            .any(|p| matches!(p, Permission::Network(_) | Permission::Unrestricted))
     }
 
     pub fn allows_write(&self, path: &std::path::Path) -> bool {

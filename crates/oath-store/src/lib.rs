@@ -5,9 +5,9 @@
 //! Layout: pnpm-inspired strict node_modules (no phantom deps).
 
 pub mod cas;
-pub mod linker;
 pub mod layout;
+pub mod linker;
 
 pub use cas::ContentStore;
-pub use linker::Linker;
 pub use layout::NodeModulesLayout;
+pub use linker::Linker;

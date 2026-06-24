@@ -1,8 +1,8 @@
 //! Integration test: resolve real dependency trees
 
 use oath_fetch::RegistryClient;
-use oath_resolve::{Resolver, Lockfile};
 use oath_resolve::resolver::ResolveOptions;
+use oath_resolve::{Lockfile, Resolver};
 use std::collections::HashMap;
 
 #[tokio::test]
@@ -29,11 +29,14 @@ async fn test_resolve_is_number() {
 async fn test_resolve_chalk() {
     // chalk has a small dependency tree (~5 deps)
     let client = RegistryClient::default_client().unwrap();
-    let mut resolver = Resolver::new(client, ResolveOptions {
-        include_dev: false,
-        include_optional: false,
-        max_depth: 256,
-    });
+    let mut resolver = Resolver::new(
+        client,
+        ResolveOptions {
+            include_dev: false,
+            include_optional: false,
+            max_depth: 256,
+        },
+    );
 
     let mut deps = HashMap::new();
     deps.insert("chalk".to_string(), "^5.0.0".to_string());
@@ -43,7 +46,10 @@ async fn test_resolve_chalk() {
     // chalk 5.x has minimal deps (just ansi-styles in older versions, zero in 5.3+)
     println!("chalk resolved {} packages:", graph.package_count());
     for (key, node) in &graph.nodes {
-        println!("  {key}: deps={:?}", node.dependencies.keys().collect::<Vec<_>>());
+        println!(
+            "  {key}: deps={:?}",
+            node.dependencies.keys().collect::<Vec<_>>()
+        );
     }
 
     // Should be small (chalk 5+ is pure ESM with no deps)
@@ -53,11 +59,14 @@ async fn test_resolve_chalk() {
 #[tokio::test]
 async fn test_resolve_multiple_direct_deps() {
     let client = RegistryClient::default_client().unwrap();
-    let mut resolver = Resolver::new(client, ResolveOptions {
-        include_dev: false,
-        include_optional: false,
-        max_depth: 256,
-    });
+    let mut resolver = Resolver::new(
+        client,
+        ResolveOptions {
+            include_dev: false,
+            include_optional: false,
+            max_depth: 256,
+        },
+    );
 
     let mut deps = HashMap::new();
     deps.insert("is-number".to_string(), "^7.0.0".to_string());
@@ -66,7 +75,7 @@ async fn test_resolve_multiple_direct_deps() {
     let graph = resolver.resolve(&deps, &HashMap::new()).await.unwrap();
 
     println!("resolved {} packages:", graph.package_count());
-    for (key, _) in &graph.nodes {
+    for key in graph.nodes.keys() {
         println!("  {key}");
     }
 
@@ -78,11 +87,14 @@ async fn test_resolve_multiple_direct_deps() {
 #[tokio::test]
 async fn test_resolve_and_write_lockfile() {
     let client = RegistryClient::default_client().unwrap();
-    let mut resolver = Resolver::new(client, ResolveOptions {
-        include_dev: false,
-        include_optional: false,
-        max_depth: 256,
-    });
+    let mut resolver = Resolver::new(
+        client,
+        ResolveOptions {
+            include_dev: false,
+            include_optional: false,
+            max_depth: 256,
+        },
+    );
 
     let mut deps = HashMap::new();
     deps.insert("is-number".to_string(), "^7.0.0".to_string());
@@ -109,11 +121,14 @@ async fn test_resolve_and_write_lockfile() {
 async fn test_resolve_express() {
     // Express has ~60 transitive deps. Real-world test.
     let client = RegistryClient::default_client().unwrap();
-    let mut resolver = Resolver::new(client, ResolveOptions {
-        include_dev: false,
-        include_optional: false,
-        max_depth: 256,
-    });
+    let mut resolver = Resolver::new(
+        client,
+        ResolveOptions {
+            include_dev: false,
+            include_optional: false,
+            max_depth: 256,
+        },
+    );
 
     let mut deps = HashMap::new();
     deps.insert("express".to_string(), "^4.18.0".to_string());
@@ -136,6 +151,9 @@ async fn test_resolve_express() {
     let scripts = graph.packages_with_install_scripts();
     println!("packages with install scripts: {}", scripts.len());
     for pkg in &scripts {
-        println!("  WARNING: {}@{} has install scripts", pkg.name, pkg.version);
+        println!(
+            "  WARNING: {}@{} has install scripts",
+            pkg.name, pkg.version
+        );
     }
 }

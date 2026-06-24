@@ -81,8 +81,7 @@ impl DiskCache {
     /// Clear the entire cache
     pub fn clear(&self) -> Result<()> {
         if self.config.root.exists() {
-            std::fs::remove_dir_all(&self.config.root)
-                .context("failed to clear cache")?;
+            std::fs::remove_dir_all(&self.config.root).context("failed to clear cache")?;
             std::fs::create_dir_all(&self.config.root).ok();
         }
         Ok(())
@@ -95,7 +94,8 @@ impl DiskCache {
         let safe = integrity.replace(['/', '+', '='], "_");
         let (algo, hash) = safe.split_once('-').unwrap_or(("unknown", &safe));
         let prefix = &hash[..2.min(hash.len())];
-        self.config.root
+        self.config
+            .root
             .join("tarballs")
             .join(algo)
             .join(prefix)
@@ -104,7 +104,10 @@ impl DiskCache {
 
     fn packument_path(&self, name: &str) -> PathBuf {
         let safe = name.replace('/', "__");
-        self.config.root.join("packuments").join(format!("{safe}.json"))
+        self.config
+            .root
+            .join("packuments")
+            .join(format!("{safe}.json"))
     }
 }
 

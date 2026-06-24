@@ -109,7 +109,10 @@ impl DepGraph {
 
     /// All packages that have install scripts (security concern)
     pub fn packages_with_install_scripts(&self) -> Vec<&DepNode> {
-        self.nodes.values().filter(|n| n.has_install_script).collect()
+        self.nodes
+            .values()
+            .filter(|n| n.has_install_script)
+            .collect()
     }
 
     /// Unique key for a package

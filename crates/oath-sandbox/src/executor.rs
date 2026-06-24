@@ -43,13 +43,13 @@ impl SandboxExecutor {
     /// `binary` - path to the executable (usually node or the package bin)
     /// `args` - arguments to pass
     /// `policy` - the sandbox policy defining what's allowed
-    pub fn run(
-        binary: &Path,
-        args: &[&str],
-        policy: &SandboxPolicy,
-    ) -> Result<ExecResult> {
+    pub fn run(binary: &Path, args: &[&str], policy: &SandboxPolicy) -> Result<ExecResult> {
         // If unrestricted, just run directly
-        if policy.permissions.iter().any(|p| matches!(p, Permission::Unrestricted)) {
+        if policy
+            .permissions
+            .iter()
+            .any(|p| matches!(p, Permission::Unrestricted))
+        {
             return Self::run_unrestricted(binary, args, policy);
         }
 
@@ -64,16 +64,16 @@ impl SandboxExecutor {
     }
 
     /// Run a Node.js package script (from package.json "scripts")
-    pub fn run_script(
-        script_cmd: &str,
-        policy: &SandboxPolicy,
-    ) -> Result<ExecResult> {
-        let node = find_node()?;
+    pub fn run_script(script_cmd: &str, policy: &SandboxPolicy) -> Result<ExecResult> {
+        let _node = find_node()?;
         // Run via shell but sandboxed
         let shell_args = vec!["-c", script_cmd];
 
         if crate::macos::is_available()
-            && !policy.permissions.iter().any(|p| matches!(p, Permission::Unrestricted))
+            && !policy
+                .permissions
+                .iter()
+                .any(|p| matches!(p, Permission::Unrestricted))
         {
             Self::run_macos(Path::new("/bin/sh"), &shell_args, policy)
         } else {
@@ -102,14 +102,15 @@ impl SandboxExecutor {
         let profile = policy.to_sandbox_profile();
 
         // Write profile to temp file
-        let profile_path = std::env::temp_dir().join(format!("oath-sandbox-{}.sb", std::process::id()));
-        std::fs::write(&profile_path, &profile)
-            .context("failed to write sandbox profile")?;
+        let profile_path =
+            std::env::temp_dir().join(format!("oath-sandbox-{}.sb", std::process::id()));
+        std::fs::write(&profile_path, &profile).context("failed to write sandbox profile")?;
 
         let start = Instant::now();
 
         let mut cmd = Command::new("sandbox-exec");
-        cmd.arg("-f").arg(&profile_path)
+        cmd.arg("-f")
+            .arg(&profile_path)
             .arg(binary)
             .args(args)
             .current_dir(&policy.workdir);
@@ -146,7 +147,8 @@ impl SandboxExecutor {
 
         let output = if policy.timeout_secs > 0 {
             // Use timeout wrapper
-            let child = cmd.stdout(std::process::Stdio::piped())
+            let child = cmd
+                .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .spawn()
                 .context("failed to spawn sandbox-exec")?;
@@ -178,8 +180,7 @@ impl SandboxExecutor {
         let start = Instant::now();
 
         let mut cmd = Command::new(binary);
-        cmd.args(args)
-            .current_dir(&policy.workdir);
+        cmd.args(args).current_dir(&policy.workdir);
 
         // Strip all env vars except basics (weak sandbox but better than nothing)
         cmd.env_clear();
@@ -202,7 +203,8 @@ impl SandboxExecutor {
         }
 
         let output = if policy.timeout_secs > 0 {
-            let child = cmd.stdout(std::process::Stdio::piped())
+            let child = cmd
+                .stdout(std::process::Stdio::piped())
                 .stderr(std::process::Stdio::piped())
                 .spawn()
                 .context("failed to spawn process")?;
@@ -220,7 +222,11 @@ impl SandboxExecutor {
         })
     }
 
-    fn run_unrestricted(binary: &Path, args: &[&str], policy: &SandboxPolicy) -> Result<ExecResult> {
+    fn run_unrestricted(
+        binary: &Path,
+        args: &[&str],
+        policy: &SandboxPolicy,
+    ) -> Result<ExecResult> {
         let start = Instant::now();
         let output = Command::new(binary)
             .args(args)
@@ -248,18 +254,30 @@ fn wait_with_timeout(
     loop {
         match child.try_wait() {
             Ok(Some(status)) => {
-                let stdout = child.stdout.take().map(|mut s| {
-                    let mut buf = Vec::new();
-                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                    buf
-                }).unwrap_or_default();
-                let stderr = child.stderr.take().map(|mut s| {
-                    let mut buf = Vec::new();
-                    std::io::Read::read_to_end(&mut s, &mut buf).ok();
-                    buf
-                }).unwrap_or_default();
+                let stdout = child
+                    .stdout
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
+                let stderr = child
+                    .stderr
+                    .take()
+                    .map(|mut s| {
+                        let mut buf = Vec::new();
+                        std::io::Read::read_to_end(&mut s, &mut buf).ok();
+                        buf
+                    })
+                    .unwrap_or_default();
 
-                return Ok(std::process::Output { status, stdout, stderr });
+                return Ok(std::process::Output {
+                    status,
+                    stdout,
+                    stderr,
+                });
             }
             Ok(None) => {
                 if start.elapsed() > timeout {

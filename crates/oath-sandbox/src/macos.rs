@@ -66,15 +66,11 @@ pub fn build_profile(policy: &SandboxPolicy) -> String {
     read_paths.dedup();
     for path in &read_paths {
         let p = path.display();
-        lines.push(format!(
-            "(allow file-read* (subpath \"{p}\"))"
-        ));
+        lines.push(format!("(allow file-read* (subpath \"{p}\"))"));
     }
 
     // Filesystem writes
-    let mut write_paths: Vec<PathBuf> = vec![
-        PathBuf::from("/dev/null"),
-    ];
+    let mut write_paths: Vec<PathBuf> = vec![PathBuf::from("/dev/null")];
     // Allow writing to tmp (many tools need this)
     if let Ok(tmp) = std::env::var("TMPDIR") {
         write_paths.push(PathBuf::from(tmp));
@@ -94,9 +90,7 @@ pub fn build_profile(policy: &SandboxPolicy) -> String {
     write_paths.dedup();
     for path in &write_paths {
         let p = path.display();
-        lines.push(format!(
-            "(allow file-write* (subpath \"{p}\"))"
-        ));
+        lines.push(format!("(allow file-write* (subpath \"{p}\"))"));
     }
 
     // Network

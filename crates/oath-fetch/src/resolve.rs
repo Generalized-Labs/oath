@@ -24,14 +24,16 @@ pub struct ResolvedVersion<'a> {
 /// - An exact version: "1.0.0"
 /// - A semver range: "^1.0.0", "~1.2.3", ">=1.0.0 <2.0.0", "1.x", "*"
 /// - An npm alias specifier: "npm:some-pkg@^1.0.0" (the version part is extracted)
-pub fn resolve_version<'a>(packument: &'a Packument, specifier: &str) -> Result<ResolvedVersion<'a>> {
+pub fn resolve_version<'a>(
+    packument: &'a Packument,
+    specifier: &str,
+) -> Result<ResolvedVersion<'a>> {
     // Strip npm: alias prefix (e.g. "npm:real-pkg@^1.0.0" -> "^1.0.0")
     // This handles cases like aliased deps passed directly to resolve_version.
-    let specifier = if specifier.starts_with("npm:") {
-        let rest = &specifier[4..];
+    let specifier = if let Some(rest) = specifier.strip_prefix("npm:") {
         // Scoped: npm:@scope/pkg@version -> extract version after second @
-        if rest.starts_with('@') {
-            if let Some(at_pos) = rest[1..].find('@').map(|p| p + 1) {
+        if let Some(stripped) = rest.strip_prefix('@') {
+            if let Some(at_pos) = stripped.find('@').map(|p| p + 1) {
                 &rest[at_pos + 1..]
             } else {
                 "latest"
@@ -53,13 +55,13 @@ pub fn resolve_version<'a>(packument: &'a Packument, specifier: &str) -> Result<
     };
 
     // First, check if it's a dist-tag
-    if let Some(version) = packument.dist_tags.get(specifier) {
-        if let Some(info) = packument.versions.get(version) {
-            return Ok(ResolvedVersion {
-                version: version.as_str(),
-                info,
-            });
-        }
+    if let Some(version) = packument.dist_tags.get(specifier)
+        && let Some(info) = packument.versions.get(version)
+    {
+        return Ok(ResolvedVersion {
+            version: version.as_str(),
+            info,
+        });
     }
 
     // Try exact version match
@@ -116,7 +118,10 @@ pub fn resolve_intersection<'a>(
 ) -> Result<ResolvedVersion<'a>> {
     let ranges: Vec<Range> = specifiers
         .iter()
-        .map(|s| s.parse::<Range>().with_context(|| format!("invalid range: {s}")))
+        .map(|s| {
+            s.parse::<Range>()
+                .with_context(|| format!("invalid range: {s}"))
+        })
         .collect::<Result<Vec<_>>>()?;
 
     let mut candidates: Vec<(&str, &VersionInfo, Version)> = packument
@@ -252,7 +257,10 @@ mod tests {
     #[test]
     fn test_caret_major_boundary() {
         // ^20.0.0 must NOT match v21+
-        let p = make_packument(&["19.9.9", "20.0.0", "20.11.0", "21.0.0", "26.0.0"], "26.0.0");
+        let p = make_packument(
+            &["19.9.9", "20.0.0", "20.11.0", "21.0.0", "26.0.0"],
+            "26.0.0",
+        );
         let r = resolve_version(&p, "^20.0.0").unwrap();
         assert_eq!(r.version, "20.11.0");
     }

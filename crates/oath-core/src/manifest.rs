@@ -3,9 +3,9 @@
 //! Compatible with package.json but adds a "oath" section
 //! for permissions, provenance, and capability declarations.
 
+use crate::permissions::Permissions;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use crate::permissions::Permissions;
 
 /// Standard package.json + oath extensions
 #[derive(Debug, Clone, Serialize, Deserialize)]

@@ -6,11 +6,13 @@
 //! Uses a simple BFS resolution strategy with deduplication (hoisting).
 //! Future: upgrade to PubGrub for better conflict resolution.
 
-pub mod graph;
 pub mod git;
+pub mod graph;
+pub mod import;
 pub mod lockfile;
 pub mod resolver;
 
 pub use graph::{DepGraph, DepNode};
+pub use import::import_npm_lockfile;
 pub use lockfile::Lockfile;
 pub use resolver::Resolver;
