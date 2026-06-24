@@ -35,12 +35,11 @@ impl NpmrcConfig {
         }
         cfg.merge_file(&project_dir.join(".npmrc"));
 
-        if let Ok(reg) = std::env::var("OATH_REGISTRY")
-            .or_else(|_| std::env::var("npm_config_registry"))
+        if let Ok(reg) =
+            std::env::var("OATH_REGISTRY").or_else(|_| std::env::var("npm_config_registry"))
+            && !reg.is_empty()
         {
-            if !reg.is_empty() {
-                cfg.default_registry = Some(normalize_registry(&reg));
-            }
+            cfg.default_registry = Some(normalize_registry(&reg));
         }
         cfg
     }
@@ -74,10 +73,10 @@ impl NpmrcConfig {
                 }
             } else if let Some(host_path) = key.strip_suffix(":_authToken") {
                 // e.g. "//npm.pkg.github.com/:_authToken" or "//host/path/:_authToken"
-                if let Some(host) = host_from_npmrc_key(host_path) {
-                    if !val.is_empty() {
-                        self.tokens.insert(host, val);
-                    }
+                if let Some(host) = host_from_npmrc_key(host_path)
+                    && !val.is_empty()
+                {
+                    self.tokens.insert(host, val);
                 }
             }
         }
@@ -142,7 +141,10 @@ mod tests {
         let mut cfg = NpmrcConfig::default();
         cfg.merge_file(&npmrc);
 
-        assert_eq!(cfg.default_registry.as_deref(), Some("https://mirror.example.com"));
+        assert_eq!(
+            cfg.default_registry.as_deref(),
+            Some("https://mirror.example.com")
+        );
         assert_eq!(
             cfg.scoped_registries.get("@myorg").map(String::as_str),
             Some("https://npm.pkg.github.com")

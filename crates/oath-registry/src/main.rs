@@ -1,4 +1,4 @@
-use axum::{Router, routing::get, Json};
+use axum::{Json, Router, routing::get};
 use serde_json::json;
 
 async fn health() -> Json<serde_json::Value> {

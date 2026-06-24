@@ -46,7 +46,9 @@ impl ContentStore {
             // Delete and re-extract.
             let entries: Vec<_> = std::fs::read_dir(&pkg_store_dir)?.collect();
             let has_files = entries.iter().any(|e| {
-                e.as_ref().map(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false)).unwrap_or(false)
+                e.as_ref()
+                    .map(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                    .unwrap_or(false)
             });
             let has_only_subdirs = !entries.is_empty() && !has_files;
             if has_only_subdirs {
@@ -60,9 +62,8 @@ impl ContentStore {
         }
 
         // Create the store directory
-        std::fs::create_dir_all(&pkg_store_dir).with_context(|| {
-            format!("failed to create store dir: {}", pkg_store_dir.display())
-        })?;
+        std::fs::create_dir_all(&pkg_store_dir)
+            .with_context(|| format!("failed to create store dir: {}", pkg_store_dir.display()))?;
 
         // Copy all files from extracted dir to store
         copy_dir_recursive(extracted_dir, &pkg_store_dir)?;

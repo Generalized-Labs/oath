@@ -104,17 +104,13 @@ pub async fn fetch_package_metadata(
         .map(|s| s.to_string());
 
     // Get repository URL
-    let repository = packument
-        .get("repository")
-        .and_then(|r| {
-            if let Some(url) = r.get("url").and_then(|u| u.as_str()) {
-                Some(url.to_string())
-            } else if let Some(s) = r.as_str() {
-                Some(s.to_string())
-            } else {
-                None
-            }
-        });
+    let repository = packument.get("repository").and_then(|r| {
+        if let Some(url) = r.get("url").and_then(|u| u.as_str()) {
+            Some(url.to_string())
+        } else {
+            r.as_str().map(|s| s.to_string())
+        }
+    });
 
     // Fetch weekly downloads
     let weekly_downloads = fetch_weekly_downloads(client, package_name)
@@ -137,7 +133,10 @@ pub async fn fetch_package_metadata(
 }
 
 /// Fetch weekly download count from the npm downloads API.
-async fn fetch_weekly_downloads(client: &reqwest::Client, package_name: &str) -> Result<Option<u64>> {
+async fn fetch_weekly_downloads(
+    client: &reqwest::Client,
+    package_name: &str,
+) -> Result<Option<u64>> {
     let url = format!(
         "https://api.npmjs.org/downloads/point/last-week/{}",
         package_name

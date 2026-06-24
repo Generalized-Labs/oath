@@ -1,9 +1,9 @@
 //! oath-core: shared types, config, and error definitions
 
+pub mod config;
+pub mod integrity;
 pub mod manifest;
 pub mod permissions;
-pub mod integrity;
-pub mod config;
 pub mod policy;
 
 use thiserror::Error;
@@ -13,7 +13,11 @@ pub enum OathError {
     #[error("package not found: {0}")]
     PackageNotFound(String),
     #[error("integrity check failed for {package}: expected {expected}, got {actual}")]
-    IntegrityMismatch { package: String, expected: String, actual: String },
+    IntegrityMismatch {
+        package: String,
+        expected: String,
+        actual: String,
+    },
     #[error("permission denied: {0} requires {1}")]
     PermissionDenied(String, String),
     #[error("transparency log verification failed: {0}")]

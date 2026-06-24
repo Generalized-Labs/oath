@@ -23,11 +23,11 @@ pub enum RiskLevel {
 impl std::fmt::Display for RiskLevel {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Clean   => write!(f, "CLEAN"),
-            Self::Info    => write!(f, "INFO"),
-            Self::Low     => write!(f, "LOW"),
-            Self::Medium  => write!(f, "MEDIUM"),
-            Self::High    => write!(f, "HIGH"),
+            Self::Clean => write!(f, "CLEAN"),
+            Self::Info => write!(f, "INFO"),
+            Self::Low => write!(f, "LOW"),
+            Self::Medium => write!(f, "MEDIUM"),
+            Self::High => write!(f, "HIGH"),
             Self::Critical => write!(f, "CRITICAL"),
         }
     }
@@ -82,26 +82,26 @@ pub enum FindingKind {
 impl std::fmt::Display for FindingKind {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::Network           => write!(f, "network"),
-            Self::Filesystem        => write!(f, "filesystem"),
-            Self::EnvAccess         => write!(f, "env_access"),
-            Self::Subprocess        => write!(f, "subprocess"),
-            Self::DynamicExec       => write!(f, "dynamic_exec"),
-            Self::Obfuscation       => write!(f, "obfuscation"),
-            Self::InstallScript     => write!(f, "install_script"),
-            Self::Typosquatting     => write!(f, "typosquatting"),
-            Self::DataExfiltration  => write!(f, "data_exfiltration"),
-            Self::CryptoMiner       => write!(f, "crypto_miner"),
-            Self::ShadowDep         => write!(f, "shadow_dep"),
+            Self::Network => write!(f, "network"),
+            Self::Filesystem => write!(f, "filesystem"),
+            Self::EnvAccess => write!(f, "env_access"),
+            Self::Subprocess => write!(f, "subprocess"),
+            Self::DynamicExec => write!(f, "dynamic_exec"),
+            Self::Obfuscation => write!(f, "obfuscation"),
+            Self::InstallScript => write!(f, "install_script"),
+            Self::Typosquatting => write!(f, "typosquatting"),
+            Self::DataExfiltration => write!(f, "data_exfiltration"),
+            Self::CryptoMiner => write!(f, "crypto_miner"),
+            Self::ShadowDep => write!(f, "shadow_dep"),
             Self::CredentialHarvest => write!(f, "credential_harvest"),
             Self::ConditionalPayload => write!(f, "conditional_payload"),
-            Self::Slopsquatting     => write!(f, "slopsquatting"),
-            Self::BracketNotation   => write!(f, "bracket_notation"),
-            Self::CiTargeting       => write!(f, "ci_targeting"),
-            Self::SilentSubprocess  => write!(f, "silent_subprocess"),
-            Self::EnvPathOverwrite  => write!(f, "env_path_overwrite"),
+            Self::Slopsquatting => write!(f, "slopsquatting"),
+            Self::BracketNotation => write!(f, "bracket_notation"),
+            Self::CiTargeting => write!(f, "ci_targeting"),
+            Self::SilentSubprocess => write!(f, "silent_subprocess"),
+            Self::EnvPathOverwrite => write!(f, "env_path_overwrite"),
             Self::ModuleLoaderPatch => write!(f, "module_loader_patch"),
-            Self::NativeAddon       => write!(f, "native_addon"),
+            Self::NativeAddon => write!(f, "native_addon"),
         }
     }
 }

@@ -35,8 +35,12 @@ pub enum PermissionPolicy {
     Permissive,
 }
 
-fn default_registry() -> String { "https://registry.oath.dev".into() }
-fn default_log() -> String { "https://log.oath.dev".into() }
+fn default_registry() -> String {
+    "https://registry.oath.dev".into()
+}
+fn default_log() -> String {
+    "https://log.oath.dev".into()
+}
 fn default_store() -> String {
     std::env::var("HOME")
         .map(|h| format!("{h}/.oath/store"))

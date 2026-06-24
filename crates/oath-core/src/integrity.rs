@@ -1,6 +1,6 @@
 //! Content integrity and hashing
 
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 
 /// Compute SHA-256 hash of content, return hex string
 pub fn sha256_hex(data: &[u8]) -> String {

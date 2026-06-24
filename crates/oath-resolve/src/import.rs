@@ -6,7 +6,7 @@
 //! `packages` map (path -> entry) and reproduce node's nearest-ancestor
 //! resolution to turn each dependency range into the exact installed version.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use serde_json::{Map, Value};
 use std::collections::HashMap;
 use std::path::Path;
@@ -15,18 +15,15 @@ use crate::graph::{DepGraph, DepNode, PeerReport};
 
 /// Parse a `package-lock.json` (npm lockfileVersion 2 or 3) into a DepGraph.
 pub fn import_npm_lockfile(path: &Path) -> Result<DepGraph> {
-    let data = std::fs::read_to_string(path)
-        .with_context(|| format!("reading {}", path.display()))?;
-    let root: Value = serde_json::from_str(&data)
-        .with_context(|| format!("parsing {}", path.display()))?;
+    let data =
+        std::fs::read_to_string(path).with_context(|| format!("reading {}", path.display()))?;
+    let root: Value =
+        serde_json::from_str(&data).with_context(|| format!("parsing {}", path.display()))?;
 
-    let packages = root
-        .get("packages")
-        .and_then(Value::as_object)
-        .context(
-            "package-lock.json has no `packages` map (lockfileVersion 1 is unsupported; \
+    let packages = root.get("packages").and_then(Value::as_object).context(
+        "package-lock.json has no `packages` map (lockfileVersion 1 is unsupported; \
              run `npm install` once with npm 7+ to upgrade it)",
-        )?;
+    )?;
 
     // First pass: build path -> key and the node skeletons.
     let mut path_to_key: HashMap<String, String> = HashMap::new();
@@ -59,7 +56,10 @@ pub fn import_npm_lockfile(path: &Path) -> Result<DepGraph> {
         let name = name_from_path(pkg_path).to_string();
         let key = format!("{name}@{version}");
 
-        let dev_optional = entry.get("devOptional").and_then(Value::as_bool).unwrap_or(false);
+        let dev_optional = entry
+            .get("devOptional")
+            .and_then(Value::as_bool)
+            .unwrap_or(false);
         let node = DepNode {
             name,
             alias: None,
@@ -69,14 +69,20 @@ pub fn import_npm_lockfile(path: &Path) -> Result<DepGraph> {
                 .and_then(Value::as_str)
                 .unwrap_or("")
                 .to_string(),
-            integrity: entry.get("integrity").and_then(Value::as_str).map(String::from),
+            integrity: entry
+                .get("integrity")
+                .and_then(Value::as_str)
+                .map(String::from),
             dependencies: HashMap::new(), // filled in the second pass
             has_install_script: entry
                 .get("hasInstallScript")
                 .and_then(Value::as_bool)
                 .unwrap_or(false),
             dev: entry.get("dev").and_then(Value::as_bool).unwrap_or(false) || dev_optional,
-            optional: entry.get("optional").and_then(Value::as_bool).unwrap_or(false)
+            optional: entry
+                .get("optional")
+                .and_then(Value::as_bool)
+                .unwrap_or(false)
                 || dev_optional,
             peer_dependencies: range_map(entry.get("peerDependencies")),
             optional_peers: Default::default(),
@@ -104,10 +110,10 @@ pub fn import_npm_lockfile(path: &Path) -> Result<DepGraph> {
         for field in ["dependencies", "optionalDependencies"] {
             if let Some(deps) = entry.get(field).and_then(Value::as_object) {
                 for dep_name in deps.keys() {
-                    if let Some(dep_path) = resolve_dep_path(packages, pkg_path, dep_name) {
-                        if let Some(dep_key) = path_to_key.get(&dep_path) {
-                            resolved.insert(dep_name.clone(), dep_key.clone());
-                        }
+                    if let Some(dep_path) = resolve_dep_path(packages, pkg_path, dep_name)
+                        && let Some(dep_key) = path_to_key.get(&dep_path)
+                    {
+                        resolved.insert(dep_name.clone(), dep_key.clone());
                     }
                 }
             }
@@ -123,12 +129,11 @@ pub fn import_npm_lockfile(path: &Path) -> Result<DepGraph> {
         for field in ["dependencies", "devDependencies", "optionalDependencies"] {
             if let Some(deps) = root_entry.get(field).and_then(Value::as_object) {
                 for dep_name in deps.keys() {
-                    if let Some(dep_path) = resolve_dep_path(packages, "", dep_name) {
-                        if let Some(dep_key) = path_to_key.get(&dep_path) {
-                            if !roots.contains(dep_key) {
-                                roots.push(dep_key.clone());
-                            }
-                        }
+                    if let Some(dep_path) = resolve_dep_path(packages, "", dep_name)
+                        && let Some(dep_key) = path_to_key.get(&dep_path)
+                        && !roots.contains(dep_key)
+                    {
+                        roots.push(dep_key.clone());
                     }
                 }
             }
@@ -300,7 +305,11 @@ mod tests {
     #[test]
     fn skips_foreign_platform_optional_packages() {
         // A linux-only optional binary must not be imported on a non-linux host.
-        let other = if current_npm_os() == "linux" { "win32" } else { "linux" };
+        let other = if current_npm_os() == "linux" {
+            "win32"
+        } else {
+            "linux"
+        };
         let lock = serde_json::json!({
             "lockfileVersion": 3,
             "packages": {

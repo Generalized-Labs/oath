@@ -7,8 +7,8 @@
 use anyhow::Result;
 
 use oxc::allocator::Allocator;
-use oxc::ast_visit::Visit;
 use oxc::ast::ast::{CallExpression, Expression, MemberExpression};
+use oxc::ast_visit::Visit;
 use oxc::parser::Parser;
 use oxc::span::SourceType;
 
@@ -44,7 +44,10 @@ impl Analyzer {
             for needle in pattern.strings {
                 if let Some(pos) = self.source.find(needle) {
                     let line = line_number(&self.source, pos);
-                    let already = self.findings.iter().any(|f| f.kind == pattern.kind && f.line == line);
+                    let already = self
+                        .findings
+                        .iter()
+                        .any(|f| f.kind == pattern.kind && f.line == line);
                     if !already {
                         let snippet = extract_line(&self.source, line);
                         self.findings.push(Finding {
@@ -83,7 +86,9 @@ impl Analyzer {
     fn update_capabilities(&mut self) {
         for f in &self.findings {
             match f.kind {
-                FindingKind::Network | FindingKind::DataExfiltration => self.capabilities.network = true,
+                FindingKind::Network | FindingKind::DataExfiltration => {
+                    self.capabilities.network = true
+                }
                 FindingKind::Filesystem => self.capabilities.filesystem = true,
                 FindingKind::EnvAccess => self.capabilities.env_access = true,
                 FindingKind::Subprocess => self.capabilities.subprocess = true,
@@ -103,7 +108,11 @@ struct AstVisitor<'a> {
 
 impl<'a> AstVisitor<'a> {
     fn push(&mut self, kind: FindingKind, risk: RiskLevel, msg: &str, line: u32, snippet: &str) {
-        if self.findings.iter().any(|f| f.kind == kind && f.line == line) {
+        if self
+            .findings
+            .iter()
+            .any(|f| f.kind == kind && f.line == line)
+        {
             return;
         }
         self.findings.push(Finding {
@@ -129,12 +138,18 @@ impl<'a> AstVisitor<'a> {
         let start = call.span.start as usize;
         let end = (call.span.end as usize).min(self.source.len());
         let slice = &self.source[start..end];
-        if slice.contains("process.env") && (slice.contains("POST") || slice.contains("body") || slice.contains("send")) {
+        if slice.contains("process.env")
+            && (slice.contains("POST") || slice.contains("body") || slice.contains("send"))
+        {
             let line = self.offset_to_line(call.span.start);
             let snippet = self.line_snippet(call.span.start);
-            self.push(FindingKind::DataExfiltration, RiskLevel::Critical,
+            self.push(
+                FindingKind::DataExfiltration,
+                RiskLevel::Critical,
                 "Sends environment variables over network (likely credential theft)",
-                line, &snippet);
+                line,
+                &snippet,
+            );
         }
     }
 }
@@ -148,8 +163,13 @@ impl<'a> Visit<'a> for AstVisitor<'a> {
                 if id.name == "eval" {
                     let line = self.offset_to_line(start);
                     let snippet = self.line_snippet(start);
-                    self.push(FindingKind::DynamicExec, RiskLevel::High,
-                        "Direct eval() -- dynamic code execution", line, &snippet);
+                    self.push(
+                        FindingKind::DynamicExec,
+                        RiskLevel::High,
+                        "Direct eval() -- dynamic code execution",
+                        line,
+                        &snippet,
+                    );
                 } else if id.name == "fetch" {
                     self.check_exfil_combo(it);
                 }
@@ -157,30 +177,39 @@ impl<'a> Visit<'a> for AstVisitor<'a> {
             Expression::StaticMemberExpression(m) => {
                 let prop = m.property.name.as_str();
                 // Buffer.from(..., 'base64') obfuscation
-                if prop == "from" {
-                    if let Expression::Identifier(obj) = &m.object {
-                        if obj.name == "Buffer" && it.arguments.len() >= 2 {
-                            let end = (start + 80).min(self.source.len() as u32);
-                            let slice = &self.source[start as usize..end as usize];
-                            if slice.contains("base64") || slice.contains("hex") {
-                                let line = self.offset_to_line(start);
-                                let snippet = self.line_snippet(start);
-                                self.push(FindingKind::Obfuscation, RiskLevel::Medium,
-                                    "Buffer.from() with base64/hex (obfuscation pattern)", line, &snippet);
-                            }
-                        }
+                if prop == "from"
+                    && let Expression::Identifier(obj) = &m.object
+                    && obj.name == "Buffer"
+                    && it.arguments.len() >= 2
+                {
+                    let end = (start + 80).min(self.source.len() as u32);
+                    let slice = &self.source[start as usize..end as usize];
+                    if slice.contains("base64") || slice.contains("hex") {
+                        let line = self.offset_to_line(start);
+                        let snippet = self.line_snippet(start);
+                        self.push(
+                            FindingKind::Obfuscation,
+                            RiskLevel::Medium,
+                            "Buffer.from() with base64/hex (obfuscation pattern)",
+                            line,
+                            &snippet,
+                        );
                     }
                 }
                 // new Function() via .constructor
-                if prop == "constructor" {
-                    if let Expression::Identifier(obj) = &m.object {
-                        if obj.name == "Function" {
-                            let line = self.offset_to_line(start);
-                            let snippet = self.line_snippet(start);
-                            self.push(FindingKind::DynamicExec, RiskLevel::High,
-                                "Function.constructor() -- dynamic code execution", line, &snippet);
-                        }
-                    }
+                if prop == "constructor"
+                    && let Expression::Identifier(obj) = &m.object
+                    && obj.name == "Function"
+                {
+                    let line = self.offset_to_line(start);
+                    let snippet = self.line_snippet(start);
+                    self.push(
+                        FindingKind::DynamicExec,
+                        RiskLevel::High,
+                        "Function.constructor() -- dynamic code execution",
+                        line,
+                        &snippet,
+                    );
                 }
             }
             _ => {}
@@ -191,15 +220,20 @@ impl<'a> Visit<'a> for AstVisitor<'a> {
     }
 
     fn visit_member_expression(&mut self, it: &MemberExpression<'a>) {
-        if let MemberExpression::StaticMemberExpression(m) = it {
-            if let Expression::Identifier(obj) = &m.object {
-                if obj.name == "process" && m.property.name == "env" {
-                    let line = self.offset_to_line(m.span.start);
-                    let snippet = self.line_snippet(m.span.start);
-                    self.push(FindingKind::EnvAccess, RiskLevel::Info,
-                        "Reads process.env", line, &snippet);
-                }
-            }
+        if let MemberExpression::StaticMemberExpression(m) = it
+            && let Expression::Identifier(obj) = &m.object
+            && obj.name == "process"
+            && m.property.name == "env"
+        {
+            let line = self.offset_to_line(m.span.start);
+            let snippet = self.line_snippet(m.span.start);
+            self.push(
+                FindingKind::EnvAccess,
+                RiskLevel::Info,
+                "Reads process.env",
+                line,
+                &snippet,
+            );
         }
         oxc::ast_visit::walk::walk_member_expression(self, it);
     }
@@ -219,7 +253,8 @@ fn line_number(source: &str, byte_offset: usize) -> u32 {
     source[..byte_offset.min(source.len())]
         .chars()
         .filter(|&c| c == '\n')
-        .count() as u32 + 1
+        .count() as u32
+        + 1
 }
 
 pub fn extract_line(source: &str, line: u32) -> String {

@@ -14,7 +14,11 @@ pub struct PackageScanner;
 
 impl PackageScanner {
     /// Scan an extracted package directory (e.g. ~/.oath/store/express@4.18.2/)
-    pub fn scan(package_name: &str, package_version: &str, package_dir: &Path) -> Result<AnalysisReport> {
+    pub fn scan(
+        package_name: &str,
+        package_version: &str,
+        package_dir: &Path,
+    ) -> Result<AnalysisReport> {
         let mut all_findings: Vec<Finding> = Vec::new();
         let mut files_scanned = 0usize;
         let mut lines_scanned = 0usize;
@@ -28,20 +32,20 @@ impl PackageScanner {
             if let Ok(json) = serde_json::from_str::<serde_json::Value>(&content) {
                 let scripts = json.get("scripts");
                 for hook in &["preinstall", "install", "postinstall"] {
-                    if let Some(script) = scripts.and_then(|s| s.get(hook)) {
-                        if let Some(cmd) = script.as_str() {
-                            has_install_script = true;
-                            // The install command itself is often the payload.
-                            behavior::scan_install_command(cmd, &mut pkg_behavior);
-                            all_findings.push(Finding {
-                                kind: FindingKind::InstallScript,
-                                risk: RiskLevel::Medium,
-                                message: format!("{hook} script: {cmd}"),
-                                file: "package.json".to_string(),
-                                line: 0,
-                                snippet: Some(cmd.chars().take(120).collect()),
-                            });
-                        }
+                    if let Some(script) = scripts.and_then(|s| s.get(hook))
+                        && let Some(cmd) = script.as_str()
+                    {
+                        has_install_script = true;
+                        // The install command itself is often the payload.
+                        behavior::scan_install_command(cmd, &mut pkg_behavior);
+                        all_findings.push(Finding {
+                            kind: FindingKind::InstallScript,
+                            risk: RiskLevel::Medium,
+                            message: format!("{hook} script: {cmd}"),
+                            file: "package.json".to_string(),
+                            line: 0,
+                            snippet: Some(cmd.chars().take(120).collect()),
+                        });
                     }
                 }
             }
@@ -64,7 +68,10 @@ impl PackageScanner {
 
             // Skip known non-threatening paths
             let path_str = path.to_string_lossy();
-            if path_str.contains("test") || path_str.contains("spec") || path_str.contains("__tests__") {
+            if path_str.contains("test")
+                || path_str.contains("spec")
+                || path_str.contains("__tests__")
+            {
                 continue;
             }
 
@@ -163,12 +170,15 @@ fn detect_obfuscation(source: &str, relative_path: &str) -> Vec<Finding> {
         let total_chars: usize = lines.iter().map(|l| l.len()).sum();
         let avg_line_len = total_chars / line_count;
         if avg_line_len > 500 {
-            let is_vendor = relative_path.contains("node_modules")
-                || relative_path.contains("vendor/");
+            let is_vendor =
+                relative_path.contains("node_modules") || relative_path.contains("vendor/");
             let (risk, desc) = if is_vendor {
                 (RiskLevel::Info, "Minified vendor bundle detected")
             } else {
-                (RiskLevel::Medium, "Minified source code detected (not vendor)")
+                (
+                    RiskLevel::Medium,
+                    "Minified source code detected (not vendor)",
+                )
             };
             findings.push(Finding {
                 kind: FindingKind::Obfuscation,
@@ -215,8 +225,8 @@ fn detect_obfuscation(source: &str, relative_path: &str) -> Vec<Finding> {
 
     // 3. Char code abuse: >10 instances of String.fromCharCode or charCodeAt in non-test code
     if !relative_path.contains("test") && !relative_path.contains("spec") {
-        let from_char_code_count = source.matches("String.fromCharCode").count()
-            + source.matches("charCodeAt").count();
+        let from_char_code_count =
+            source.matches("String.fromCharCode").count() + source.matches("charCodeAt").count();
         if from_char_code_count > 10 {
             findings.push(Finding {
                 kind: FindingKind::Obfuscation,
@@ -235,11 +245,45 @@ fn detect_obfuscation(source: &str, relative_path: &str) -> Vec<Finding> {
     // 4. Variable name entropy: avg identifier length < 2 across > 100 identifiers
     let ident_re = Regex::new(r"\b[a-zA-Z_$][a-zA-Z0-9_$]*\b").unwrap();
     let keywords: &[&str] = &[
-        "var", "let", "const", "function", "return", "if", "else", "for", "while", "do",
-        "switch", "case", "break", "continue", "new", "this", "typeof", "instanceof",
-        "void", "delete", "in", "of", "try", "catch", "finally", "throw", "class",
-        "extends", "import", "export", "default", "from", "async", "await", "yield",
-        "true", "false", "null", "undefined",
+        "var",
+        "let",
+        "const",
+        "function",
+        "return",
+        "if",
+        "else",
+        "for",
+        "while",
+        "do",
+        "switch",
+        "case",
+        "break",
+        "continue",
+        "new",
+        "this",
+        "typeof",
+        "instanceof",
+        "void",
+        "delete",
+        "in",
+        "of",
+        "try",
+        "catch",
+        "finally",
+        "throw",
+        "class",
+        "extends",
+        "import",
+        "export",
+        "default",
+        "from",
+        "async",
+        "await",
+        "yield",
+        "true",
+        "false",
+        "null",
+        "undefined",
     ];
     let mut ident_lengths: Vec<usize> = Vec::new();
     for mat in ident_re.find_iter(source) {
@@ -282,21 +326,20 @@ pub fn detect_advanced_obfuscation(source: &str, relative_path: &str) -> Vec<Fin
     // arg / atob), not "Buffer.from exists". A hardcoded base64 blob of even
     // moderate length being decoded is what's suspicious -- so we key on the
     // decode form, not raw `Buffer.from(`, which every package uses.
-    let b64_buf_re = Regex::new(
-        r#"Buffer\.from\(\s*['"]([A-Za-z0-9+/=]{24,})['"]\s*,\s*['"]base64['"]\s*\)"#
-    ).unwrap();
-    let atob_re = Regex::new(
-        r#"atob\(\s*['"]([A-Za-z0-9+/=]{24,})['"]\s*\)"#
-    ).unwrap();
+    let b64_buf_re =
+        Regex::new(r#"Buffer\.from\(\s*['"]([A-Za-z0-9+/=]{24,})['"]\s*,\s*['"]base64['"]\s*\)"#)
+            .unwrap();
+    let atob_re = Regex::new(r#"atob\(\s*['"]([A-Za-z0-9+/=]{24,})['"]\s*\)"#).unwrap();
 
-    let b64_count = b64_buf_re.find_iter(source).count()
-        + atob_re.find_iter(source).count();
+    let b64_count = b64_buf_re.find_iter(source).count() + atob_re.find_iter(source).count();
 
     for _ in 0..b64_count {
         findings.push(Finding {
             kind: FindingKind::Obfuscation,
             risk: RiskLevel::High,
-            message: "Base64 payload detected: Buffer.from(..., 'base64') or atob() with long string".to_string(),
+            message:
+                "Base64 payload detected: Buffer.from(..., 'base64') or atob() with long string"
+                    .to_string(),
             file: relative_path.to_string(),
             line: 1,
             snippet: None,
@@ -306,10 +349,10 @@ pub fn detect_advanced_obfuscation(source: &str, relative_path: &str) -> Vec<Fin
     // 2. Dynamic require obfuscation
     // require([a,b].join('')), require('child_' + 'process'), template literals in require
     let dyn_req_patterns: &[&str] = &[
-        r"require\s*\(\s*\[",         // require([...].join)
-        r"require\s*\('[^']*'\s*\+",  // require('str' + ...)
+        r"require\s*\(\s*\[",          // require([...].join)
+        r"require\s*\('[^']*'\s*\+",   // require('str' + ...)
         r#"require\s*\("[^"]*"\s*\+"#, // require("str" + ...)
-        r"require\s*\(`",             // require(`template`)
+        r"require\s*\(`",              // require(`template`)
     ];
     for pat in dyn_req_patterns {
         let re = Regex::new(pat).unwrap();
@@ -330,8 +373,8 @@ pub fn detect_advanced_obfuscation(source: &str, relative_path: &str) -> Vec<Fin
     let eval_charcode_re = Regex::new(r"eval\s*\(\s*String\.fromCharCode\s*\(").unwrap();
     let eval_hex_re = Regex::new(r#"eval\s*\(\s*['"](?:\\x[0-9a-fA-F]{2}){20,}['"]\s*\)"#).unwrap();
 
-    let hex_exec_count = eval_charcode_re.find_iter(source).count()
-        + eval_hex_re.find_iter(source).count();
+    let hex_exec_count =
+        eval_charcode_re.find_iter(source).count() + eval_hex_re.find_iter(source).count();
 
     for _ in 0..hex_exec_count {
         findings.push(Finding {
@@ -422,14 +465,15 @@ pub fn detect_advanced_obfuscation(source: &str, relative_path: &str) -> Vec<Fin
     let eth_wallet_re = Regex::new(r"\b0x[0-9a-fA-F]{40}\b").unwrap();
     let btc_wallet_re = Regex::new(r"\b[13][a-km-zA-HJ-NP-Z1-9]{25,34}\b").unwrap();
 
-    let wallet_count = eth_wallet_re.find_iter(source).count()
-        + btc_wallet_re.find_iter(source).count();
+    let wallet_count =
+        eth_wallet_re.find_iter(source).count() + btc_wallet_re.find_iter(source).count();
 
     for _ in 0..wallet_count {
         findings.push(Finding {
             kind: FindingKind::CryptoMiner,
             risk: RiskLevel::Medium,
-            message: "Cryptocurrency wallet address detected (Bitcoin/Ethereum pattern)".to_string(),
+            message: "Cryptocurrency wallet address detected (Bitcoin/Ethereum pattern)"
+                .to_string(),
             file: relative_path.to_string(),
             line: 1,
             snippet: None,

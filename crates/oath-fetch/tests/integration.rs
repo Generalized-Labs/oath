@@ -3,8 +3,8 @@
 //! These tests hit the real npm registry. They verify that our
 //! protocol implementation actually works against production.
 
-use oath_fetch::{RegistryClient, resolve_version};
 use oath_fetch::tarball;
+use oath_fetch::{RegistryClient, resolve_version};
 
 #[tokio::test]
 async fn test_fetch_express_packument() {
@@ -37,7 +37,10 @@ async fn test_resolve_express_caret() {
 
     // Check that it has dependencies
     assert!(!resolved.info.dependencies.is_empty());
-    println!("  dependencies: {:?}", resolved.info.dependencies.keys().collect::<Vec<_>>());
+    println!(
+        "  dependencies: {:?}",
+        resolved.info.dependencies.keys().collect::<Vec<_>>()
+    );
 }
 
 #[tokio::test]
@@ -135,7 +138,9 @@ async fn test_integrity_verification_fails() {
 #[tokio::test]
 async fn test_nonexistent_package() {
     let client = RegistryClient::default_client().unwrap();
-    let result = client.fetch_packument("this-package-definitely-does-not-exist-abc123xyz789").await;
+    let result = client
+        .fetch_packument("this-package-definitely-does-not-exist-abc123xyz789")
+        .await;
     assert!(result.is_err());
     let err = result.unwrap_err().to_string();
     assert!(err.contains("not found"), "unexpected error: {err}");

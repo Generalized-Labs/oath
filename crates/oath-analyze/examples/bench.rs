@@ -48,9 +48,8 @@ fn scan_corpus(root: &Path) -> Vec<(String, RiskLevel)> {
             .unwrap_or(d)
             .to_string_lossy()
             .to_string();
-        match PackageScanner::scan(&name, "0.0.0", d) {
-            Ok(r) => results.push((name, r.overall_risk)),
-            Err(_) => {}
+        if let Ok(r) = PackageScanner::scan(&name, "0.0.0", d) {
+            results.push((name, r.overall_risk))
         }
     }
     results
@@ -58,8 +57,10 @@ fn scan_corpus(root: &Path) -> Vec<(String, RiskLevel)> {
 
 fn report(label: &str, results: &[(String, RiskLevel)], show_flagged: bool) -> (usize, usize) {
     let total = results.len();
-    let mut flagged: Vec<&(String, RiskLevel)> =
-        results.iter().filter(|(_, r)| *r >= RiskLevel::High).collect();
+    let mut flagged: Vec<&(String, RiskLevel)> = results
+        .iter()
+        .filter(|(_, r)| *r >= RiskLevel::High)
+        .collect();
     flagged.sort_by(|a, b| b.1.cmp(&a.1));
     let n = flagged.len();
     println!(
@@ -90,8 +91,10 @@ fn main() {
     let (b_total, b_flag) = report("BENIGN (false positives)", &benign, true);
     // Malware: flags are true positives; show the MISSES (false negatives).
     let (m_total, m_flag) = report("MALWARE (recall)", &malware, false);
-    let missed: Vec<&(String, RiskLevel)> =
-        malware.iter().filter(|(_, r)| *r < RiskLevel::High).collect();
+    let missed: Vec<&(String, RiskLevel)> = malware
+        .iter()
+        .filter(|(_, r)| *r < RiskLevel::High)
+        .collect();
     println!("\n  MALWARE false negatives (missed): {}", missed.len());
     for (name, r) in missed.iter().take(40) {
         println!("    [{:?}] {}", r, name);

@@ -13,6 +13,6 @@ pub mod score;
 
 pub use analyzer::Analyzer;
 pub use behavior::{Behavior, Verdict};
-pub use report::{AnalysisReport, Capabilities, Finding, FindingKind, RiskLevel, PackageRisk};
+pub use report::{AnalysisReport, Capabilities, Finding, FindingKind, PackageRisk, RiskLevel};
 pub use scanner::PackageScanner;
 pub use score::{SafetyScore, ScoreFactor, compute_safety_score};

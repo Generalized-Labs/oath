@@ -3,17 +3,17 @@
 //! Fetches packuments, resolves versions, downloads and verifies tarballs.
 //! Fully compatible with the npm registry HTTP protocol.
 
+pub mod cache;
 pub mod client;
+pub mod metadata;
 pub mod npmrc;
 pub mod packument;
 pub mod resolve;
 pub mod tarball;
-pub mod cache;
-pub mod metadata;
 
-pub use metadata::{PackageMetadata, Maintainer, fetch_package_metadata};
+pub use metadata::{Maintainer, PackageMetadata, fetch_package_metadata};
 
 pub use client::RegistryClient;
 pub use npmrc::NpmrcConfig;
-pub use packument::{Packument, VersionInfo, DistInfo};
+pub use packument::{DistInfo, Packument, VersionInfo};
 pub use resolve::resolve_version;

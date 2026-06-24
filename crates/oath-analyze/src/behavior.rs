@@ -24,12 +24,12 @@ pub struct Behavior {
     pub env_read: bool,  // any process.env access
 
     // -- strong sources --
-    pub env_whole: bool,      // whole process.env captured (spread/stringify/keys/passed)
-    pub sensitive_env: bool,  // process.env.<token/secret/key/aws/github/...>
-    pub cred_path: bool,      // a STRING LITERAL credential path (~/.ssh, .npmrc, .aws, /etc/passwd)
+    pub env_whole: bool, // whole process.env captured (spread/stringify/keys/passed)
+    pub sensitive_env: bool, // process.env.<token/secret/key/aws/github/...>
+    pub cred_path: bool, // a STRING LITERAL credential path (~/.ssh, .npmrc, .aws, /etc/passwd)
 
     // -- decode + nesting --
-    pub decode: bool,           // Buffer.from(_, 'base64'|'hex') / atob / fromCharCode
+    pub decode: bool, // Buffer.from(_, 'base64'|'hex') / atob / fromCharCode
     pub decode_into_exec: bool, // eval(atob(..)) / require(fromCharCode(..)) etc. (AST-nested)
 
     // hand-authored (non-minified) variants -- minified bundles legitimately
@@ -91,7 +91,8 @@ pub fn verdict(b: &Behavior, has_install_script: bool) -> (Verdict, Vec<String>)
 
     if b.strong_source() && b.net {
         block = true;
-        reasons.push("exfiltration: sensitive env/credentials read alongside a network sink".into());
+        reasons
+            .push("exfiltration: sensitive env/credentials read alongside a network sink".into());
     }
     if b.decode_into_exec {
         block = true;
@@ -103,7 +104,8 @@ pub fn verdict(b: &Behavior, has_install_script: bool) -> (Verdict, Vec<String>)
     }
     if b.worm_marker && (b.net || b.subprocess) {
         block = true;
-        reasons.push("worm/secret-stealer markers (trufflehog / cloud metadata / republish)".into());
+        reasons
+            .push("worm/secret-stealer markers (trufflehog / cloud metadata / republish)".into());
     }
     if b.suspicious_host && (b.net || b.strong_source() || b.subprocess) {
         block = true;
@@ -169,7 +171,10 @@ pub fn scan_install_command(cmd: &str, b: &mut Behavior) {
     {
         b.shell_download = true;
     }
-    if SUSPICIOUS_HOST.iter().any(|h| lc.contains(&h.to_ascii_lowercase())) {
+    if SUSPICIOUS_HOST
+        .iter()
+        .any(|h| lc.contains(&h.to_ascii_lowercase()))
+    {
         b.suspicious_host = true;
     }
     if WORM_MARKER.iter().any(|w| cmd.contains(w)) {
@@ -207,12 +212,11 @@ struct BehaviorVisitor<'a> {
 
 /// Is this expression a `process.env` member (the whole env object)?
 fn is_process_env(expr: &Expression) -> bool {
-    if let Expression::StaticMemberExpression(m) = expr {
-        if m.property.name == "env" {
-            if let Expression::Identifier(obj) = &m.object {
-                return obj.name == "process";
-            }
-        }
+    if let Expression::StaticMemberExpression(m) = expr
+        && m.property.name == "env"
+        && let Expression::Identifier(obj) = &m.object
+    {
+        return obj.name == "process";
     }
     false
 }
@@ -234,35 +238,91 @@ fn callee_name(callee: &Expression) -> Option<String> {
 }
 
 const SENSITIVE_ENV: &[&str] = &[
-    "TOKEN", "SECRET", "PASSWORD", "PASSWD", "PRIVATE", "APIKEY", "API_KEY", "AWS",
-    "GITHUB", "GH_TOKEN", "NPM_TOKEN", "SSH", "CREDENTIAL", "ACCESS_KEY", "CLIENT_SECRET",
+    "TOKEN",
+    "SECRET",
+    "PASSWORD",
+    "PASSWD",
+    "PRIVATE",
+    "APIKEY",
+    "API_KEY",
+    "AWS",
+    "GITHUB",
+    "GH_TOKEN",
+    "NPM_TOKEN",
+    "SSH",
+    "CREDENTIAL",
+    "ACCESS_KEY",
+    "CLIENT_SECRET",
 ];
 
 const CRED_PATH_FRAGMENTS: &[&str] = &[
-    ".ssh/id_rsa", ".ssh/id_ed25519", ".aws/credentials", ".aws/config", ".npmrc",
-    "/etc/passwd", "/etc/shadow", "id_rsa", "Library/Keychains",
-    "Login Data", "/.config/gcloud", ".docker/config.json",
-    "/.env", "\\.env", ".env.local", ".env.production", "wallet.dat", ".bash_history",
+    ".ssh/id_rsa",
+    ".ssh/id_ed25519",
+    ".aws/credentials",
+    ".aws/config",
+    ".npmrc",
+    "/etc/passwd",
+    "/etc/shadow",
+    "id_rsa",
+    "Library/Keychains",
+    "Login Data",
+    "/.config/gcloud",
+    ".docker/config.json",
+    "/.env",
+    "\\.env",
+    ".env.local",
+    ".env.production",
+    "wallet.dat",
+    ".bash_history",
 ];
 
 const SUSPICIOUS_HOST: &[&str] = &[
-    ".ngrok.io", ".ngrok-free.app", "webhook.site", "burpcollaborator", "requestbin",
-    "pipedream.net", "interact.sh", ".oast.", "oastify.com", "dnslog.cn", ".nip.io",
-    "transfer.sh", "0x0.st", "discord.com/api/webhooks", "discordapp.com/api/webhooks",
+    ".ngrok.io",
+    ".ngrok-free.app",
+    "webhook.site",
+    "burpcollaborator",
+    "requestbin",
+    "pipedream.net",
+    "interact.sh",
+    ".oast.",
+    "oastify.com",
+    "dnslog.cn",
+    ".nip.io",
+    "transfer.sh",
+    "0x0.st",
+    "discord.com/api/webhooks",
+    "discordapp.com/api/webhooks",
     // Telegram/Discord bot C2 and anonymous file drops are the dominant npm-stealer
     // sinks. (IP-lookup hosts like ifconfig.me are recon, not exfil -- excluded to
     // avoid flagging legitimate geo packages.)
-    "api.telegram.org/bot", "file.io", "anonfiles", "gofile.io", "paste.ee", "termbin.com",
+    "api.telegram.org/bot",
+    "file.io",
+    "anonfiles",
+    "gofile.io",
+    "paste.ee",
+    "termbin.com",
 ];
 
 const WORM_MARKER: &[&str] = &[
-    "trufflehog", "169.254.169.254", "metadata.google.internal",
-    "shai-hulud", "npm publish", "npm_package_description",
+    "trufflehog",
+    "169.254.169.254",
+    "metadata.google.internal",
+    "shai-hulud",
+    "npm publish",
+    "npm_package_description",
 ];
 
 const SHELL_DOWNLOAD: &[&str] = &[
-    "curl ", "wget ", "certutil", "Invoke-WebRequest", "bitsadmin", "| bash", "| sh",
-    "powershell -", "regsvr32", "rundll32",
+    "curl ",
+    "wget ",
+    "certutil",
+    "Invoke-WebRequest",
+    "bitsadmin",
+    "| bash",
+    "| sh",
+    "powershell -",
+    "regsvr32",
+    "rundll32",
 ];
 
 fn looks_base64ish(s: &str) -> bool {
@@ -275,15 +335,15 @@ fn looks_base64ish(s: &str) -> bool {
 impl<'a> BehaviorVisitor<'a> {
     /// Does this argument expression decode data (base64/charcode)?
     fn arg_is_decode(&self, arg: &Expression) -> bool {
-        if let Expression::CallExpression(c) = arg {
-            if let Some(name) = callee_name(&c.callee) {
-                let n = name.as_str();
-                if n == "atob" || n.ends_with(".from") || n == "Buffer.from" {
-                    return true;
-                }
-                if n.ends_with("fromCharCode") || n == "unescape" {
-                    return true;
-                }
+        if let Expression::CallExpression(c) = arg
+            && let Some(name) = callee_name(&c.callee)
+        {
+            let n = name.as_str();
+            if n == "atob" || n.ends_with(".from") || n == "Buffer.from" {
+                return true;
+            }
+            if n.ends_with("fromCharCode") || n == "unescape" {
+                return true;
             }
         }
         false
@@ -308,14 +368,14 @@ impl<'a> BehaviorVisitor<'a> {
     }
 
     fn arg_is_fetchlike(&self, arg: &Expression) -> bool {
-        if let Expression::CallExpression(c) = arg {
-            if let Some(name) = callee_name(&c.callee) {
-                let n = name.to_ascii_lowercase();
-                return n == "fetch"
-                    || n.ends_with(".get")
-                    || n.contains("request")
-                    || n.contains("download");
-            }
+        if let Expression::CallExpression(c) = arg
+            && let Some(name) = callee_name(&c.callee)
+        {
+            let n = name.to_ascii_lowercase();
+            return n == "fetch"
+                || n.ends_with(".get")
+                || n.contains("request")
+                || n.contains("download");
         }
         if let Expression::AwaitExpression(_) = arg {
             return true; // eval(await ...) -- common second-stage form
@@ -330,22 +390,25 @@ impl<'a> Visit<'a> for BehaviorVisitor<'a> {
             let n = name.as_str();
 
             // require('<module>')
-            if n == "require" {
-                if let Some(Argument::StringLiteral(s)) = it.arguments.first() {
-                    match s.value.as_str() {
-                        "http" | "https" | "net" | "dgram" | "dns" | "tls" | "node:http"
-                        | "node:https" | "node:net" | "node:dns" => self.b.net = true,
-                        "child_process" | "node:child_process" => self.b.subprocess = true,
-                        "fs" | "node:fs" | "fs/promises" => self.b.fs = true,
-                        "vm" | "node:vm" => self.b.code_exec = true,
-                        _ => {}
-                    }
+            if n == "require"
+                && let Some(Argument::StringLiteral(s)) = it.arguments.first()
+            {
+                match s.value.as_str() {
+                    "http" | "https" | "net" | "dgram" | "dns" | "tls" | "node:http"
+                    | "node:https" | "node:net" | "node:dns" => self.b.net = true,
+                    "child_process" | "node:child_process" => self.b.subprocess = true,
+                    "fs" | "node:fs" | "fs/promises" => self.b.fs = true,
+                    "vm" | "node:vm" => self.b.code_exec = true,
+                    _ => {}
                 }
             }
 
             // code-exec sinks
-            if n == "eval" || n.ends_with(".runInContext") || n.ends_with(".runInNewContext")
-                || n.ends_with("._compile") || n == "Function"
+            if n == "eval"
+                || n.ends_with(".runInContext")
+                || n.ends_with(".runInNewContext")
+                || n.ends_with("._compile")
+                || n == "Function"
             {
                 self.b.code_exec = true;
                 // decode-then-exec / fetch-then-exec via first arg
@@ -361,24 +424,28 @@ impl<'a> Visit<'a> for BehaviorVisitor<'a> {
 
             // network sinks
             let nl = n.to_ascii_lowercase();
-            if nl == "fetch"
+            if (nl == "fetch"
                 || nl.starts_with("axios")
                 || nl.ends_with(".request")
                 || nl.ends_with(".get")
                 || nl.ends_with(".post")
                 || nl.ends_with(".connect")
-                || nl.ends_with(".write") && self.b.net
+                || nl.ends_with(".write") && self.b.net)
+                && (nl == "fetch"
+                    || nl.starts_with("axios")
+                    || nl.ends_with(".request")
+                    || nl.ends_with(".connect"))
             {
-                if nl == "fetch" || nl.starts_with("axios") || nl.ends_with(".request")
-                    || nl.ends_with(".connect")
-                {
-                    self.b.net = true;
-                }
+                self.b.net = true;
             }
 
             // subprocess sinks
-            if n.ends_with(".exec") || n.ends_with(".execSync") || n.ends_with(".spawn")
-                || n.ends_with(".spawnSync") || n.ends_with(".fork") || n.ends_with(".execFile")
+            if n.ends_with(".exec")
+                || n.ends_with(".execSync")
+                || n.ends_with(".spawn")
+                || n.ends_with(".spawnSync")
+                || n.ends_with(".fork")
+                || n.ends_with(".execFile")
             {
                 self.b.subprocess = true;
             }
@@ -391,10 +458,10 @@ impl<'a> Visit<'a> for BehaviorVisitor<'a> {
             // whole-env capture: process.env passed as a call argument, or
             // JSON.stringify(process.env), Object.keys/entries/assign(process.env)
             for arg in &it.arguments {
-                if let Some(e) = arg_as_expr(arg) {
-                    if is_process_env(e) {
-                        self.b.env_whole = true;
-                    }
+                if let Some(e) = arg_as_expr(arg)
+                    && is_process_env(e)
+                {
+                    self.b.env_whole = true;
                 }
             }
         }
@@ -413,12 +480,11 @@ impl<'a> Visit<'a> for BehaviorVisitor<'a> {
                 }
             }
             // process.env itself (object position handled by callers / spreads)
-            if m.property.name == "env" {
-                if let Expression::Identifier(obj) = &m.object {
-                    if obj.name == "process" {
-                        self.b.env_read = true;
-                    }
-                }
+            if m.property.name == "env"
+                && let Expression::Identifier(obj) = &m.object
+                && obj.name == "process"
+            {
+                self.b.env_read = true;
             }
         }
         oxc::ast_visit::walk::walk_member_expression(self, it);

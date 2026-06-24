@@ -2,14 +2,13 @@
 //!
 //! Handles SRI (Subresource Integrity) verification using sha512/sha256/sha1.
 
-use anyhow::{bail, Context, Result};
+use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
 use sha2::{Digest, Sha256, Sha512};
-use std::io::Read;
-use std::path::Path;
-use tar::Archive;
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
+use std::path::Path;
+use tar::Archive;
 
 /// Verify tarball bytes against an SRI integrity string.
 ///
@@ -38,9 +37,7 @@ pub fn verify_integrity(data: &[u8], sri: &str) -> Result<()> {
     };
 
     if computed_b64 != expected_b64 {
-        bail!(
-            "integrity check failed: expected {algo}-{expected_b64}, got {algo}-{computed_b64}"
-        );
+        bail!("integrity check failed: expected {algo}-{expected_b64}, got {algo}-{computed_b64}");
     }
 
     Ok(())
@@ -62,10 +59,7 @@ pub fn extract_tarball(data: &[u8], dest: &Path) -> Result<()> {
         // Strip the first path component (npm uses "package/" but some tarballs
         // like @types/node use non-standard roots e.g. "node v20.19/").
         // All npm-compatible tools strip the first component regardless of name.
-        let relative = path
-            .components()
-            .skip(1)
-            .collect::<std::path::PathBuf>();
+        let relative = path.components().skip(1).collect::<std::path::PathBuf>();
 
         // Skip empty paths
         if relative.as_os_str().is_empty() {
@@ -151,4 +145,3 @@ fn base64_encode(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(data)
 }
-
