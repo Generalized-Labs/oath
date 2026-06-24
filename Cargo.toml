@@ -27,8 +27,8 @@ sha2 = "0.10"
 blake3 = "1"
 ed25519-dalek = "2"
 
-# HTTP
-reqwest = { version = "0.12", features = ["json", "stream", "gzip"] }
+# HTTP -- rustls-tls (not native-tls/OpenSSL) so Linux cross-compiles need no system OpenSSL
+reqwest = { version = "0.12", default-features = false, features = ["json", "stream", "gzip", "rustls-tls"] }
 axum = { version = "0.8", features = ["macros"] }
 
 # CLI
