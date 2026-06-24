@@ -23,7 +23,35 @@ pub struct ResolvedVersion<'a> {
 /// - A dist-tag: "latest", "next", "beta"
 /// - An exact version: "1.0.0"
 /// - A semver range: "^1.0.0", "~1.2.3", ">=1.0.0 <2.0.0", "1.x", "*"
+/// - An npm alias specifier: "npm:some-pkg@^1.0.0" (the version part is extracted)
 pub fn resolve_version<'a>(packument: &'a Packument, specifier: &str) -> Result<ResolvedVersion<'a>> {
+    // Strip npm: alias prefix (e.g. "npm:real-pkg@^1.0.0" -> "^1.0.0")
+    // This handles cases like aliased deps passed directly to resolve_version.
+    let specifier = if specifier.starts_with("npm:") {
+        let rest = &specifier[4..];
+        // Scoped: npm:@scope/pkg@version -> extract version after second @
+        if rest.starts_with('@') {
+            if let Some(at_pos) = rest[1..].find('@').map(|p| p + 1) {
+                &rest[at_pos + 1..]
+            } else {
+                "latest"
+            }
+        } else {
+            // Non-scoped: npm:pkg@version -> extract version after @
+            if let Some(at_pos) = rest.rfind('@') {
+                if at_pos > 0 {
+                    &rest[at_pos + 1..]
+                } else {
+                    "latest"
+                }
+            } else {
+                "latest"
+            }
+        }
+    } else {
+        specifier
+    };
+
     // First, check if it's a dist-tag
     if let Some(version) = packument.dist_tags.get(specifier) {
         if let Some(info) = packument.versions.get(version) {
@@ -211,5 +239,21 @@ mod tests {
         let p = make_packument(&["1.0.0", "1.1.0"], "1.1.0");
         let r = resolve_version(&p, "^2.0.0");
         assert!(r.is_err());
+    }
+
+    #[test]
+    fn test_npm_prefix_stripped() {
+        // npm:real-pkg@^1.0.0 should resolve using "^1.0.0" range only
+        let p = make_packument(&["1.0.0", "1.2.3", "2.0.0"], "2.0.0");
+        let r = resolve_version(&p, "npm:real-pkg@^1.0.0").unwrap();
+        assert_eq!(r.version, "1.2.3");
+    }
+
+    #[test]
+    fn test_caret_major_boundary() {
+        // ^20.0.0 must NOT match v21+
+        let p = make_packument(&["19.9.9", "20.0.0", "20.11.0", "21.0.0", "26.0.0"], "26.0.0");
+        let r = resolve_version(&p, "^20.0.0").unwrap();
+        assert_eq!(r.version, "20.11.0");
     }
 }

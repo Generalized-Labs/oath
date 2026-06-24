@@ -534,11 +534,22 @@ async fn cmd_install(
             continue;
         }
 
+        // Run scripts from the linked node_modules location so that optional platform
+        // packages (e.g. @esbuild/darwin-arm64) are resolvable via sibling node_modules.
+        // Fall back to the store dir if the linked path doesn't exist.
+        let install_name = node.alias.as_deref().unwrap_or(&node.name);
+        let linked_pkg_dir = cwd.join("node_modules").join(install_name);
+        let store_pkg_dir = store_path
+            .join(node.name.replace('/', "+"))
+            .join(&node.version);
+        let pkg_dir = if linked_pkg_dir.exists() {
+            linked_pkg_dir
+        } else {
+            store_pkg_dir
+        };
+
         // Trusted: run without prompting
         if trusted_deps.contains(&node.name) || yes_flag {
-            let pkg_dir = store_path
-                .join(node.name.replace('/', "+"))
-                .join(&node.version);
             if pkg_dir.exists() {
                 run_install_script(&node.name, &pkg_dir);
             }
@@ -547,9 +558,6 @@ async fn cmd_install(
 
         // --run-scripts: prompt for each (old behavior)
         if run_scripts {
-            let pkg_dir = store_path
-                .join(node.name.replace('/', "+"))
-                .join(&node.version);
             if !pkg_dir.exists() {
                 continue;
             }

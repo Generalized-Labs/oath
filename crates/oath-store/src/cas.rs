@@ -39,10 +39,24 @@ impl ContentStore {
     ) -> Result<PathBuf> {
         let pkg_store_dir = self.package_dir(name, version);
 
-        // If already stored, skip (content-addressable = idempotent)
+        // If already stored, validate layout before skipping
         if pkg_store_dir.exists() {
-            tracing::debug!("already in store: {name}@{version}");
-            return Ok(pkg_store_dir);
+            // Validate: if the store dir contains ONLY a single subdirectory and no files,
+            // the extraction was done with the old wrong logic (subdir not stripped).
+            // Delete and re-extract.
+            let entries: Vec<_> = std::fs::read_dir(&pkg_store_dir)?.collect();
+            let has_files = entries.iter().any(|e| {
+                e.as_ref().map(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false)).unwrap_or(false)
+            });
+            let has_only_subdirs = !entries.is_empty() && !has_files;
+            if has_only_subdirs {
+                // Bad extraction -- only subdirs, no files at root. Re-extract.
+                tracing::debug!("stale store entry detected for {name}@{version}, re-extracting");
+                std::fs::remove_dir_all(&pkg_store_dir)?;
+            } else {
+                tracing::debug!("already in store: {name}@{version}");
+                return Ok(pkg_store_dir);
+            }
         }
 
         // Create the store directory
@@ -57,9 +71,27 @@ impl ContentStore {
         Ok(pkg_store_dir)
     }
 
-    /// Check if a package is already in the store
+    /// Check if a package is already in the store (and valid)
     pub fn has_package(&self, name: &str, version: &str) -> bool {
-        self.package_dir(name, version).exists()
+        let dir = self.package_dir(name, version);
+        if !dir.exists() {
+            return false;
+        }
+        // Validate layout: if the dir contains ONLY subdirectories and no files at root,
+        // it was extracted with the old wrong logic (subdir not stripped). Treat as missing.
+        if let Ok(entries) = std::fs::read_dir(&dir) {
+            let entries: Vec<_> = entries.collect();
+            let has_files = entries.iter().any(|e| {
+                e.as_ref()
+                    .map(|e| e.file_type().map(|t| t.is_file()).unwrap_or(false))
+                    .unwrap_or(false)
+            });
+            let has_only_subdirs = !entries.is_empty() && !has_files;
+            if has_only_subdirs {
+                return false;
+            }
+        }
+        true
     }
 
     /// Root path of the store (for scanning)
