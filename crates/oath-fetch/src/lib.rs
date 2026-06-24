@@ -4,6 +4,7 @@
 //! Fully compatible with the npm registry HTTP protocol.
 
 pub mod client;
+pub mod npmrc;
 pub mod packument;
 pub mod resolve;
 pub mod tarball;
@@ -13,5 +14,6 @@ pub mod metadata;
 pub use metadata::{PackageMetadata, Maintainer, fetch_package_metadata};
 
 pub use client::RegistryClient;
+pub use npmrc::NpmrcConfig;
 pub use packument::{Packument, VersionInfo, DistInfo};
 pub use resolve::resolve_version;
