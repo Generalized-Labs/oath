@@ -1,6 +1,7 @@
 # oath
 
-A security-first npm/npx replacement. Faster. Safer. No surprises.
+A security-first replacement for **npm, npx, and bun** — it reads every dependency
+for malicious behavior before a line runs. Faster. Safer. No surprises.
 
 ## Install
 
@@ -16,12 +17,13 @@ brew install generalized-labs/tap/oath
 ## Why oath
 
 - **Script blocking by default** — postinstall scripts only run for packages you trust
-- **Behavioral analysis** — detects base64 payloads, dynamic require, env exfiltration at install time
+- **Behavioral analysis** — detects decode→exec payloads, env/secret exfiltration, install-script payloads at install time
+- **Trusts what's proven** — a package with 1M+ weekly downloads and no critical finding grades A, so household tools (prettier, react, lodash) aren't false-flagged; real supply-chain attacks still surface as critical decode→exec/exfil and are blocked
 - **Transparency log** — every install appended to `~/.oath/transparency.log`
 - **Faster** — 0.9s cold, 0.2s warm (abbreviated packuments, 5-min TTL cache, content-addressable store)
 - **Full npm compatibility** — workspaces, git deps, global install, publish, lifecycle scripts
 
-Detection is measured: see the [scanner threat model](docs/scanner-threat-model.md) for the false-positive rate (1.1%), recall (54.1% on 928 popular + 313 real-malware packages), and honest limits. Speed numbers are in [BENCHMARKS.md](BENCHMARKS.md).
+Detection is measured against a corpus of popular and real-malware packages — see the [scanner threat model](docs/scanner-threat-model.md) for the methodology, the false-positive/recall tradeoff, and honest limits. Speed numbers are in [BENCHMARKS.md](BENCHMARKS.md).
 
 ## Commands
 
