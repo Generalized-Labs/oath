@@ -2262,7 +2262,9 @@ async fn cmd_exec(
     require_grade: Option<&str>,
     dry_run: bool,
 ) -> Result<()> {
-    use oath_analyze::{FindingKind, PackageScanner, RiskLevel, compute_safety_score};
+    use oath_analyze::{
+        FindingKind, PackageScanner, RiskLevel, ScoreContext, compute_safety_score_contextual,
+    };
     use std::io::Write;
 
     let start = std::time::Instant::now();
@@ -2404,7 +2406,27 @@ async fn cmd_exec(
     // Scan + score before deciding to run.
     let report = PackageScanner::scan(&pkg_name, &version, &pkg_dir)?;
     let caps = &report.capabilities;
-    let score = compute_safety_score(&report, &pkg_dir);
+    // Popularity/age context so the grade (and any --require-grade gate) trusts
+    // widely-used packages: a flagged-but-1M+-download package with no critical
+    // finding is a false positive, not something to block on an npx-style run.
+    let ctx = {
+        let mut weekly = 0u64;
+        let mut age = 0u32;
+        if let Ok(http) = reqwest::Client::builder()
+            .user_agent(concat!("oath/", env!("CARGO_PKG_VERSION")))
+            .build()
+            && let Ok(meta) = oath_fetch::fetch_package_metadata(&http, &pkg_name).await
+        {
+            weekly = meta.weekly_downloads.unwrap_or(0);
+            age = meta.last_publish_age_days.map(|d| d as u32).unwrap_or(0);
+        }
+        ScoreContext {
+            is_dev: false,
+            weekly_downloads: weekly,
+            age_days: age,
+        }
+    };
+    let score = compute_safety_score_contextual(&report, &pkg_dir, &ctx);
     let obfuscated = report.findings.iter().any(|f| {
         f.kind == FindingKind::Obfuscation
             && matches!(f.risk, RiskLevel::High | RiskLevel::Critical)

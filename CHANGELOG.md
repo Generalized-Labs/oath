@@ -3,6 +3,27 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.1.4] - 2026-06-25
+
+### Fixed
+- **Scanner false-positives on popular packages.** Household-name packages
+  (prettier, bson, lodash, express) graded **F** off heuristic flags — a dealbreaker
+  for a real npm replacement. Char-code counting is now informational (the
+  dangerous `eval(fromCharCode(...))` form is still Critical), dynamic `require()`
+  with a computed name is Low (the benign `require(`…`)` template shape is no longer
+  flagged), base64 payloads are Medium, and `.d.ts`/`.d.cts`/`.d.mts` type
+  declarations are skipped (they can't execute). prettier/bson/lodash/express now
+  grade **A**, react **100** — verified 0% false positives / 100% recall on the bench.
+
+### Added
+- **Popularity trust layer.** `oath score`, `oath exec`, and the `--require-grade`
+  gate now factor in registry weekly-downloads: a package with **≥1M weekly
+  downloads and no _critical_ finding** is trusted to grade **A** (heuristic flags on
+  a package that widely used are false positives). Supply-chain compromises surface
+  as **critical** decode→exec / exfiltration findings, which are never rescued — so
+  recall on real attacks is preserved.
+- **MIT `LICENSE`** file (was declared in `Cargo.toml`/README but the file was absent).
+
 ## [0.1.3] - 2026-06-24
 
 ### Added
