@@ -10,7 +10,7 @@ version = "0.1.3"
 edition = "2024"
 license = "MIT"
 authors = ["Generalized Labs"]
-repository = "https://github.com/generalized-labs/oath"
+repository = "https://github.com/Generalized-Labs/oath"
 
 [workspace.dependencies]
 # Core

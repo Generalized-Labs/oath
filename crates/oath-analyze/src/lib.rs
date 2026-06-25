@@ -15,4 +15,6 @@ pub use analyzer::Analyzer;
 pub use behavior::{Behavior, Verdict};
 pub use report::{AnalysisReport, Capabilities, Finding, FindingKind, PackageRisk, RiskLevel};
 pub use scanner::PackageScanner;
-pub use score::{SafetyScore, ScoreFactor, compute_safety_score};
+pub use score::{
+    SafetyScore, ScoreContext, ScoreFactor, compute_safety_score, compute_safety_score_contextual,
+};

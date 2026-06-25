@@ -65,6 +65,14 @@ impl PackageScanner {
             if !matches!(ext, "js" | "mjs" | "cjs" | "ts" | "tsx") {
                 continue;
             }
+            // .d.ts/.d.cts/.d.mts are TYPE DECLARATIONS -- no executable code, so they
+            // can't be malware, but their JSDoc comments + type signatures trip the
+            // string heuristics (the bson ".d.ts comment -> crypto mining" FP). Skip.
+            if let Some(name) = path.file_name().and_then(|n| n.to_str())
+                && (name.ends_with(".d.ts") || name.ends_with(".d.cts") || name.ends_with(".d.mts"))
+            {
+                continue;
+            }
 
             // Skip known non-threatening paths
             let path_str = path.to_string_lossy();
@@ -223,16 +231,20 @@ fn detect_obfuscation(source: &str, relative_path: &str) -> Vec<Finding> {
         }
     }
 
-    // 3. Char code abuse: >10 instances of String.fromCharCode or charCodeAt in non-test code
+    // 3. Char-code building: many String.fromCharCode in non-test code. Read-only
+    //    charCodeAt and plain fromCharCode are ubiquitous in legit parsers,
+    //    formatters and encoders (prettier alone has dozens), so this is
+    //    INFORMATIONAL only -- it never penalizes the score. The genuinely
+    //    dangerous form, eval/require(String.fromCharCode(...)), is caught as
+    //    Critical in detect_advanced_obfuscation below.
     if !relative_path.contains("test") && !relative_path.contains("spec") {
-        let from_char_code_count =
-            source.matches("String.fromCharCode").count() + source.matches("charCodeAt").count();
-        if from_char_code_count > 10 {
+        let from_char_code_count = source.matches("String.fromCharCode").count();
+        if from_char_code_count > 25 {
             findings.push(Finding {
                 kind: FindingKind::Obfuscation,
-                risk: RiskLevel::High,
+                risk: RiskLevel::Info,
                 message: format!(
-                    "Char code abuse: {} instances of String.fromCharCode/charCodeAt",
+                    "Builds {} strings from char codes (informational)",
                     from_char_code_count
                 ),
                 file: relative_path.to_string(),
@@ -336,7 +348,11 @@ pub fn detect_advanced_obfuscation(source: &str, relative_path: &str) -> Vec<Fin
     for _ in 0..b64_count {
         findings.push(Finding {
             kind: FindingKind::Obfuscation,
-            risk: RiskLevel::High,
+            // Decoding a hardcoded base64 blob is moderately suspicious, but legit
+            // packages embed base64 (wasm, fonts, certs, source maps), so Medium --
+            // not High. The dangerous form, eval/Function/require(atob(...)), is
+            // Critical via the decode-then-execute combos below.
+            risk: RiskLevel::Medium,
             message:
                 "Base64 payload detected: Buffer.from(..., 'base64') or atob() with long string"
                     .to_string(),
@@ -346,13 +362,17 @@ pub fn detect_advanced_obfuscation(source: &str, relative_path: &str) -> Vec<Fin
         });
     }
 
-    // 2. Dynamic require obfuscation
-    // require([a,b].join('')), require('child_' + 'process'), template literals in require
+    // 2. Dynamic require with a computed module name. `require(`./x/${y}`)` template
+    //    paths and plugin loaders are extremely common in legit code (prettier loads
+    //    its plugins this way), so on their own these are a WEAK (Low) signal -- we
+    //    drop the benign template-literal shape entirely and keep only the classic
+    //    name-splitting shapes (array-join / string-concat) used to evade scanners.
+    //    The high-signal form -- require() of a DECODED string -- is Critical in the
+    //    decode-then-execute combos below.
     let dyn_req_patterns: &[&str] = &[
-        r"require\s*\(\s*\[",          // require([...].join)
-        r"require\s*\('[^']*'\s*\+",   // require('str' + ...)
+        r"require\s*\(\s*\[", // require([...].join) -- name assembled from an array
+        r"require\s*\('[^']*'\s*\+", // require('str' + ...) -- split string name
         r#"require\s*\("[^"]*"\s*\+"#, // require("str" + ...)
-        r"require\s*\(`",              // require(`template`)
     ];
     for pat in dyn_req_patterns {
         let re = Regex::new(pat).unwrap();
@@ -360,8 +380,8 @@ pub fn detect_advanced_obfuscation(source: &str, relative_path: &str) -> Vec<Fin
         for _ in 0..count {
             findings.push(Finding {
                 kind: FindingKind::Obfuscation,
-                risk: RiskLevel::High,
-                message: "Dynamic require obfuscation: require() called with concatenated/computed string".to_string(),
+                risk: RiskLevel::Low,
+                message: "Dynamic require with a computed/concatenated module name".to_string(),
                 file: relative_path.to_string(),
                 line: 1,
                 snippet: None,

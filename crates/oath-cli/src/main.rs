@@ -2576,7 +2576,7 @@ async fn cmd_exec(
 // ---- SCORE ------------------------------------------------------------------
 
 async fn cmd_score(package: &str) -> Result<()> {
-    use oath_analyze::{PackageScanner, compute_safety_score};
+    use oath_analyze::{PackageScanner, ScoreContext, compute_safety_score_contextual};
 
     let (pkg_name, pkg_version) = parse_package_spec(package);
 
@@ -2605,7 +2605,25 @@ async fn cmd_score(package: &str) -> Result<()> {
 
     // Scan
     let report = PackageScanner::scan(&pkg_name, &version, &pkg_dir)?;
-    let score = compute_safety_score(&report, &pkg_dir);
+    // Popularity/age context (best-effort): lets the trust layer clear heuristic
+    // false-positives on very widely-used packages (prettier, react, ...). A
+    // genuinely compromised popular package still grades down via CRITICAL findings.
+    let ctx = {
+        let mut weekly = 0u64;
+        let mut age = 0u32;
+        if let Ok(http) = reqwest::Client::builder().user_agent("oath/0.1.3").build()
+            && let Ok(meta) = oath_fetch::fetch_package_metadata(&http, &pkg_name).await
+        {
+            weekly = meta.weekly_downloads.unwrap_or(0);
+            age = meta.last_publish_age_days.map(|d| d as u32).unwrap_or(0);
+        }
+        ScoreContext {
+            is_dev: false,
+            weekly_downloads: weekly,
+            age_days: age,
+        }
+    };
+    let score = compute_safety_score_contextual(&report, &pkg_dir, &ctx);
 
     // Display
     let grade_color = match score.grade {

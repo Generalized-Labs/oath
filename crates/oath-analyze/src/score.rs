@@ -109,16 +109,31 @@ pub fn compute_safety_score_contextual(
         }
     }
 
-    // Popularity trust: >1M weekly downloads + >1 year old = small boost
-    if ctx.weekly_downloads > 1_000_000 && ctx.age_days > 365 {
-        let boost = 5i16;
-        score.score = (score.score as i32 + boost as i32).min(100) as u8;
-        score.grade = score_to_grade(score.score);
-        score.factors.push(ScoreFactor {
-            name: "established_package".into(),
-            weight: boost,
-            description: "High downloads + established (>1yr)".into(),
-        });
+    // Popularity trust: a very widely-used package (>=1M weekly downloads) whose
+    // only flags are heuristic -- i.e. NO critical real-malware finding -- is almost
+    // certainly a false positive (a code formatter using fromCharCode, a DB driver
+    // with a prepare script). Supply-chain compromises of popular packages surface
+    // as CRITICAL decode->exec / exfiltration findings, which we deliberately never
+    // rescue, so recall on real attacks is preserved.
+    let has_critical = report
+        .findings
+        .iter()
+        .any(|f| matches!(f.risk, RiskLevel::Critical));
+    if ctx.weekly_downloads >= 1_000_000 && !has_critical {
+        let floor = 90u8; // grade A
+        if score.score < floor {
+            let recovered = floor as i16 - score.score as i16;
+            score.score = floor;
+            score.grade = score_to_grade(score.score);
+            score.factors.push(ScoreFactor {
+                name: "trusted_popular".into(),
+                weight: recovered,
+                description: format!(
+                    "{}M+ weekly downloads, no critical findings (heuristic flags treated as false positives)",
+                    ctx.weekly_downloads / 1_000_000
+                ),
+            });
+        }
     }
 
     // Suspicion boost: <100 weekly downloads + <30 days old = extra penalty
