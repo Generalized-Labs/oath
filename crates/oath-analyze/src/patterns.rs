@@ -7,7 +7,7 @@
 //! - 2024-2025 attack vectors: crypto mining, credential harvest, second-stage
 //!   downloads, DNS exfil, conditional payloads, postinstall abuse
 //!
-//! Current pattern count: 28 (plus slopsquatting, which is a metadata check
+//! Current pattern count: 29 (plus slopsquatting, which is a metadata check
 //! handled separately in the name-similarity analyzer, not a string scan)
 
 use crate::report::{FindingKind, RiskLevel};
@@ -250,13 +250,18 @@ pub static PATTERNS: &[Pattern] = &[
         id: "exfil-dns",
         kind: FindingKind::DataExfiltration,
         risk: RiskLevel::Critical,
-        description: "DNS exfiltration pattern detected",
+        description: "Hardcoded DNS-tunnel / out-of-band exfiltration domain",
+        // Bare dns.lookup/dns.resolve are normal operations (DB drivers resolve
+        // mongodb+srv SRV records, networking libs resolve hosts) -- flagging
+        // them as Critical false-positives on legitimate infrastructure packages.
+        // Real DNS exfil is caught by the `dns-exfil` pattern (dns + data encoding)
+        // and by these attacker-controlled tunnel domains.
         strings: &[
-            "dns.lookup(",
-            "dns.resolve(",
             ".nip.io",
             ".burpcollaborator",
             ".ngrok.io",
+            ".oast.",
+            ".dnslog.",
         ],
     },
     // ---- CRYPTO MINING ----
@@ -299,8 +304,6 @@ pub static PATTERNS: &[Pattern] = &[
             ".then(r => eval(",
             "eval(await fetch",
             "eval(await res",
-            // download to temp dir then require
-            "/tmp/",
         ],
     },
     // ---- CREDENTIAL HARVESTING ----
@@ -308,20 +311,35 @@ pub static PATTERNS: &[Pattern] = &[
         id: "credential-harvest",
         kind: FindingKind::CredentialHarvest,
         risk: RiskLevel::Critical,
-        description: "Reads SSH keys, cloud credentials, browser cookies, or registry tokens",
+        description: "Reads SSH private keys, browser cookies, or the OS keychain",
+        // Reserved for secrets a legitimate package has no reason to touch.
         strings: &[
             ".ssh/id_rsa",
             ".ssh/id_ed25519",
+            ".ssh/id_dsa",
+            "Library/Application Support/Google/Chrome",
+            "Login Data",
+            "keychain",
+        ],
+    },
+    // ---- CLOUD / CI CREDENTIAL ACCESS (capability, not an attack by itself) ----
+    // Cloud SDKs, CI tooling, and auth libraries legitimately reference these, so
+    // this is High (notable), not Critical. Exfiltrating them is what the exfil-*
+    // patterns flag as Critical; the popularity trust floor rescues well-known libs.
+    Pattern {
+        id: "cloud-credential-access",
+        kind: FindingKind::CredentialHarvest,
+        risk: RiskLevel::High,
+        description: "References cloud / CI credential paths or tokens (AWS, GitHub, npm)",
+        strings: &[
             ".aws/credentials",
             ".aws/config",
-            "Library/Application Support/Google/Chrome",
-            "npm_token",
-            "NPM_TOKEN",
             "AWS_ACCESS_KEY_ID",
             "AWS_SECRET_ACCESS_KEY",
             "GITHUB_TOKEN",
+            "npm_token",
+            "NPM_TOKEN",
             ".npmrc",
-            "keychain",
         ],
     },
     // ---- DATA EXFILTRATION: ENV OVER NETWORK ----

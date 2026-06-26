@@ -12,6 +12,13 @@ license = "MIT"
 authors = ["Generalized Labs"]
 repository = "https://github.com/Generalized-Labs/oath"
 
+# Smaller release binary; opt-level stays at the release default (3) so install/
+# scan throughput is unchanged.
+[profile.release]
+strip = true
+lto = "thin"
+codegen-units = 1
+
 [workspace.dependencies]
 # Core
 tokio = { version = "1", features = ["full"] }

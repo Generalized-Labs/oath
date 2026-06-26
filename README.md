@@ -14,6 +14,13 @@ Or via Homebrew:
 brew install generalized-labs/tap/oath
 ```
 
+Or from source (Rust 1.85+):
+```sh
+git clone https://github.com/Generalized-Labs/oath && cd oath
+cargo build --release        # binary at target/release/oath
+cargo test --workspace       # run the test suite
+```
+
 ## Why oath
 
 - **Script blocking by default** — postinstall scripts only run for packages you trust
