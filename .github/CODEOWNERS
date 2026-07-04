@@ -1,0 +1,7 @@
+# Update this team slug if the GitHub organization uses a different owner team.
+* @Generalized-Labs/oath-maintainers
+.github/workflows/ @Generalized-Labs/oath-maintainers
+install.sh @Generalized-Labs/oath-maintainers
+crates/oath-fetch/ @Generalized-Labs/oath-maintainers
+crates/oath-store/ @Generalized-Labs/oath-maintainers
+crates/oath-cli/ @Generalized-Labs/oath-maintainers

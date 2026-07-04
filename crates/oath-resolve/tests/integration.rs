@@ -2,7 +2,7 @@
 
 use oath_fetch::RegistryClient;
 use oath_resolve::resolver::ResolveOptions;
-use oath_resolve::{Lockfile, Resolver};
+use oath_resolve::{LOCKFILE_VERSION, Lockfile, Resolver};
 use std::collections::HashMap;
 
 #[tokio::test]
@@ -99,8 +99,10 @@ async fn test_resolve_and_write_lockfile() {
     let mut deps = HashMap::new();
     deps.insert("is-number".to_string(), "^7.0.0".to_string());
 
-    let graph = resolver.resolve(&deps, &HashMap::new()).await.unwrap();
-    let lockfile = Lockfile::from_graph(&graph, "test-project", "1.0.0");
+    let dev_deps = HashMap::new();
+    let graph = resolver.resolve(&deps, &dev_deps).await.unwrap();
+    let lockfile =
+        Lockfile::from_graph_with_manifest(&graph, "test-project", "1.0.0", &deps, &dev_deps);
 
     // Write to temp file
     let tmp = tempfile::NamedTempFile::new().unwrap();
@@ -108,10 +110,12 @@ async fn test_resolve_and_write_lockfile() {
 
     // Read back
     let loaded = Lockfile::read(tmp.path()).unwrap();
-    assert_eq!(loaded.lockfile_version, 1);
+    assert_eq!(loaded.lockfile_version, LOCKFILE_VERSION);
     assert_eq!(loaded.name, "test-project");
     assert_eq!(loaded.package_count(), 1);
     assert!(loaded.is_locked("is-number", "7.0.0"));
+    assert_eq!(loaded.roots, vec!["is-number@7.0.0"]);
+    assert!(loaded.matches_manifest(&deps, &dev_deps));
 
     let content = std::fs::read_to_string(tmp.path()).unwrap();
     println!("lockfile:\n{content}");

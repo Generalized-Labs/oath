@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use clap::{Parser, Subcommand};
 use std::collections::{BTreeMap, HashMap, HashSet};
+use std::ffi::OsStr;
 use std::path::PathBuf;
 use std::sync::Arc;
 use std::time::Instant;
@@ -11,11 +12,12 @@ use rayon::prelude::*;
 use oath_analyze::{PackageScanner, RiskLevel};
 use oath_core::policy::OathPolicy;
 use oath_fetch::RegistryClient;
-use oath_resolve::Lockfile;
-use oath_resolve::graph::PeerResolution;
+use oath_resolve::git::git_cache_file_name;
+use oath_resolve::graph::{DepNode, PeerResolution};
 use oath_resolve::resolver::{ResolveOptions, Resolver};
+use oath_resolve::{DepGraph, Lockfile};
 use oath_store::cas::ContentStore;
-use oath_store::linker::Linker;
+use oath_store::linker::{Linker, validate_install_name};
 use oath_workspace::{WorkspaceRoot, detect_workspace_root};
 
 mod prompts;
@@ -183,12 +185,8 @@ async fn main() -> Result<()> {
             )
             .await?;
         }
-        Commands::Add {
-            package,
-            dev,
-            yes: _,
-        } => {
-            cmd_add(&package, dev).await?;
+        Commands::Add { package, dev, yes } => {
+            cmd_add(&package, dev, yes).await?;
         }
         Commands::Run { script, args } => {
             cmd_run(script.as_deref(), &args)?;
@@ -203,7 +201,7 @@ async fn main() -> Result<()> {
             cmd_scan(production, verbose).await?;
         }
         Commands::Ci => {
-            cmd_install(vec![], false, false, true, false, false, false, true, None).await?;
+            cmd_ci().await?;
         }
         Commands::Perms { package } => {
             cmd_perms(&package)?;
@@ -285,6 +283,10 @@ async fn cmd_install(
         return cmd_install_global(packages, dry_run).await;
     }
 
+    if frozen_lockfile && !packages.is_empty() {
+        anyhow::bail!("cannot add packages with --frozen-lockfile/--ci");
+    }
+
     // ---- Frozen lockfile check (--frozen-lockfile / --ci) -------------------
     if frozen_lockfile && !PathBuf::from("oath-lock.json").exists() {
         anyhow::bail!("no lockfile found, run oath install first");
@@ -304,12 +306,6 @@ async fn cmd_install(
             return cmd_install_workspace(ws, dry_run, run_audit, yes_flag, run_scripts).await;
         }
         // If specific packages are listed, fall through to normal install
-    }
-
-    // Root project's own preinstall (trusted, runs like npm/bun) -- only on a
-    // plain `oath install` of the project, not when adding specific packages.
-    if packages.is_empty() {
-        run_root_lifecycle("preinstall");
     }
 
     // ---- Single-package install ---------------------------------------------
@@ -350,21 +346,15 @@ async fn cmd_install(
 
     let total_direct = deps.len() + dev_deps.len();
 
-    // Fast path: if lockfile exists and all store entries are present, skip resolution
+    // Fast path: if lockfile exists, matches package.json, and all store entries
+    // are present, skip registry resolution.
     let lock_path = PathBuf::from("oath-lock.json");
     let graph = if lock_path.exists() && packages.is_empty() {
         // Try to use lockfile directly
         let lockfile = Lockfile::read(&lock_path)?;
         let store_check = ContentStore::default_store()?;
-        let all_cached = lockfile.packages.iter().all(|(key, entry)| {
-            let name = if let Some(at_pos) = key.rfind('@') {
-                &key[..at_pos]
-            } else {
-                key.as_str()
-            };
-            store_check.has_package(name, &entry.version)
-        });
-        if all_cached && !lockfile.packages.is_empty() {
+        let all_cached = lockfile_all_cached(&lockfile, &store_check);
+        if lockfile.matches_manifest(&deps, &dev_deps) && all_cached {
             println!(
                 "oath: lockfile up-to-date ({} packages)",
                 lockfile.packages.len()
@@ -415,9 +405,29 @@ async fn cmd_install(
         g
     };
 
+    let lockfile = Lockfile::from_graph_with_manifest(
+        &graph,
+        &project_name,
+        &project_version,
+        &deps,
+        &dev_deps,
+    );
+    if frozen_lockfile {
+        let existing = Lockfile::read(&lock_path)?;
+        if !lockfiles_match_for_frozen(&existing, &lockfile) {
+            anyhow::bail!("lockfile would be modified, refusing (--frozen-lockfile)");
+        }
+    }
+
     if dry_run {
         println!("  (dry run, skipping download and link)");
         return Ok(());
+    }
+
+    // Root project's own preinstall (trusted, runs like npm/bun) -- only on a
+    // plain `oath install` of the project, not when adding specific packages.
+    if packages.is_empty() {
+        run_root_lifecycle("preinstall");
     }
 
     // Download -- parallel with JoinSet
@@ -425,18 +435,7 @@ async fn cmd_install(
     let store = Arc::new(ContentStore::default_store()?);
     let client = Arc::new(RegistryClient::default_client()?);
 
-    let mut to_download = vec![];
-    let mut cached = 0usize;
-    for node in graph.nodes.values() {
-        if store.has_package(&node.name, &node.version) {
-            cached += 1;
-        } else {
-            to_download.push(node.clone());
-        }
-    }
-
-    let mut downloaded = 0usize;
-    let mut download_bytes = 0u64;
+    let (to_download, cached) = missing_store_nodes(&graph, &store);
 
     // ---- Minimum release age (supply-chain cooldown) ------------------------
     // Block newly-added versions published more recently than --min-age. Only
@@ -517,56 +516,10 @@ async fn cmd_install(
         }
     }
 
-    if !to_download.is_empty() {
-        let mut set: JoinSet<Result<(String, String, Vec<u8>)>> = JoinSet::new();
-
-        for node in to_download {
-            let client = Arc::clone(&client);
-            let resolved = node.resolved.clone();
-            let integrity = node.integrity.clone();
-            let name = node.name.clone();
-            let version = node.version.clone();
-            set.spawn(async move {
-                // For git dependencies, the resolved URL is git+https:// or similar.
-                // Try to find the cached tarball from the git cache directory.
-                if resolved.starts_with("git+")
-                    || resolved.starts_with("github:")
-                    || resolved.starts_with("gitlab:")
-                    || resolved.starts_with("bitbucket:")
-                {
-                    let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-                    let safe_name = name.replace('/', "+");
-                    let cache_file = std::path::PathBuf::from(&home)
-                        .join(".oath")
-                        .join("git-cache")
-                        .join(format!("{}-{}.tgz", safe_name, version));
-                    if cache_file.exists() {
-                        let data = std::fs::read(&cache_file).with_context(|| {
-                            format!("reading git cache {}", cache_file.display())
-                        })?;
-                        return Ok((name, version, data));
-                    }
-                    anyhow::bail!(
-                        "git dep {name}@{version} not in cache and no tarball URL available"
-                    );
-                }
-                let data = client
-                    .fetch_tarball(&resolved, integrity.as_deref())
-                    .await
-                    .with_context(|| format!("downloading {name}@{version}"))?;
-                Ok((name, version, data))
-            });
-        }
-
-        while let Some(res) = set.join_next().await {
-            let (name, version, data) = res??;
-            download_bytes += data.len() as u64;
-            let tmp = tempfile::tempdir()?;
-            oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
-            store.store_package(&name, &version, tmp.path())?;
-            downloaded += 1;
-        }
-    }
+    let download_summary =
+        download_missing_nodes(to_download, Arc::clone(&store), Arc::clone(&client)).await?;
+    let downloaded = download_summary.downloaded;
+    let download_bytes = download_summary.bytes;
 
     let download_time = download_start.elapsed();
     if downloaded > 0 {
@@ -595,20 +548,7 @@ async fn cmd_install(
     );
 
     // Write lockfile
-    let lockfile = Lockfile::from_graph(&graph, &project_name, &project_version);
-    if frozen_lockfile {
-        // Compare new lockfile with existing; error if they differ
-        let existing_content =
-            std::fs::read_to_string("oath-lock.json").context("failed to read oath-lock.json")?;
-        let new_content = serde_json::to_string_pretty(&lockfile)?;
-        // Parse both to compare semantically (ignore key ordering differences)
-        let existing_val: serde_json::Value = serde_json::from_str(&existing_content)
-            .context("failed to parse existing oath-lock.json")?;
-        let new_val: serde_json::Value = serde_json::from_str(&new_content)?;
-        if existing_val != new_val {
-            anyhow::bail!("lockfile would be modified, refusing (--frozen-lockfile)");
-        }
-    } else {
+    if !frozen_lockfile {
         lockfile.write(&PathBuf::from("oath-lock.json"))?;
     }
 
@@ -628,15 +568,12 @@ async fn cmd_install(
             pkg_json[dep_key] = serde_json::json!({});
         }
         for pkg_name in deps.keys() {
-            // Find resolved version from graph
-            let resolved_version = graph
-                .nodes
-                .values()
-                .find(|n| &n.name == pkg_name)
-                .map(|n| n.version.clone())
-                .unwrap_or_else(|| "0.0.0".to_string());
-            let version_range = format!("^{}", resolved_version);
-            pkg_json[dep_key][pkg_name] = serde_json::Value::String(version_range);
+            let requested_spec = deps.get(pkg_name).map(String::as_str).unwrap_or("latest");
+            pkg_json[dep_key][pkg_name] = serde_json::Value::String(dependency_manifest_spec(
+                pkg_name,
+                requested_spec,
+                &graph,
+            ));
         }
         std::fs::write("package.json", serde_json::to_string_pretty(&pkg_json)?)?;
     }
@@ -674,7 +611,6 @@ async fn cmd_install(
     // -- Install script permission prompts ------------------------------------
     // Load policy (project-local oath-policy.toml + global ~/.oath/policy.toml)
     let policy = OathPolicy::load();
-    let store_path = store.store_path();
 
     let mut scripts_blocked = 0;
     for node in graph.nodes.values() {
@@ -696,9 +632,7 @@ async fn cmd_install(
         // Fall back to the store dir if the linked path doesn't exist.
         let install_name = node.alias.as_deref().unwrap_or(&node.name);
         let linked_pkg_dir = cwd.join("node_modules").join(install_name);
-        let store_pkg_dir = store_path
-            .join(node.name.replace('/', "+"))
-            .join(&node.version);
+        let store_pkg_dir = store.package_dir(&node.name, &node.version);
         let pkg_dir = if linked_pkg_dir.exists() {
             linked_pkg_dir
         } else {
@@ -838,6 +772,70 @@ async fn cmd_install(
     let project_path = std::env::current_dir()
         .map(|p| p.to_string_lossy().to_string())
         .unwrap_or_default();
+    let pkg_entries: Vec<(String, String, Option<String>)> = graph
+        .nodes
+        .values()
+        .map(|n| (n.name.clone(), n.version.clone(), n.integrity.clone()))
+        .collect();
+    if let Ok(logger) = oath_transparency::TransparencyLogger::default_logger() {
+        let _ = logger.log(&project_path, &pkg_entries, total_time.as_millis() as u64);
+    }
+
+    Ok(())
+}
+
+// ---- CI ---------------------------------------------------------------------
+
+async fn cmd_ci() -> Result<()> {
+    let start = Instant::now();
+    let lock_path = PathBuf::from("oath-lock.json");
+    if !lock_path.exists() {
+        anyhow::bail!("no lockfile found, run oath install first");
+    }
+
+    let pkg = read_package_json()?;
+    let deps = extract_deps(&pkg, "dependencies");
+    let dev_deps = extract_deps(&pkg, "devDependencies");
+    let lockfile = Lockfile::read(&lock_path)?;
+    if !lockfile.matches_manifest(&deps, &dev_deps) {
+        anyhow::bail!("package.json does not match oath-lock.json, run oath install first");
+    }
+
+    let graph = lockfile.to_graph();
+    let store = Arc::new(ContentStore::default_store()?);
+    let client = Arc::new(RegistryClient::default_client()?);
+    let (to_download, cached) = missing_store_nodes(&graph, &store);
+    let download_summary =
+        download_missing_nodes(to_download, Arc::clone(&store), Arc::clone(&client)).await?;
+    if download_summary.downloaded > 0 {
+        println!(
+            "  downloaded {} new ({})",
+            download_summary.downloaded,
+            format_bytes(download_summary.bytes)
+        );
+    }
+    if cached > 0 {
+        println!("  {} already cached", cached);
+    }
+
+    let nm_dir = PathBuf::from("node_modules");
+    if nm_dir.exists() || nm_dir.symlink_metadata().is_ok() {
+        if nm_dir.is_symlink() || nm_dir.is_file() {
+            std::fs::remove_file(&nm_dir).context("failed to clean node_modules")?;
+        } else {
+            std::fs::remove_dir_all(&nm_dir).context("failed to clean node_modules")?;
+        }
+    }
+
+    let cwd = std::env::current_dir()?;
+    let linker = Linker::new((*store).clone());
+    let link_result = linker.link_all(&graph, &cwd)?;
+    println!("  linked {} packages", link_result.linked);
+
+    let total_time = start.elapsed();
+    println!("  done in {:.1}s", total_time.as_secs_f64());
+
+    let project_path = cwd.to_string_lossy().to_string();
     let pkg_entries: Vec<(String, String, Option<String>)> = graph
         .nodes
         .values()
@@ -994,6 +992,7 @@ async fn cmd_install_workspace(
     let mut ws_symlinks = 0usize;
     for pkg in &ws.packages {
         let install_name = &pkg.name;
+        validate_install_name(install_name)?;
         let symlink_path = nm_dir.join(install_name);
 
         // Handle scoped packages: create @scope dir
@@ -1037,7 +1036,13 @@ async fn cmd_install_workspace(
     );
 
     // Write lockfile at workspace root
-    let lockfile = Lockfile::from_graph(&graph, "workspace", "0.0.0");
+    let lockfile = Lockfile::from_graph_with_manifest(
+        &graph,
+        "workspace",
+        "0.0.0",
+        &external_deps,
+        &empty_dev_deps,
+    );
     lockfile.write(&ws.root.join("oath-lock.json"))?;
 
     // -- Peer dependency warnings ---------------------------------------------
@@ -1237,12 +1242,10 @@ async fn cmd_scan(production: bool, verbose: bool) -> Result<()> {
 
 fn cmd_perms(package: &str) -> Result<()> {
     let store = ContentStore::default_store()?;
-    let store_path = store.store_path();
 
     // Store layout: store/{name}/{version}/
     // For scoped packages @scope/name, stored as @scope+name
-    let safe_name = package.replace('/', "+");
-    let pkg_name_dir = store_path.join(&safe_name);
+    let pkg_name_dir = store.package_name_dir(package);
 
     if !pkg_name_dir.exists() {
         println!("oath: package '{package}' not found in store (run `oath install` first)");
@@ -1303,7 +1306,7 @@ fn cmd_perms(package: &str) -> Result<()> {
 
 // ---- ADD --------------------------------------------------------------------
 
-async fn cmd_add(package: &str, dev: bool) -> Result<()> {
+async fn cmd_add(package: &str, dev: bool, yes: bool) -> Result<()> {
     let (name, spec) = parse_package_spec(package);
     let mut pkg: serde_json::Value = if PathBuf::from("package.json").exists() {
         read_package_json()?
@@ -1328,7 +1331,7 @@ async fn cmd_add(package: &str, dev: bool) -> Result<()> {
 
     std::fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
     println!("oath: added {name}@{} ({key})", resolved.version);
-    cmd_install(vec![], false, false, true, false, false, false, false, None).await
+    cmd_install(vec![], false, false, true, yes, false, false, false, None).await
 }
 
 // ---- RUN --------------------------------------------------------------------
@@ -1607,9 +1610,7 @@ fn cmd_why(package: &str) -> Result<()> {
 
         // Scan from store for capabilities/risk
         let store = ContentStore::default_store()?;
-        let store_path = store.store_path();
-        let safe_name = name.replace('/', "+");
-        let pkg_dir = store_path.join(&safe_name).join(version);
+        let pkg_dir = store.package_dir(name, version);
 
         if pkg_dir.exists() {
             match PackageScanner::scan(name, version, &pkg_dir) {
@@ -1800,7 +1801,6 @@ fn cmd_verify() -> Result<()> {
     };
 
     let store = ContentStore::default_store()?;
-    let store_path = store.store_path();
     let total = packages.len();
     println!("  checking {total} packages...");
 
@@ -1826,8 +1826,7 @@ fn cmd_verify() -> Result<()> {
             continue;
         }
 
-        let safe_name = name.replace('/', "+");
-        let pkg_dir = store_path.join(&safe_name).join(version);
+        let pkg_dir = store.package_dir(name, version);
 
         if !pkg_dir.exists() {
             println!("  MISSING:  {key}");
@@ -2097,6 +2096,102 @@ fn extract_deps(pkg: &serde_json::Value, key: &str) -> HashMap<String, String> {
         .unwrap_or_default()
 }
 
+fn lockfiles_match_for_frozen(existing: &Lockfile, generated: &Lockfile) -> bool {
+    match (
+        serde_json::to_value(existing),
+        serde_json::to_value(generated),
+    ) {
+        (Ok(existing), Ok(generated)) => existing == generated,
+        _ => false,
+    }
+}
+
+fn lockfile_all_cached(lockfile: &Lockfile, store: &ContentStore) -> bool {
+    lockfile.packages.iter().all(|(key, entry)| {
+        let name = if let Some(at_pos) = key.rfind('@') {
+            &key[..at_pos]
+        } else {
+            key.as_str()
+        };
+        store.has_package(name, &entry.version)
+    })
+}
+
+fn missing_store_nodes(graph: &DepGraph, store: &ContentStore) -> (Vec<DepNode>, usize) {
+    let mut to_download = Vec::new();
+    let mut cached = 0usize;
+    for node in graph.nodes.values() {
+        if store.has_package(&node.name, &node.version) {
+            cached += 1;
+        } else {
+            to_download.push(node.clone());
+        }
+    }
+    (to_download, cached)
+}
+
+#[derive(Debug, Default)]
+struct DownloadSummary {
+    downloaded: usize,
+    bytes: u64,
+}
+
+async fn download_missing_nodes(
+    to_download: Vec<DepNode>,
+    store: Arc<ContentStore>,
+    client: Arc<RegistryClient>,
+) -> Result<DownloadSummary> {
+    let mut summary = DownloadSummary::default();
+    if to_download.is_empty() {
+        return Ok(summary);
+    }
+
+    let mut set: JoinSet<Result<(String, String, Vec<u8>)>> = JoinSet::new();
+    for node in to_download {
+        let client = Arc::clone(&client);
+        let resolved = node.resolved.clone();
+        let integrity = node.integrity.clone();
+        let name = node.name.clone();
+        let version = node.version.clone();
+        set.spawn(async move {
+            if resolved.starts_with("git+")
+                || resolved.starts_with("github:")
+                || resolved.starts_with("gitlab:")
+                || resolved.starts_with("bitbucket:")
+            {
+                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+                let cache_file = std::path::PathBuf::from(&home)
+                    .join(".oath")
+                    .join("git-cache")
+                    .join(git_cache_file_name(&name, &version));
+                if cache_file.exists() {
+                    let data = std::fs::read(&cache_file)
+                        .with_context(|| format!("reading git cache {}", cache_file.display()))?;
+                    return Ok((name, version, data));
+                }
+                anyhow::bail!("git dep {name}@{version} not in cache and no tarball URL available");
+            }
+
+            let data = client
+                .fetch_tarball(&resolved, integrity.as_deref())
+                .await
+                .with_context(|| format!("downloading {name}@{version}"))?;
+            Ok((name, version, data))
+        });
+    }
+
+    while let Some(res) = set.join_next().await {
+        let (name, version, data) = res??;
+        summary.bytes += data.len() as u64;
+        let tmp = tempfile::tempdir()?;
+        oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
+        store.store_package(&name, &version, tmp.path())?;
+        summary.downloaded += 1;
+    }
+
+    Ok(summary)
+}
+
 fn parse_package_spec(spec: &str) -> (String, String) {
     // Handle @scope/name@version vs name@version vs name
     if let Some(stripped) = spec.strip_prefix('@') {
@@ -2112,6 +2207,94 @@ fn parse_package_spec(spec: &str) -> (String, String) {
         return (n.to_string(), v.to_string());
     }
     (spec.to_string(), "latest".to_string())
+}
+
+fn dependency_manifest_spec(pkg_name: &str, requested_spec: &str, graph: &DepGraph) -> String {
+    if requested_spec.starts_with("npm:") || is_git_like_spec(requested_spec) {
+        return requested_spec.to_string();
+    }
+
+    graph
+        .nodes
+        .values()
+        .find(|node| node.alias.as_deref() == Some(pkg_name) || node.name == pkg_name)
+        .map(|node| format!("^{}", node.version))
+        .unwrap_or_else(|| requested_spec.to_string())
+}
+
+fn is_git_like_spec(spec: &str) -> bool {
+    spec.starts_with("github:")
+        || spec.starts_with("gitlab:")
+        || spec.starts_with("bitbucket:")
+        || spec.starts_with("git+https://")
+        || spec.starts_with("git+ssh://")
+        || spec.starts_with("git://")
+}
+
+fn safe_bin_entries(pkg_json: &serde_json::Value, install_name: &str) -> Vec<(String, PathBuf)> {
+    let mut bins = match pkg_json.get("bin") {
+        Some(serde_json::Value::String(path)) => package_relative_path(path)
+            .filter(|_| is_safe_bin_name(package_bin_basename(install_name)))
+            .map(|path| vec![(package_bin_basename(install_name).to_string(), path)])
+            .unwrap_or_default(),
+        Some(serde_json::Value::Object(map)) => map
+            .iter()
+            .filter_map(|(name, path)| {
+                let path = path.as_str()?;
+                if !is_safe_bin_name(name) {
+                    return None;
+                }
+                package_relative_path(path).map(|safe_path| (name.clone(), safe_path))
+            })
+            .collect(),
+        _ => Vec::new(),
+    };
+
+    bins.sort_by(|(a, _), (b, _)| a.cmp(b));
+    bins
+}
+
+fn preferred_bin_path(pkg_json: &serde_json::Value, install_name: &str) -> Option<PathBuf> {
+    let bins = safe_bin_entries(pkg_json, install_name);
+    let basename = package_bin_basename(install_name);
+
+    bins.iter()
+        .find(|(name, _)| name == install_name || name == basename)
+        .or_else(|| bins.first())
+        .map(|(_, path)| path.clone())
+}
+
+fn package_bin_basename(name: &str) -> &str {
+    name.split('/').next_back().unwrap_or(name)
+}
+
+fn is_safe_bin_name(name: &str) -> bool {
+    is_safe_path_part(name) && !name.contains('/')
+}
+
+fn package_relative_path(path: &str) -> Option<PathBuf> {
+    let mut safe = PathBuf::new();
+
+    for component in std::path::Path::new(path).components() {
+        match component {
+            std::path::Component::Normal(part) if is_safe_os_part(part) => safe.push(part),
+            std::path::Component::CurDir => {}
+            _ => return None,
+        }
+    }
+
+    (!safe.as_os_str().is_empty()).then_some(safe)
+}
+
+fn is_safe_os_part(part: &OsStr) -> bool {
+    let Some(part) = part.to_str() else {
+        return false;
+    };
+    is_safe_path_part(part)
+}
+
+fn is_safe_path_part(part: &str) -> bool {
+    !part.is_empty() && part != "." && part != ".." && !part.contains('\\') && !part.contains('\0')
 }
 
 fn fmt_capabilities(c: &oath_analyze::Capabilities) -> String {
@@ -2552,18 +2735,7 @@ async fn cmd_exec(
     let bin_name = if pkg_json_path.exists() {
         let pkg_json: serde_json::Value =
             serde_json::from_str(&std::fs::read_to_string(&pkg_json_path)?)?;
-        match &pkg_json["bin"] {
-            serde_json::Value::String(s) => Some(s.clone()),
-            serde_json::Value::Object(map) => map
-                .get(&pkg_name)
-                .and_then(|v| v.as_str().map(|s| s.to_string()))
-                .or_else(|| {
-                    map.values()
-                        .next()
-                        .and_then(|v| v.as_str().map(|s| s.to_string()))
-                }),
-            _ => None,
-        }
+        preferred_bin_path(&pkg_json, &pkg_name)
     } else {
         None
     };
@@ -2872,8 +3044,7 @@ async fn cmd_remove(packages: Vec<String>) -> Result<()> {
         anyhow::bail!("no package.json found");
     };
 
-    let store = ContentStore::default_store()?;
-
+    let mut removed_any = false;
     for package in &packages {
         let (name, _) = parse_package_spec(package);
 
@@ -2892,46 +3063,40 @@ async fn cmd_remove(packages: Vec<String>) -> Result<()> {
             continue;
         }
 
-        // Remove from node_modules
-        let nm_path = PathBuf::from("node_modules").join(&name);
-        if nm_path.exists() || nm_path.symlink_metadata().is_ok() {
-            if nm_path.is_symlink() || nm_path.is_file() {
-                std::fs::remove_file(&nm_path).ok();
-            } else {
-                std::fs::remove_dir_all(&nm_path).ok();
-            }
-        }
-
-        // Remove from store (best-effort)
-        let store_path = store.store_path();
-        let safe_name = name.replace('/', "+");
-        let store_name_dir = store_path.join(&safe_name);
-        if store_name_dir.exists() {
-            std::fs::remove_dir_all(&store_name_dir).ok();
-        }
-
         println!("removed {}", name);
+        removed_any = true;
     }
 
-    // Write updated package.json
-    std::fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
+    if !removed_any {
+        return Ok(());
+    }
 
     // Rebuild lockfile from remaining deps
     let deps = extract_deps(&pkg, "dependencies");
     let dev_deps = extract_deps(&pkg, "devDependencies");
+    let project_name = pkg["name"].as_str().unwrap_or("project").to_string();
+    let project_version = pkg["version"].as_str().unwrap_or("0.0.0").to_string();
 
     if deps.is_empty() && dev_deps.is_empty() {
-        // Nothing left, write empty lockfile
-        let lock_path = PathBuf::from("oath-lock.json");
-        if lock_path.exists() {
-            let project_name = pkg["name"].as_str().unwrap_or("project").to_string();
-            let project_version = pkg["version"].as_str().unwrap_or("0.0.0").to_string();
-            let empty_graph = oath_resolve::graph::DepGraph::new();
-            let lockfile = Lockfile::from_graph(&empty_graph, &project_name, &project_version);
-            lockfile.write(&lock_path)?;
+        let nm_path = PathBuf::from("node_modules");
+        if nm_path.exists() || nm_path.symlink_metadata().is_ok() {
+            if nm_path.is_symlink() || nm_path.is_file() {
+                std::fs::remove_file(&nm_path).context("failed to clean node_modules")?;
+            } else {
+                std::fs::remove_dir_all(&nm_path).context("failed to clean node_modules")?;
+            }
         }
+        std::fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
+        let empty_graph = oath_resolve::graph::DepGraph::new();
+        let lockfile = Lockfile::from_graph_with_manifest(
+            &empty_graph,
+            &project_name,
+            &project_version,
+            &deps,
+            &dev_deps,
+        );
+        lockfile.write(&PathBuf::from("oath-lock.json"))?;
     } else {
-        // Re-resolve remaining deps and update lockfile
         let client = RegistryClient::default_client()?;
         let options = ResolveOptions {
             include_dev: true,
@@ -2940,9 +3105,21 @@ async fn cmd_remove(packages: Vec<String>) -> Result<()> {
         };
         let mut resolver = Resolver::new(client, options);
         let graph = resolver.resolve(&deps, &dev_deps).await?;
-        let project_name = pkg["name"].as_str().unwrap_or("project").to_string();
-        let project_version = pkg["version"].as_str().unwrap_or("0.0.0").to_string();
-        let lockfile = Lockfile::from_graph(&graph, &project_name, &project_version);
+        let store = Arc::new(ContentStore::default_store()?);
+        let client = Arc::new(RegistryClient::default_client()?);
+        let (to_download, _) = missing_store_nodes(&graph, &store);
+        download_missing_nodes(to_download, Arc::clone(&store), Arc::clone(&client)).await?;
+        let cwd = std::env::current_dir()?;
+        let linker = Linker::new((*store).clone());
+        linker.link_all(&graph, &cwd)?;
+        std::fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
+        let lockfile = Lockfile::from_graph_with_manifest(
+            &graph,
+            &project_name,
+            &project_version,
+            &deps,
+            &dev_deps,
+        );
         lockfile.write(&PathBuf::from("oath-lock.json"))?;
     }
 
@@ -3405,22 +3582,7 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
         let pkg_json_content = std::fs::read_to_string(&pkg_json_path)?;
         let pkg_json: serde_json::Value = serde_json::from_str(&pkg_json_content)?;
 
-        // Collect bin entries: Vec<(bin_name, relative_bin_path)>
-        let bin_entries: Vec<(String, String)> = match &pkg_json["bin"] {
-            serde_json::Value::String(s) => {
-                let bin_name = pkg_name
-                    .split('/')
-                    .next_back()
-                    .unwrap_or(pkg_name)
-                    .to_string();
-                vec![(bin_name, s.clone())]
-            }
-            serde_json::Value::Object(map) => map
-                .iter()
-                .filter_map(|(k, v)| v.as_str().map(|s| (k.clone(), s.to_string())))
-                .collect(),
-            _ => vec![],
-        };
+        let bin_entries = safe_bin_entries(&pkg_json, pkg_name);
 
         for (bin_name, rel_path) in &bin_entries {
             let actual_bin = pkg_dir.join(rel_path);
@@ -3529,6 +3691,7 @@ fn cmd_log(tail: usize) -> Result<()> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use oath_resolve::DepNode;
 
     #[test]
     fn npm_package_env_flattens_scalars_and_skips_objects() {
@@ -3558,5 +3721,137 @@ mod tests {
         // `--require-grade B` blocks a C, allows an A
         assert!(grade_rank('C') < grade_rank('B')); // C is blocked
         assert!(grade_rank('A') >= grade_rank('B')); // A passes
+    }
+
+    #[test]
+    fn dependency_manifest_spec_preserves_npm_aliases() {
+        let mut graph = DepGraph::new();
+        graph.nodes.insert(
+            "my-lodash@4.17.21".to_string(),
+            DepNode {
+                name: "lodash".to_string(),
+                alias: Some("my-lodash".to_string()),
+                version: "4.17.21".to_string(),
+                resolved: "https://registry.example/lodash.tgz".to_string(),
+                integrity: None,
+                dependencies: HashMap::new(),
+                has_install_script: false,
+                dev: false,
+                optional: false,
+                peer_dependencies: HashMap::new(),
+                optional_peers: HashSet::new(),
+                resolved_peers: HashMap::new(),
+            },
+        );
+
+        assert_eq!(
+            dependency_manifest_spec("my-lodash", "npm:lodash@^4.17.21", &graph),
+            "npm:lodash@^4.17.21"
+        );
+        assert_eq!(
+            dependency_manifest_spec("lodash", "latest", &graph),
+            "^4.17.21"
+        );
+    }
+
+    #[test]
+    fn frozen_lock_compare_includes_root_manifest_snapshot() {
+        let mut graph = DepGraph::new();
+        graph.roots.push("pkg@1.0.0".to_string());
+        graph.nodes.insert(
+            "pkg@1.0.0".to_string(),
+            DepNode {
+                name: "pkg".to_string(),
+                alias: None,
+                version: "1.0.0".to_string(),
+                resolved: "https://registry.example/pkg.tgz".to_string(),
+                integrity: None,
+                dependencies: HashMap::new(),
+                has_install_script: false,
+                dev: false,
+                optional: false,
+                peer_dependencies: HashMap::new(),
+                optional_peers: HashSet::new(),
+                resolved_peers: HashMap::new(),
+            },
+        );
+        let mut deps = HashMap::new();
+        deps.insert("pkg".to_string(), "^1.0.0".to_string());
+        let dev_deps = HashMap::new();
+        let lock_a =
+            Lockfile::from_graph_with_manifest(&graph, "project", "1.0.0", &deps, &dev_deps);
+
+        deps.insert("other".to_string(), "^2.0.0".to_string());
+        let lock_b =
+            Lockfile::from_graph_with_manifest(&graph, "project", "1.0.0", &deps, &dev_deps);
+
+        assert!(!lockfiles_match_for_frozen(&lock_a, &lock_b));
+    }
+
+    #[test]
+    fn missing_store_nodes_reports_only_uncached_packages() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ContentStore::new(tmp.path().join("store")).unwrap();
+        let mut graph = DepGraph::new();
+        graph.nodes.insert(
+            "pkg@1.0.0".to_string(),
+            DepNode {
+                name: "pkg".to_string(),
+                alias: None,
+                version: "1.0.0".to_string(),
+                resolved: "https://registry.example/pkg.tgz".to_string(),
+                integrity: None,
+                dependencies: HashMap::new(),
+                has_install_script: false,
+                dev: false,
+                optional: false,
+                peer_dependencies: HashMap::new(),
+                optional_peers: HashSet::new(),
+                resolved_peers: HashMap::new(),
+            },
+        );
+
+        let (missing, cached) = missing_store_nodes(&graph, &store);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(cached, 0);
+
+        let pkg_dir = store.package_dir("pkg", "1.0.0");
+        std::fs::create_dir_all(&pkg_dir).unwrap();
+        std::fs::write(pkg_dir.join("package.json"), "{}").unwrap();
+
+        let (missing, cached) = missing_store_nodes(&graph, &store);
+        assert!(missing.is_empty());
+        assert_eq!(cached, 1);
+    }
+
+    #[test]
+    fn safe_bin_entries_filters_traversal() {
+        let pkg = serde_json::json!({
+            "bin": {
+                "../owned": "bin/owned.js",
+                "escape": "../escape.js",
+                "safe": "bin/safe.js"
+            }
+        });
+
+        assert_eq!(
+            safe_bin_entries(&pkg, "pkg"),
+            vec![("safe".to_string(), PathBuf::from("bin/safe.js"))]
+        );
+    }
+
+    #[test]
+    fn preferred_bin_path_uses_scoped_basename() {
+        let pkg = serde_json::json!({
+            "bin": {
+                "tool": "bin/tool.js",
+                "pkg": "bin/pkg.js"
+            }
+        });
+
+        assert_eq!(
+            preferred_bin_path(&pkg, "@scope/pkg"),
+            Some(PathBuf::from("bin/pkg.js"))
+        );
     }
 }

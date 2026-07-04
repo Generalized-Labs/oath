@@ -103,8 +103,13 @@ impl ContentStore {
     /// Get the store path for a package
     pub fn package_dir(&self, name: &str, version: &str) -> PathBuf {
         // Scoped packages: @scope/name -> @scope+name
-        let safe_name = name.replace('/', "+");
-        self.root.join(&safe_name).join(version)
+        self.package_name_dir(name)
+            .join(safe_path_component(version))
+    }
+
+    /// Get the store path for all versions of a package.
+    pub fn package_name_dir(&self, name: &str) -> PathBuf {
+        self.root.join(safe_path_component(&name.replace('/', "+")))
     }
 
     /// Total size of the store (bytes)
@@ -181,4 +186,64 @@ fn dir_size(path: &Path) -> u64 {
         }
     }
     size
+}
+
+fn safe_path_component(input: &str) -> String {
+    if input.is_empty() {
+        return "_".to_string();
+    }
+
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b'@' | b'+' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+
+    match out.as_str() {
+        "." => "%2E".to_string(),
+        ".." => "%2E%2E".to_string(),
+        _ => out,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn package_dir_does_not_escape_store_root() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ContentStore::new(tmp.path().join("store")).unwrap();
+
+        let path = store.package_dir("../evil", "../../outside");
+        let relative = path.strip_prefix(store.store_path()).unwrap();
+
+        assert!(!relative.components().any(|component| {
+            matches!(
+                component,
+                std::path::Component::ParentDir
+                    | std::path::Component::RootDir
+                    | std::path::Component::Prefix(_)
+            )
+        }));
+        assert_eq!(
+            path,
+            store.store_path().join("..+evil").join("..%2F..%2Foutside")
+        );
+    }
+
+    #[test]
+    fn package_name_dir_preserves_scoped_package_layout() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ContentStore::new(tmp.path().join("store")).unwrap();
+
+        assert_eq!(
+            store.package_name_dir("@scope/name"),
+            store.store_path().join("@scope+name")
+        );
+    }
 }

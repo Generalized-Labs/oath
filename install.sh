@@ -38,23 +38,30 @@ if ! curl -fsSL "$URL" -o "$TMP"; then
   exit 1
 fi
 
-# Verify checksum if the .sha256 sidecar is published for this asset.
-if SUM=$(curl -fsSL "${URL}.sha256" 2>/dev/null) && [ -n "$SUM" ]; then
-  EXPECTED=$(printf '%s' "$SUM" | awk '{print $1}')
-  if command -v shasum >/dev/null 2>&1; then
-    ACTUAL=$(shasum -a 256 "$TMP" | awk '{print $1}')
-  else
-    ACTUAL=$(sha256sum "$TMP" | awk '{print $1}')
-  fi
-  if [ "$EXPECTED" != "$ACTUAL" ]; then
-    echo "oath: checksum mismatch -- refusing to install." >&2
-    echo "      expected $EXPECTED" >&2
-    echo "      actual   $ACTUAL" >&2
-    rm -f "$TMP"
-    exit 1
-  fi
-  echo "  checksum verified"
+# Verify checksum. Missing checksum sidecars are release errors, not warnings.
+if ! SUM=$(curl -fsSL "${URL}.sha256" 2>/dev/null) || [ -z "$SUM" ]; then
+  echo "oath: checksum sidecar missing for ${BINARY} -- refusing to install." >&2
+  rm -f "$TMP"
+  exit 1
 fi
+EXPECTED=$(printf '%s' "$SUM" | awk '{print $1}')
+if command -v shasum >/dev/null 2>&1; then
+  ACTUAL=$(shasum -a 256 "$TMP" | awk '{print $1}')
+elif command -v sha256sum >/dev/null 2>&1; then
+  ACTUAL=$(sha256sum "$TMP" | awk '{print $1}')
+else
+  echo "oath: neither shasum nor sha256sum is available -- refusing to install." >&2
+  rm -f "$TMP"
+  exit 1
+fi
+if [ "$EXPECTED" != "$ACTUAL" ]; then
+  echo "oath: checksum mismatch -- refusing to install." >&2
+  echo "      expected $EXPECTED" >&2
+  echo "      actual   $ACTUAL" >&2
+  rm -f "$TMP"
+  exit 1
+fi
+echo "  checksum verified"
 
 mv "$TMP" "$BIN_DIR/oath"
 chmod +x "$BIN_DIR/oath"

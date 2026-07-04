@@ -13,7 +13,7 @@ use tracing::{debug, info, warn};
 use node_semver::{Range, Version};
 use oath_fetch::{Packument, RegistryClient, resolve_version};
 
-use crate::git::{is_git_spec, parse_git_spec, resolve_git_spec};
+use crate::git::{git_cache_file_name, is_git_spec, parse_git_spec, resolve_git_spec};
 use crate::graph::{DepGraph, DepNode, PeerReport, PeerResolution};
 
 /// Check if a package is compatible with the current platform.
@@ -608,8 +608,10 @@ impl Resolver {
             .join(".oath")
             .join("git-cache");
         std::fs::create_dir_all(&cache_dir).ok();
-        let safe_name = git_resolved.name.replace('/', "+");
-        let cache_file = cache_dir.join(format!("{}-{}.tgz", safe_name, git_resolved.version));
+        let cache_file = cache_dir.join(git_cache_file_name(
+            &git_resolved.name,
+            &git_resolved.version,
+        ));
         if !cache_file.exists() {
             std::fs::write(&cache_file, &git_resolved.tarball_data).with_context(|| {
                 format!("failed to cache git tarball at {}", cache_file.display())

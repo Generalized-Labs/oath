@@ -4,10 +4,11 @@
 
 use anyhow::{Context, Result, bail};
 use flate2::read::GzDecoder;
+use sha1::Sha1;
 use sha2::{Digest, Sha256, Sha512};
 #[cfg(unix)]
 use std::os::unix::fs::PermissionsExt;
-use std::path::Path;
+use std::path::{Component, Path, PathBuf};
 use tar::Archive;
 
 /// Verify tarball bytes against an SRI integrity string.
@@ -28,10 +29,8 @@ pub fn verify_integrity(data: &[u8], sri: &str) -> Result<()> {
             base64_encode(&hash)
         }
         "sha1" => {
-            // sha1 is legacy. Modern packages use sha512.
-            // For now, we skip sha1 verification with a warning.
-            tracing::warn!("sha1 integrity check not implemented; use sha512 packages");
-            return Ok(());
+            let hash = Sha1::digest(data);
+            base64_encode(&hash)
         }
         _ => bail!("unsupported SRI algorithm: {algo}"),
     };
@@ -56,23 +55,12 @@ pub fn extract_tarball(data: &[u8], dest: &Path) -> Result<()> {
         let mut entry = entry.context("corrupt tar entry")?;
         let path = entry.path().context("invalid path in tar")?;
 
-        // Strip the first path component (npm uses "package/" but some tarballs
-        // like @types/node use non-standard roots e.g. "node v20.19/").
-        // All npm-compatible tools strip the first component regardless of name.
-        let relative = path.components().skip(1).collect::<std::path::PathBuf>();
-
-        // Skip empty paths
-        if relative.as_os_str().is_empty() {
+        let Some(relative) = sanitize_tar_path(&path) else {
+            tracing::warn!("skipping unsafe path in tarball: {}", path.display());
             continue;
-        }
+        };
 
         let full_path = dest.join(&relative);
-
-        // Security: prevent path traversal
-        if !full_path.starts_with(dest) {
-            tracing::warn!("skipping path traversal attempt: {}", path.display());
-            continue;
-        }
 
         match entry.header().entry_type() {
             tar::EntryType::Directory => {
@@ -116,11 +104,10 @@ pub fn list_tarball(data: &[u8]) -> Result<Vec<String>> {
 
     for entry in archive.entries()? {
         let entry = entry?;
-        if let Ok(path) = entry.path() {
-            let relative = path.components().skip(1).collect::<std::path::PathBuf>();
-            if !relative.as_os_str().is_empty() {
-                files.push(relative.to_string_lossy().to_string());
-            }
+        if let Ok(path) = entry.path()
+            && let Some(relative) = sanitize_tar_path(&path)
+        {
+            files.push(relative.to_string_lossy().to_string());
         }
     }
 
@@ -144,4 +131,77 @@ pub fn tarball_unpacked_size(data: &[u8]) -> Result<u64> {
 fn base64_encode(data: &[u8]) -> String {
     use base64::Engine;
     base64::engine::general_purpose::STANDARD.encode(data)
+}
+
+fn sanitize_tar_path(path: &Path) -> Option<PathBuf> {
+    if path
+        .components()
+        .any(|component| matches!(component, Component::Prefix(_) | Component::RootDir))
+    {
+        return None;
+    }
+
+    let mut relative = PathBuf::new();
+    for component in path.components().skip(1) {
+        match component {
+            Component::Normal(part) => relative.push(part),
+            Component::CurDir => {}
+            Component::ParentDir | Component::Prefix(_) | Component::RootDir => return None,
+        }
+    }
+
+    (!relative.as_os_str().is_empty()).then_some(relative)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use flate2::{Compression, write::GzEncoder};
+    use tar::{Builder, Header};
+
+    fn tar_gz_with_file(path: &str, content: &[u8]) -> Vec<u8> {
+        let gz = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = Builder::new(gz);
+        let mut header = Header::new_gnu();
+        header.as_mut_bytes()[..path.len()].copy_from_slice(path.as_bytes());
+        header.set_size(content.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        tar.append(&header, content).unwrap();
+        tar.into_inner().unwrap().finish().unwrap()
+    }
+
+    #[test]
+    fn extract_tarball_rejects_parent_dir_entries() {
+        let tmp = tempfile::tempdir().unwrap();
+        let dest = tmp.path().join("extract");
+        let outside = tmp.path().join("escape.txt");
+        let data = tar_gz_with_file("package/../escape.txt", b"owned");
+
+        extract_tarball(&data, &dest).unwrap();
+
+        assert!(
+            !outside.exists(),
+            "tarball extraction wrote outside destination"
+        );
+    }
+
+    #[test]
+    fn list_tarball_filters_parent_dir_entries() {
+        let data = tar_gz_with_file("package/../escape.txt", b"owned");
+
+        let files = list_tarball(&data).unwrap();
+
+        assert!(files.is_empty(), "unsafe tar path was listed: {files:?}");
+    }
+
+    #[test]
+    fn sha1_integrity_is_verified() {
+        let data = b"package bytes";
+        let hash = Sha1::digest(data);
+        let integrity = format!("sha1-{}", base64_encode(&hash));
+
+        verify_integrity(data, &integrity).unwrap();
+        assert!(verify_integrity(b"tampered package bytes", &integrity).is_err());
+    }
 }
