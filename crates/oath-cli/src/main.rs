@@ -1385,6 +1385,7 @@ fn run_root_lifecycle(event: &str) {
         .arg(cmd)
         .env("PATH", &path_env)
         .env("npm_lifecycle_event", event)
+        .env("npm_lifecycle_script", cmd)
         .envs(npm_env.iter().map(|(k, v)| (k, v)))
         .status();
     match status {
@@ -1454,6 +1455,7 @@ fn cmd_run(script: Option<&str>, args: &[String]) -> Result<()> {
             .arg(script_cmd)
             .env("PATH", &path_env)
             .env("npm_lifecycle_event", script_name)
+            .env("npm_lifecycle_script", script_cmd)
             .envs(npm_env.iter().map(|(k, v)| (k, v)))
             .status()
             .with_context(|| format!("failed to execute script '{script_name}'"))?;
@@ -1475,7 +1477,7 @@ fn cmd_run(script: Option<&str>, args: &[String]) -> Result<()> {
     let full_cmd = if args.is_empty() {
         cmd.to_string()
     } else {
-        format!("{cmd} {}", args.join(" "))
+        format!("{cmd} {}", shell_quote_args(args))
     };
     let status = run_script(script, &full_cmd)?;
     if !status.success() {
@@ -1496,6 +1498,52 @@ fn cmd_run(script: Option<&str>, args: &[String]) -> Result<()> {
     println!("  Done in {:.2}s", elapsed.as_secs_f64());
 
     Ok(())
+}
+
+fn shell_quote_args(args: &[String]) -> String {
+    args.iter()
+        .map(|arg| shell_quote_arg(arg))
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn shell_quote_arg(arg: &str) -> String {
+    if arg.is_empty() {
+        return "''".to_string();
+    }
+
+    if arg.bytes().all(|b| {
+        matches!(
+            b,
+            b'A'..=b'Z'
+                | b'a'..=b'z'
+                | b'0'..=b'9'
+                | b'_'
+                | b'-'
+                | b'.'
+                | b'/'
+                | b':'
+                | b'='
+                | b','
+                | b'+'
+                | b'@'
+                | b'%'
+        )
+    }) {
+        return arg.to_string();
+    }
+
+    let mut quoted = String::with_capacity(arg.len() + 2);
+    quoted.push('\'');
+    for ch in arg.chars() {
+        if ch == '\'' {
+            quoted.push_str("'\\''");
+        } else {
+            quoted.push(ch);
+        }
+    }
+    quoted.push('\'');
+    quoted
 }
 
 // ---- INIT -------------------------------------------------------------------
@@ -3723,6 +3771,22 @@ mod tests {
         // `--require-grade B` blocks a C, allows an A
         assert!(grade_rank('C') < grade_rank('B')); // C is blocked
         assert!(grade_rank('A') >= grade_rank('B')); // A passes
+    }
+
+    #[test]
+    fn shell_quote_args_preserves_script_arguments() {
+        let args = vec![
+            "plain".to_string(),
+            "hello world".to_string(),
+            "semi;colon".to_string(),
+            "quote'arg".to_string(),
+            String::new(),
+        ];
+
+        assert_eq!(
+            shell_quote_args(&args),
+            "plain 'hello world' 'semi;colon' 'quote'\\''arg' ''"
+        );
     }
 
     #[test]

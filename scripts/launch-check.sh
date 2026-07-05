@@ -6,6 +6,7 @@ SMOKE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-home.XXXXXX")"
 SMOKE_PROJECT="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-project.XXXXXX")"
 SCOPED_PROJECT="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-scoped.XXXXXX")"
 ALIAS_PROJECT="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-alias.XXXXXX")"
+RUN_PROJECT="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-run.XXXXXX")"
 WORKSPACE_PROJECT="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-workspace.XXXXXX")"
 if [[ -n "${OATH_LAUNCH_TARGET_DIR:-}" ]]; then
   BUILD_TARGET="$OATH_LAUNCH_TARGET_DIR"
@@ -16,7 +17,7 @@ else
 fi
 
 cleanup() {
-  rm -rf "$SMOKE_HOME" "$SMOKE_PROJECT" "$SCOPED_PROJECT" "$ALIAS_PROJECT" "$WORKSPACE_PROJECT"
+  rm -rf "$SMOKE_HOME" "$SMOKE_PROJECT" "$SCOPED_PROJECT" "$ALIAS_PROJECT" "$RUN_PROJECT" "$WORKSPACE_PROJECT"
   if [[ "$CLEAN_BUILD_TARGET" == "1" ]]; then
     rm -rf "$BUILD_TARGET"
   fi
@@ -97,6 +98,16 @@ echo "==> release smoke exec json"
   BIN="$CARGO_TARGET_DIR/release/oath"
   HOME="$SMOKE_HOME" "$BIN" exec --dry-run --json is-number > exec.json
   node -e 'const r = require("./exec.json"); if (r.name !== "is-number" || r.decision === "deny") process.exit(1)'
+)
+
+echo "==> release smoke run args"
+(
+  cd "$RUN_PROJECT"
+  BIN="$CARGO_TARGET_DIR/release/oath"
+  printf '%s\n' '{"name":"run-smoke","version":"1.0.0","scripts":{"echoargs":"node print-args.js"}}' > package.json
+  printf '%s\n' 'const fs = require("fs");' 'fs.writeFileSync("args.json", JSON.stringify(process.argv.slice(2)));' > print-args.js
+  HOME="$SMOKE_HOME" "$BIN" run echoargs -- "hello world" "semi;colon" "quote'arg" ""
+  node -e 'const a = require("./args.json"); if (a.length !== 4 || a[0] !== "hello world" || a[1] !== "semi;colon" || a[2] !== "quote'\''arg" || a[3] !== "") process.exit(1)'
 )
 
 echo "==> release smoke global bin"
