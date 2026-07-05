@@ -57,6 +57,14 @@ echo "==> release smoke install"
   HOME="$SMOKE_HOME" "$BIN" add --yes is-odd
   node -e 'const isOdd = require("is-odd"); if (!isOdd(3)) process.exit(1)'
 
+  HOME="$SMOKE_HOME" "$BIN" install --yes is-sorted
+  node -e 'const isNumber = require("is-number"); const isOdd = require("is-odd"); const isSorted = require("is-sorted"); if (!isNumber(7) || !isOdd(3) || !isSorted([1,2,3])) process.exit(1)'
+
+  if HOME="$SMOKE_HOME" "$BIN" install --frozen-lockfile isarray; then
+    echo "expected frozen package install to fail" >&2
+    exit 1
+  fi
+
   mkdir -p node_modules/stale
   touch node_modules/stale/should-disappear
   HOME="$SMOKE_HOME" "$BIN" ci

@@ -235,10 +235,18 @@ impl Linker {
 
             let parent_install_name = parent_node.alias.as_deref().unwrap_or(&parent_node.name);
 
-            // Create: node_modules/<parent_install_name>/node_modules/<install_name>/
-            // as a symlink to .oath/<child_key>/node_modules/<install_name>
-            let nested_nm_dir = nm_dir.join(parent_install_name).join("node_modules");
-            // Handle scoped parent packages
+            // Create the nested dependency inside the package's real virtual dir.
+            // The top-level package symlink exposes the same path to callers, while
+            // this avoids hand-counting relative paths through an intermediate symlink.
+            let parent_pkg_dir = oath_dir
+                .join(virtual_key_component(parent_key))
+                .join("node_modules")
+                .join(parent_install_name);
+            if !parent_pkg_dir.exists() {
+                continue;
+            }
+            let nested_nm_dir = parent_pkg_dir.join("node_modules");
+            // Handle scoped nested dependency packages
             if install_name.contains('/') {
                 if let Some(scope) = install_name.split('/').next() {
                     std::fs::create_dir_all(nested_nm_dir.join(scope))?;
@@ -248,24 +256,14 @@ impl Linker {
             }
 
             let nested_symlink = nested_nm_dir.join(install_name);
-            // The symlink target is relative from nested_symlink's parent dir.
-            // If parent is scoped: node_modules/@scope/pkg/node_modules/ -> depth 3
-            // If child is scoped: nested_symlink's parent is .../@scope/ -> add 1 more
-            let base_depth = if parent_install_name.contains('/') {
-                3
-            } else {
-                2
-            };
-            let child_extra = if install_name.contains('/') { 1 } else { 0 };
-            let depth = base_depth + child_extra;
-            let mut rel_target = PathBuf::new();
-            for _ in 0..depth {
-                rel_target.push("..");
+            let source = oath_dir
+                .join(virtual_key_component(child_key))
+                .join("node_modules")
+                .join(install_name);
+            if !source.exists() {
+                continue;
             }
-            rel_target.push(".oath");
-            rel_target.push(virtual_key_component(child_key));
-            rel_target.push("node_modules");
-            rel_target.push(install_name);
+            let rel_target = pathdiff_relative(&nested_symlink, &source);
 
             if !nested_symlink.exists() {
                 std::os::unix::fs::symlink(&rel_target, &nested_symlink).with_context(|| {
@@ -849,6 +847,57 @@ mod tests {
                 .is_symlink(),
             "scoped transitive dependency link was not created"
         );
+    }
+
+    #[test]
+    fn link_all_creates_working_nested_conflict_link_for_scoped_parent() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ContentStore::new(tmp.path().join("store")).unwrap();
+        for (name, version) in [
+            ("@scope/parent", "1.0.0"),
+            ("dep", "1.0.0"),
+            ("dep", "2.0.0"),
+        ] {
+            let dir = store.package_dir(name, version);
+            std::fs::create_dir_all(&dir).unwrap();
+            std::fs::write(
+                dir.join("package.json"),
+                format!(r#"{{"name":"{name}","version":"{version}"}}"#),
+            )
+            .unwrap();
+        }
+
+        let mut parent_deps = HashMap::new();
+        parent_deps.insert("dep".to_string(), "dep@2.0.0".to_string());
+        let mut graph = DepGraph::new();
+        graph.roots.push("@scope/parent@1.0.0".to_string());
+        graph.roots.push("dep@1.0.0".to_string());
+        graph.roots.push("dep@1.0.0".to_string());
+        graph.nodes.insert(
+            "@scope/parent@1.0.0".to_string(),
+            node("@scope/parent", "1.0.0", parent_deps),
+        );
+        graph.nodes.insert(
+            "dep@1.0.0".to_string(),
+            node("dep", "1.0.0", HashMap::new()),
+        );
+        graph.nodes.insert(
+            "dep@2.0.0".to_string(),
+            node("dep", "2.0.0", HashMap::new()),
+        );
+
+        let project = tmp.path().join("project");
+        Linker::new(store).link_all(&graph, &project).unwrap();
+
+        let nested_pkg = project
+            .join("node_modules")
+            .join("@scope")
+            .join("parent")
+            .join("node_modules")
+            .join("dep")
+            .join("package.json");
+        let content = std::fs::read_to_string(nested_pkg).unwrap();
+        assert!(content.contains(r#""version":"2.0.0""#));
     }
 
     #[test]

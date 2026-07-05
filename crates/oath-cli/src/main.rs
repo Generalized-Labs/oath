@@ -310,6 +310,8 @@ async fn cmd_install(
 
     // ---- Single-package install ---------------------------------------------
 
+    let mut pending_manifest: Option<serde_json::Value> = None;
+    let mut added_package_names: Vec<String> = Vec::new();
     let (deps, dev_deps, project_name, project_version) = if packages.is_empty() {
         let pkg = read_package_json()?;
         let name = pkg["name"].as_str().unwrap_or("unnamed").to_string();
@@ -318,22 +320,36 @@ async fn cmd_install(
         let dev_deps = extract_deps(&pkg, "devDependencies");
         (deps, dev_deps, name, version)
     } else {
-        let mut deps = HashMap::new();
-        for spec in &packages {
-            // handle scoped packages: @scope/name@version
-            let (name, version) = parse_package_spec(spec);
-            deps.insert(name, version);
+        let mut pkg: serde_json::Value = if PathBuf::from("package.json").exists() {
+            read_package_json()?
+        } else {
+            serde_json::json!({"name": "project", "version": "1.0.0"})
+        };
+        let dep_key = if dev {
+            "devDependencies"
+        } else {
+            "dependencies"
+        };
+        if pkg.get(dep_key).is_none() {
+            pkg[dep_key] = serde_json::json!({});
         }
-        (
-            deps,
-            HashMap::new(),
-            "project".to_string(),
-            "0.0.0".to_string(),
-        )
+        for spec in &packages {
+            let (name, version) = parse_package_spec(spec);
+            pkg[dep_key][&name] = serde_json::Value::String(version);
+            added_package_names.push(name);
+        }
+        let name = pkg["name"].as_str().unwrap_or("project").to_string();
+        let version = pkg["version"].as_str().unwrap_or("0.0.0").to_string();
+        let deps = extract_deps(&pkg, "dependencies");
+        let dev_deps = extract_deps(&pkg, "devDependencies");
+        pending_manifest = Some(pkg);
+        (deps, dev_deps, name, version)
     };
 
     let trusted_deps: HashSet<String> = {
-        let pkg = read_package_json().unwrap_or_default();
+        let pkg = pending_manifest
+            .clone()
+            .unwrap_or_else(|| read_package_json().unwrap_or_default());
         pkg.get("trustedDependencies")
             .and_then(|v| v.as_array())
             .map(|arr| {
@@ -405,12 +421,32 @@ async fn cmd_install(
         g
     };
 
+    let mut lock_deps = deps.clone();
+    let mut lock_dev_deps = dev_deps.clone();
+    if let Some(pkg_json) = pending_manifest.as_mut() {
+        let dep_key = if dev {
+            "devDependencies"
+        } else {
+            "dependencies"
+        };
+        for pkg_name in &added_package_names {
+            let requested_spec = pkg_json[dep_key][pkg_name].as_str().unwrap_or("latest");
+            let final_spec = dependency_manifest_spec(pkg_name, requested_spec, &graph);
+            pkg_json[dep_key][pkg_name] = serde_json::Value::String(final_spec.clone());
+            if dev {
+                lock_dev_deps.insert(pkg_name.clone(), final_spec);
+            } else {
+                lock_deps.insert(pkg_name.clone(), final_spec);
+            }
+        }
+    }
+
     let lockfile = Lockfile::from_graph_with_manifest(
         &graph,
         &project_name,
         &project_version,
-        &deps,
-        &dev_deps,
+        &lock_deps,
+        &lock_dev_deps,
     );
     if frozen_lockfile {
         let existing = Lockfile::read(&lock_path)?;
@@ -552,29 +588,8 @@ async fn cmd_install(
         lockfile.write(&PathBuf::from("oath-lock.json"))?;
     }
 
-    // Write package.json manifest if packages were explicitly specified
-    if !packages.is_empty() {
-        let mut pkg_json: serde_json::Value = if PathBuf::from("package.json").exists() {
-            read_package_json()?
-        } else {
-            serde_json::json!({"name": "project", "version": "1.0.0"})
-        };
-        let dep_key = if dev {
-            "devDependencies"
-        } else {
-            "dependencies"
-        };
-        if pkg_json.get(dep_key).is_none() {
-            pkg_json[dep_key] = serde_json::json!({});
-        }
-        for pkg_name in deps.keys() {
-            let requested_spec = deps.get(pkg_name).map(String::as_str).unwrap_or("latest");
-            pkg_json[dep_key][pkg_name] = serde_json::Value::String(dependency_manifest_spec(
-                pkg_name,
-                requested_spec,
-                &graph,
-            ));
-        }
+    // Write package.json manifest if packages were explicitly specified.
+    if let Some(pkg_json) = pending_manifest {
         std::fs::write("package.json", serde_json::to_string_pretty(&pkg_json)?)?;
     }
 
@@ -1307,31 +1322,18 @@ fn cmd_perms(package: &str) -> Result<()> {
 // ---- ADD --------------------------------------------------------------------
 
 async fn cmd_add(package: &str, dev: bool, yes: bool) -> Result<()> {
-    let (name, spec) = parse_package_spec(package);
-    let mut pkg: serde_json::Value = if PathBuf::from("package.json").exists() {
-        read_package_json()?
-    } else {
-        serde_json::json!({"name": "project", "version": "1.0.0"})
-    };
-
-    let client = RegistryClient::default_client()?;
-    let packument = client.fetch_packument(&name).await?;
-    let resolved = oath_fetch::resolve_version(&packument, &spec)?;
-    let version_range = format!("^{}", resolved.version);
-    let key = if dev {
-        "devDependencies"
-    } else {
-        "dependencies"
-    };
-
-    if pkg.get(key).is_none() {
-        pkg[key] = serde_json::json!({});
-    }
-    pkg[key][&name] = serde_json::Value::String(version_range);
-
-    std::fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
-    println!("oath: added {name}@{} ({key})", resolved.version);
-    cmd_install(vec![], false, false, true, yes, false, false, false, None).await
+    cmd_install(
+        vec![package.to_string()],
+        dev,
+        false,
+        true,
+        yes,
+        false,
+        false,
+        false,
+        None,
+    )
+    .await
 }
 
 // ---- RUN --------------------------------------------------------------------
