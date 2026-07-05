@@ -28,14 +28,14 @@ The default free-space guard is `1200` MiB. Override it with
 ## Latest Local Result
 
 The latest local pass was recorded at
-`compat-results/ai-ecosystem/20260705T023030Z/summary.md`:
+`compat-results/ai-ecosystem/20260705T053233Z/summary.md`:
 
-- Oath: `oath 0.1.4`
-- Oath SHA-256: `430c5da477fde3097e52330035caf95912914f966f15d13b758d5f325ed9c492`
+- Oath: `oath 0.1.5`
+- Oath SHA-256: `22655ca0d324070fd38943e2bf339e813667d2c3496777656fb469eb632e9269`
 - Overall: pass
-- Durations: 4s core AI SDKs, 4s Convex, 5s MCP/LangChain, 3s TS tooling
-- Disk samples: 3552 MiB before the first case, 3303 MiB after the final case,
-  with temp cleanup restoring the working volume to about 3.4 GiB free
+- Durations: 5s core AI SDKs, 4s Convex, 6s MCP/LangChain, 3s TS tooling
+- Disk samples: 2615 MiB before the first case and 2361 MiB after the final
+  case, with the working volume showing about 2.5 GiB free after the run
 
 ## Notes
 

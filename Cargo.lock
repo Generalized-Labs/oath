@@ -1159,7 +1159,7 @@ dependencies = [
 
 [[package]]
 name = "oath-analyze"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "oath-core",
@@ -1174,7 +1174,7 @@ dependencies = [
 
 [[package]]
 name = "oath-cli"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "base64",
@@ -1202,7 +1202,7 @@ dependencies = [
 
 [[package]]
 name = "oath-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "blake3",
  "serde",
@@ -1214,7 +1214,7 @@ dependencies = [
 
 [[package]]
 name = "oath-fetch"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "base64",
@@ -1237,7 +1237,7 @@ dependencies = [
 
 [[package]]
 name = "oath-index"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "oath-core",
@@ -1251,7 +1251,7 @@ dependencies = [
 
 [[package]]
 name = "oath-registry"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "axum",
@@ -1270,7 +1270,7 @@ dependencies = [
 
 [[package]]
 name = "oath-resolve"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "flate2",
@@ -1289,7 +1289,7 @@ dependencies = [
 
 [[package]]
 name = "oath-sandbox"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "oath-core",
@@ -1300,7 +1300,7 @@ dependencies = [
 
 [[package]]
 name = "oath-store"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "blake3",
@@ -1318,7 +1318,7 @@ dependencies = [
 
 [[package]]
 name = "oath-transparency"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "serde",
@@ -1327,7 +1327,7 @@ dependencies = [
 
 [[package]]
 name = "oath-workspace"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "glob",

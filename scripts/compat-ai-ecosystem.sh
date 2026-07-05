@@ -127,20 +127,28 @@ if [[ ! -x "$OATH_BIN" ]]; then
   exit 1
 fi
 
+metadata_path() {
+  local path="$1"
+  case "$path" in
+    "$ROOT"/*) printf '%s\n' "${path#$ROOT/}" ;;
+    *) printf '%s\n' "$(basename "$path")" ;;
+  esac
+}
+
 printf 'timestamp,case,phase,available_mib\n' > "$DISK_CSV"
 : > "$CASES_JSONL"
 
 {
   printf 'started_utc=%s\n' "$(date -u '+%Y-%m-%dT%H:%M:%SZ')"
-  printf 'root=%s\n' "$ROOT"
-  printf 'oath_bin=%s\n' "$OATH_BIN"
+  printf 'root=<repo-root>\n'
+  printf 'oath_bin=%s\n' "$(metadata_path "$OATH_BIN")"
   "$OATH_BIN" --version | sed 's/^/oath_version=/'
   if command -v shasum >/dev/null 2>&1; then
     shasum -a 256 "$OATH_BIN" | awk '{ print "oath_sha256=" $1 }'
   fi
   printf 'min_free_mib=%s\n' "$MIN_FREE_MIB"
-  printf 'results_dir=%s\n' "$RESULTS_DIR"
-  printf 'run_root=%s\n' "$RUN_ROOT"
+  printf 'results_dir=%s\n' "$(metadata_path "$RESULTS_DIR")"
+  printf 'run_root=<tmp>/%s\n' "$(basename "$RUN_ROOT")"
   printf 'df_before=\n'
   df -h "$ROOT" /private/tmp
 } > "$METADATA"
