@@ -9,3 +9,6 @@
 .gstack/
 oath-smoke-*/
 oath-launch-target-*/
+compat-results/ai-ecosystem/*/logs/
+compat-results/ai-ecosystem/*/projects/
+compat-results/ai-ecosystem/latest

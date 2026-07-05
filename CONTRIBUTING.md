@@ -17,10 +17,14 @@ cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --locked
 scripts/launch-check.sh
+OATH_BIN=target/release/oath scripts/compat-ai-ecosystem.sh
 ```
 
 Network-backed tests contact the npm registry. If you are changing resolver,
 fetch, install, or exec behavior, run the full launch check before opening a PR.
+The AI ecosystem compatibility check is release-oriented and covers Convex,
+Vercel AI SDK packages, OpenAI SDK, MCP SDK, LangChain core, and TypeScript/tsx
+tooling while recording disk and timing metrics.
 
 ## Pull Requests
 
