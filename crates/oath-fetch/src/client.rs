@@ -4,13 +4,17 @@
 //! etag caching, and multiple registry sources.
 
 use anyhow::{Context, Result};
+use futures_util::StreamExt;
 use reqwest::header::{ACCEPT, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 
 use crate::packument::Packument;
+use crate::tarball::{IntegrityVerifier, TarballLimits};
 
 /// Abbreviated packument Accept header (much smaller than full application/json)
 const ABBREVIATED_ACCEPT: &str =
@@ -19,6 +23,7 @@ const ABBREVIATED_ACCEPT: &str =
 /// TTL for disk cache in seconds: if the cached file is younger than this,
 /// return it directly without any HTTP request.
 const CACHE_TTL_SECS: u64 = 300; // 5 minutes
+const TARBALL_TIMEOUT_SECS: u64 = 120;
 
 /// Registry client configuration
 #[derive(Debug, Clone)]
@@ -243,12 +248,31 @@ impl RegistryClient {
         url: &str,
         expected_integrity: Option<&str>,
     ) -> Result<Vec<u8>> {
+        let limits = TarballLimits::from_env()?;
+        let tmp = tempfile::NamedTempFile::new().context("failed to create temp tarball")?;
+        self.fetch_tarball_to_file(url, expected_integrity, tmp.path(), &limits)
+            .await?;
+        std::fs::read(tmp.path())
+            .with_context(|| format!("failed to read temp tarball {}", tmp.path().display()))
+    }
+
+    /// Stream a tarball to disk while enforcing compressed-size and SRI limits.
+    pub async fn fetch_tarball_to_file(
+        &self,
+        url: &str,
+        expected_integrity: Option<&str>,
+        dest: &Path,
+        limits: &TarballLimits,
+    ) -> Result<u64> {
         tracing::debug!("downloading tarball: {url}");
 
         let mut req = self
             .http
             .get(url)
-            .header(ACCEPT, "application/octet-stream");
+            .header(ACCEPT, "application/octet-stream")
+            .timeout(Duration::from_secs(
+                self.config.timeout_secs.max(TARBALL_TIMEOUT_SECS),
+            ));
         if let Some(tok) = self.token_for_url(url) {
             req = req.bearer_auth(tok);
         }
@@ -258,18 +282,43 @@ impl RegistryClient {
             anyhow::bail!("tarball download returned {}", resp.status());
         }
 
-        let bytes = resp
-            .bytes()
-            .await
-            .context("failed to read tarball")?
-            .to_vec();
-
-        // Verify integrity if provided
-        if let Some(sri) = expected_integrity {
-            crate::tarball::verify_integrity(&bytes, sri)?;
+        if let Some(content_length) = resp.content_length() {
+            limits.check_archive_size(content_length)?;
         }
 
-        Ok(bytes)
+        let mut verifier = expected_integrity
+            .map(IntegrityVerifier::new)
+            .transpose()
+            .context("invalid tarball integrity metadata")?;
+        let mut file = tokio::fs::File::create(dest)
+            .await
+            .with_context(|| format!("failed to create {}", dest.display()))?;
+        let mut downloaded = 0u64;
+        let mut stream = resp.bytes_stream();
+
+        while let Some(chunk) = stream.next().await {
+            let chunk = chunk.context("failed to read tarball chunk")?;
+            downloaded = downloaded
+                .checked_add(chunk.len() as u64)
+                .context("tarball compressed size overflow")?;
+            limits.check_archive_size(downloaded)?;
+            if let Some(verifier) = verifier.as_mut() {
+                verifier.update(&chunk);
+            }
+            file.write_all(&chunk)
+                .await
+                .with_context(|| format!("failed to write {}", dest.display()))?;
+        }
+
+        file.flush()
+            .await
+            .with_context(|| format!("failed to flush {}", dest.display()))?;
+
+        if let Some(verifier) = verifier {
+            verifier.finish()?;
+        }
+
+        Ok(downloaded)
     }
 
     /// Search packages

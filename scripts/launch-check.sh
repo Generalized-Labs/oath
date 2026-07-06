@@ -2,6 +2,19 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+MIN_FREE_MIB="${MIN_FREE_MIB:-10240}"
+case "$ROOT" in
+  *"Mobile Documents"*|*"iCloud"*)
+    echo "launch check must run from a hydrated non-iCloud clone; got $ROOT" >&2
+    exit 1
+    ;;
+esac
+FREE_MIB="$(df -Pm "$ROOT" | awk 'NR==2 {print $4}')"
+if [[ -z "$FREE_MIB" || "$FREE_MIB" -lt "$MIN_FREE_MIB" ]]; then
+  echo "launch check needs at least ${MIN_FREE_MIB} MiB free at $ROOT (found ${FREE_MIB:-unknown})" >&2
+  exit 1
+fi
+
 SMOKE_HOME="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-home.XXXXXX")"
 SMOKE_PROJECT="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-project.XXXXXX")"
 SCOPED_PROJECT="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-scoped.XXXXXX")"
@@ -9,7 +22,8 @@ ALIAS_PROJECT="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-alias.XXXXXX")"
 RUN_PROJECT="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-run.XXXXXX")"
 WORKSPACE_PROJECT="$(mktemp -d "${TMPDIR:-/tmp}/oath-smoke-workspace.XXXXXX")"
 if [[ -n "${OATH_LAUNCH_TARGET_DIR:-}" ]]; then
-  BUILD_TARGET="$OATH_LAUNCH_TARGET_DIR"
+  mkdir -p "$OATH_LAUNCH_TARGET_DIR"
+  BUILD_TARGET="$(cd "$OATH_LAUNCH_TARGET_DIR" && pwd)"
   CLEAN_BUILD_TARGET=0
 else
   BUILD_TARGET="$(mktemp -d "${TMPDIR:-/tmp}/oath-launch-target.XXXXXX")"
@@ -74,6 +88,16 @@ echo "==> release smoke install"
   HOME="$SMOKE_HOME" "$BIN" remove is-odd
   node -e 'const isNumber = require("is-number"); if (!isNumber(7)) process.exit(1)'
   HOME="$SMOKE_HOME" "$BIN" verify
+
+  STORE_PACKAGE_JSON="$(find "$SMOKE_HOME/.oath/store" -path "*is-number*package.json" -print -quit)"
+  cp "$STORE_PACKAGE_JSON" "$STORE_PACKAGE_JSON.bak"
+  printf '\n// tamper\n' >> "$STORE_PACKAGE_JSON"
+  if HOME="$SMOKE_HOME" "$BIN" verify; then
+    echo "expected verify to fail after store tamper" >&2
+    exit 1
+  fi
+  mv "$STORE_PACKAGE_JSON.bak" "$STORE_PACKAGE_JSON"
+  HOME="$SMOKE_HOME" "$BIN" verify
 )
 
 echo "==> release smoke scoped package"
@@ -97,7 +121,9 @@ echo "==> release smoke exec json"
   cd "$SMOKE_PROJECT"
   BIN="$CARGO_TARGET_DIR/release/oath"
   HOME="$SMOKE_HOME" "$BIN" exec --dry-run --json is-number > exec.json
-  node -e 'const r = require("./exec.json"); if (r.name !== "is-number" || r.decision === "deny") process.exit(1)'
+  node -e 'const r = require("./exec.json"); if (r.name !== "is-number" || r.decision === "deny" || r.sandbox_effective !== "off") process.exit(1)'
+  HOME="$SMOKE_HOME" "$BIN" exec --dry-run --json --sandbox is-number > exec-sandbox.json
+  node -e 'const r = require("./exec-sandbox.json"); if (r.name !== "is-number" || r.sandbox_mode !== "auto" || r.sandbox_effective !== "node") process.exit(1)'
 )
 
 echo "==> release smoke run args"

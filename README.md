@@ -33,7 +33,9 @@ cargo test --workspace       # run the test suite
 - **Behavioral analysis** — detects decode→exec payloads, env/secret exfiltration, install-script payloads at install time
 - **Trusts what's proven** — a package with 1M+ weekly downloads and no critical finding grades A, so household tools (prettier, react, lodash) aren't false-flagged; real supply-chain attacks still surface as critical decode→exec/exfil and are blocked
 - **Transparency log** — installs are appended to `~/.oath/transparency.log`
-- **Fast warm installs** — lockfile and content-addressable store fast paths avoid unnecessary resolution and relinking
+- **Verified package store** — cached packages carry a manifest with lock integrity, package identity, byte counts, and a deterministic BLAKE3 file tree
+- **Bounded tarball unpacking** — tarballs are streamed to disk, size-limited, path-checked, and restricted to regular files/directories
+- **Fast warm installs** — lockfile and verified-store fast paths avoid unnecessary resolution and relinking
 - **npm compatibility where it matters first** — package.json deps/devDeps, npm aliases, scoped packages, git deps, workspaces, global installs, lifecycle scripts, and publish support are implemented; edge-case compatibility gaps should be reported
 
 Detection is measured against a corpus of popular and real-malware packages —
@@ -54,6 +56,7 @@ oath add lodash            # add dependency and install
 oath remove lodash         # remove dependency
 oath run build            # run script with pre/post hooks
 oath exec prettier .      # run package binary (npx replacement)
+oath exec --sandbox tsx   # run with Node permission sandbox when available
 oath publish              # publish to npm registry
 oath log                  # view transparency log
 oath score <pkg>          # security score for a package
@@ -96,6 +99,43 @@ Use this in CI:
 oath ci
 oath verify
 ```
+
+## Store Verification
+
+Each package in `~/.oath/store` includes `.oath-store-manifest.json`. `oath`
+checks that manifest before warm installs, `ci`, `verify`, `exec`, `score`, and
+global installs. Old cache entries without a manifest are treated as unverified
+and rebuilt from the registry.
+
+`oath verify` now performs full manifest/tree verification and fails on missing,
+tampered, malformed, or package.json-mismatched store entries.
+
+Tarball safety limits default to 512 MiB compressed, 2 GiB unpacked, and 200k
+entries. Emergency compatibility overrides are available:
+
+```sh
+OATH_MAX_TARBALL_BYTES=1073741824 oath install
+OATH_MAX_UNPACKED_BYTES=4294967296 oath install
+OATH_MAX_TARBALL_ENTRIES=400000 oath install
+```
+
+## Exec Sandboxing
+
+`oath exec` remains unsandboxed by default for human npx compatibility in this
+release. For agents or high-risk workflows:
+
+```sh
+oath exec --sandbox <pkg> -- <args>
+oath exec --sandbox-mode node <pkg>
+OATH_AGENT_MODE=1 oath exec <pkg>
+```
+
+`node` mode uses Node's permission flags when supported, allowing reads from the
+project, temp exec tree, and temp dir, and writes to the project and temp dir.
+Subprocesses, workers, addons, and network stay denied unless Node changes its
+permission defaults. `native` mode currently fails closed; Linux Landlock/seccomp
+is reserved for the next sandbox milestone. On macOS, the public sandbox story is
+Node-permission-only for now.
 
 ## Requirements
 
