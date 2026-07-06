@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::PathBuf;
@@ -12,15 +12,35 @@ use rayon::prelude::*;
 use oath_analyze::{PackageScanner, RiskLevel};
 use oath_core::policy::OathPolicy;
 use oath_fetch::RegistryClient;
+use oath_fetch::tarball::TarballLimits;
 use oath_resolve::git::git_cache_file_name;
 use oath_resolve::graph::{DepNode, PeerResolution};
 use oath_resolve::resolver::{ResolveOptions, Resolver};
 use oath_resolve::{DepGraph, Lockfile};
-use oath_store::cas::ContentStore;
+use oath_store::cas::{ContentStore, PackageVerification};
 use oath_store::linker::{Linker, validate_install_name};
 use oath_workspace::{WorkspaceRoot, detect_workspace_root};
 
 mod prompts;
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum ExecSandboxMode {
+    Off,
+    Node,
+    Native,
+    Auto,
+}
+
+impl ExecSandboxMode {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Node => "node",
+            Self::Native => "native",
+            Self::Auto => "auto",
+        }
+    }
+}
 
 #[derive(Parser)]
 #[command(
@@ -100,6 +120,12 @@ enum Commands {
         /// Show the pre-run verdict and exit without executing
         #[arg(long)]
         dry_run: bool,
+        /// Run the package binary with sandboxing enabled (auto mode)
+        #[arg(long)]
+        sandbox: bool,
+        /// Sandbox mode to use: off, node, native, or auto
+        #[arg(long, value_enum, default_value_t = ExecSandboxMode::Off)]
+        sandbox_mode: ExecSandboxMode,
     },
     /// Scan installed packages for malicious behavior (behavioral analysis, not a CVE audit)
     #[command(visible_alias = "audit")]
@@ -226,6 +252,8 @@ async fn main() -> Result<()> {
             json,
             require_grade,
             dry_run,
+            sandbox,
+            sandbox_mode,
         } => {
             cmd_exec(
                 &package,
@@ -235,6 +263,8 @@ async fn main() -> Result<()> {
                 json,
                 require_grade.as_deref(),
                 dry_run,
+                sandbox,
+                sandbox_mode,
             )
             .await?;
         }
@@ -293,7 +323,7 @@ async fn cmd_install(
     }
 
     // ---- Workspace detection ------------------------------------------------
-    let cwd = std::env::current_dir()?;
+    let cwd = std::env::current_dir()?.canonicalize()?;
     let workspace = detect_workspace_root(&cwd);
 
     if let Some(ref ws) = workspace {
@@ -938,51 +968,17 @@ async fn cmd_install_workspace(
     let store = Arc::new(ContentStore::default_store()?);
     let client = Arc::new(RegistryClient::default_client()?);
 
-    let mut to_download = vec![];
-    let mut cached = 0usize;
-    for node in graph.nodes.values() {
-        if store.has_package(&node.name, &node.version) {
-            cached += 1;
-        } else {
-            to_download.push(node.clone());
-        }
-    }
-
-    let mut downloaded = 0usize;
-    let mut download_bytes = 0u64;
-
-    if !to_download.is_empty() {
-        let mut set: JoinSet<Result<(String, String, Vec<u8>)>> = JoinSet::new();
-        for node in to_download {
-            let client = Arc::clone(&client);
-            let resolved = node.resolved.clone();
-            let integrity = node.integrity.clone();
-            let name = node.name.clone();
-            let version = node.version.clone();
-            set.spawn(async move {
-                let data = client
-                    .fetch_tarball(&resolved, integrity.as_deref())
-                    .await
-                    .with_context(|| format!("downloading {name}@{version}"))?;
-                Ok((name, version, data))
-            });
-        }
-        while let Some(res) = set.join_next().await {
-            let (name, version, data) = res??;
-            download_bytes += data.len() as u64;
-            let tmp = tempfile::tempdir()?;
-            oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
-            store.store_package(&name, &version, tmp.path())?;
-            downloaded += 1;
-        }
-    }
+    let (to_download, cached) = missing_store_nodes(&graph, &store);
+    let summary = download_missing_nodes(to_download, Arc::clone(&store), Arc::clone(&client))
+        .await
+        .context("failed to download workspace dependencies")?;
 
     let download_time = download_start.elapsed();
-    if downloaded > 0 {
+    if summary.downloaded > 0 {
         println!(
             "  downloaded {} new ({}) in {:.1}s",
-            downloaded,
-            format_bytes(download_bytes),
+            summary.downloaded,
+            format_bytes(summary.bytes),
             download_time.as_secs_f64()
         );
     }
@@ -1091,8 +1087,8 @@ async fn cmd_install_workspace(
     }
 
     // Audit if requested
-    if run_audit && downloaded > 0 {
-        println!("  scanning {} new packages...", downloaded);
+    if run_audit && summary.downloaded > 0 {
+        println!("  scanning {} new packages...", summary.downloaded);
         // (same logic as single-pkg install; abbreviated here)
     }
 
@@ -1839,93 +1835,43 @@ fn cmd_verify() -> Result<()> {
         println!("oath verify: no oath-lock.json found");
         return Ok(());
     }
-    let content = std::fs::read_to_string(&lock_path)?;
-    let lock: serde_json::Value = serde_json::from_str(&content)?;
-
-    let packages = match lock.get("packages").and_then(|p| p.as_object()) {
-        Some(p) => p,
-        None => {
-            println!("oath verify: oath-lock.json has no packages");
-            return Ok(());
-        }
-    };
+    let lock = Lockfile::read(&lock_path)?;
 
     let store = ContentStore::default_store()?;
-    let total = packages.len();
+    let total = lock.packages.len();
     println!("  checking {total} packages...");
 
     let mut missing = 0usize;
     let mut tampered = 0usize;
     let mut ok = 0usize;
 
-    let mut entries: Vec<(&String, &serde_json::Value)> = packages.iter().collect();
+    let mut entries: Vec<_> = lock.packages.iter().collect();
     entries.sort_by_key(|(k, _)| k.as_str());
 
-    for (key, node) in &entries {
-        // The package name lives in the key ("name@version" or "@scope/name@version"),
-        // not in the entry. Reading it from the entry left `name` empty and silently
-        // skipped every package -- the cause of "0 packages verified".
+    for (key, entry) in &entries {
         let name = match key.rfind('@') {
             Some(at) if at > 0 => &key[..at],
             _ => key.as_str(),
         };
-        let version = node.get("version").and_then(|v| v.as_str()).unwrap_or("");
-        let integrity = node.get("integrity").and_then(|i| i.as_str()).unwrap_or("");
 
-        if name.is_empty() || version.is_empty() {
+        if name.is_empty() || entry.version.is_empty() {
             continue;
         }
 
-        let pkg_dir = store.package_dir(name, version);
-
-        if !pkg_dir.exists() {
-            println!("  MISSING:  {key}");
-            missing += 1;
-            continue;
-        }
-
-        // Re-hash package.json as a key file integrity check
-        let pkg_json = pkg_dir.join("package.json");
-        if !pkg_json.exists() {
-            println!("  MISSING:  {key} -- package.json not found in store");
-            missing += 1;
-            continue;
-        }
-
-        // If integrity is a sha512 hash (sri format), we can verify the tarball hash.
-        // Since we don't have the tarball anymore, verify package.json exists and
-        // cross-check the name/version fields match what's locked.
-        if !integrity.is_empty() {
-            match std::fs::read_to_string(&pkg_json) {
-                Ok(pj_content) => match serde_json::from_str::<serde_json::Value>(&pj_content) {
-                    Ok(pj) => {
-                        let stored_name = pj.get("name").and_then(|n| n.as_str()).unwrap_or("");
-                        let stored_version =
-                            pj.get("version").and_then(|v| v.as_str()).unwrap_or("");
-                        if stored_name != name || stored_version != version {
-                            println!(
-                                "  TAMPERED: {key} -- package.json name/version mismatch (got {stored_name}@{stored_version})"
-                            );
-                            tampered += 1;
-                            continue;
-                        }
-                    }
-                    Err(_) => {
-                        println!("  TAMPERED: {key} -- package.json is not valid JSON");
-                        tampered += 1;
-                        continue;
-                    }
-                },
-                Err(_) => {
-                    println!("  TAMPERED: {key} -- could not read package.json");
-                    tampered += 1;
-                    continue;
-                }
+        match store.verify_package(name, &entry.version, entry.integrity.as_deref()) {
+            PackageVerification::Verified(_) => {
+                println!("  {key:<40} ok");
+                ok += 1;
+            }
+            PackageVerification::Missing => {
+                println!("  MISSING:  {key}");
+                missing += 1;
+            }
+            PackageVerification::Corrupt(reason) => {
+                println!("  TAMPERED: {key} -- {reason}");
+                tampered += 1;
             }
         }
-
-        println!("  {key:<40} ok");
-        ok += 1;
     }
 
     println!();
@@ -2163,7 +2109,9 @@ fn lockfile_all_cached(lockfile: &Lockfile, store: &ContentStore) -> bool {
         } else {
             key.as_str()
         };
-        store.has_package(name, &entry.version)
+        store
+            .verify_package(name, &entry.version, entry.integrity.as_deref())
+            .is_verified()
     })
 }
 
@@ -2171,10 +2119,11 @@ fn missing_store_nodes(graph: &DepGraph, store: &ContentStore) -> (Vec<DepNode>,
     let mut to_download = Vec::new();
     let mut cached = 0usize;
     for node in graph.nodes.values() {
-        if store.has_package(&node.name, &node.version) {
-            cached += 1;
-        } else {
-            to_download.push(node.clone());
+        match store.verify_package(&node.name, &node.version, node.integrity.as_deref()) {
+            PackageVerification::Verified(_) => cached += 1,
+            PackageVerification::Missing | PackageVerification::Corrupt(_) => {
+                to_download.push(node.clone());
+            }
         }
     }
     (to_download, cached)
@@ -2183,6 +2132,16 @@ fn missing_store_nodes(graph: &DepGraph, store: &ContentStore) -> (Vec<DepNode>,
 #[derive(Debug, Default)]
 struct DownloadSummary {
     downloaded: usize,
+    bytes: u64,
+}
+
+struct DownloadedPackage {
+    name: String,
+    version: String,
+    resolved: String,
+    integrity: Option<String>,
+    temp_dir: tempfile::TempDir,
+    tarball_path: PathBuf,
     bytes: u64,
 }
 
@@ -2196,50 +2155,153 @@ async fn download_missing_nodes(
         return Ok(summary);
     }
 
-    let mut set: JoinSet<Result<(String, String, Vec<u8>)>> = JoinSet::new();
+    let limits = TarballLimits::from_env()?;
+    let mut set: JoinSet<Result<DownloadedPackage>> = JoinSet::new();
     for node in to_download {
         let client = Arc::clone(&client);
-        let resolved = node.resolved.clone();
-        let integrity = node.integrity.clone();
-        let name = node.name.clone();
-        let version = node.version.clone();
+        let limits = limits.clone();
         set.spawn(async move {
-            if resolved.starts_with("git+")
-                || resolved.starts_with("github:")
-                || resolved.starts_with("gitlab:")
-                || resolved.starts_with("bitbucket:")
-            {
-                let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-                let cache_file = std::path::PathBuf::from(&home)
-                    .join(".oath")
-                    .join("git-cache")
-                    .join(git_cache_file_name(&name, &version));
-                if cache_file.exists() {
-                    let data = std::fs::read(&cache_file)
-                        .with_context(|| format!("reading git cache {}", cache_file.display()))?;
-                    return Ok((name, version, data));
-                }
-                anyhow::bail!("git dep {name}@{version} not in cache and no tarball URL available");
-            }
-
-            let data = client
-                .fetch_tarball(&resolved, integrity.as_deref())
-                .await
-                .with_context(|| format!("downloading {name}@{version}"))?;
-            Ok((name, version, data))
+            download_tarball_to_temp(
+                client,
+                node.name,
+                node.version,
+                node.resolved,
+                node.integrity,
+                limits,
+            )
+            .await
         });
     }
 
     while let Some(res) = set.join_next().await {
-        let (name, version, data) = res??;
-        summary.bytes += data.len() as u64;
+        let downloaded = res??;
+        summary.bytes += downloaded.bytes;
         let tmp = tempfile::tempdir()?;
-        oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
-        store.store_package(&name, &version, tmp.path())?;
+        oath_fetch::tarball::extract_tarball_file_limited(
+            &downloaded.tarball_path,
+            tmp.path(),
+            &limits,
+        )?;
+        store.store_package_with_manifest(
+            &downloaded.name,
+            &downloaded.version,
+            Some(&downloaded.resolved),
+            downloaded.integrity.as_deref(),
+            tmp.path(),
+        )?;
+        drop(downloaded.temp_dir);
         summary.downloaded += 1;
     }
 
     Ok(summary)
+}
+
+async fn download_tarball_to_temp(
+    client: Arc<RegistryClient>,
+    name: String,
+    version: String,
+    resolved: String,
+    integrity: Option<String>,
+    limits: TarballLimits,
+) -> Result<DownloadedPackage> {
+    let temp_dir = tempfile::tempdir().context("failed to create temp tarball dir")?;
+    let tarball_path = temp_dir.path().join("package.tgz");
+
+    let bytes = if is_git_resolved(&resolved) {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let cache_file = std::path::PathBuf::from(&home)
+            .join(".oath")
+            .join("git-cache")
+            .join(git_cache_file_name(&name, &version));
+        if !cache_file.exists() {
+            anyhow::bail!("git dep {name}@{version} not in cache and no tarball URL available");
+        }
+        let len = std::fs::metadata(&cache_file)
+            .with_context(|| format!("stat git cache {}", cache_file.display()))?
+            .len();
+        limits.check_archive_size(len)?;
+        std::fs::copy(&cache_file, &tarball_path).with_context(|| {
+            format!(
+                "copying git cache {} -> {}",
+                cache_file.display(),
+                tarball_path.display()
+            )
+        })?;
+        len
+    } else {
+        client
+            .fetch_tarball_to_file(&resolved, integrity.as_deref(), &tarball_path, &limits)
+            .await
+            .with_context(|| format!("downloading {name}@{version}"))?
+    };
+
+    Ok(DownloadedPackage {
+        name,
+        version,
+        resolved,
+        integrity,
+        temp_dir,
+        tarball_path,
+        bytes,
+    })
+}
+
+async fn download_and_store_package(
+    client: &RegistryClient,
+    store: &ContentStore,
+    name: &str,
+    version: &str,
+    resolved: &str,
+    integrity: Option<&str>,
+) -> Result<u64> {
+    let limits = TarballLimits::from_env()?;
+    let temp_dir = tempfile::tempdir().context("failed to create temp tarball dir")?;
+    let tarball_path = temp_dir.path().join("package.tgz");
+    let bytes = if is_git_resolved(resolved) {
+        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let cache_file = std::path::PathBuf::from(&home)
+            .join(".oath")
+            .join("git-cache")
+            .join(git_cache_file_name(name, version));
+        if !cache_file.exists() {
+            anyhow::bail!("git dep {name}@{version} not in cache and no tarball URL available");
+        }
+        let len = std::fs::metadata(&cache_file)
+            .with_context(|| format!("stat git cache {}", cache_file.display()))?
+            .len();
+        limits.check_archive_size(len)?;
+        std::fs::copy(&cache_file, &tarball_path).with_context(|| {
+            format!(
+                "copying git cache {} -> {}",
+                cache_file.display(),
+                tarball_path.display()
+            )
+        })?;
+        len
+    } else {
+        client
+            .fetch_tarball_to_file(resolved, integrity, &tarball_path, &limits)
+            .await
+            .with_context(|| format!("downloading {name}@{version}"))?
+    };
+
+    let extracted = tempfile::tempdir().context("failed to create temp extract dir")?;
+    oath_fetch::tarball::extract_tarball_file_limited(&tarball_path, extracted.path(), &limits)?;
+    store.store_package_with_manifest(
+        name,
+        version,
+        Some(resolved),
+        integrity,
+        extracted.path(),
+    )?;
+    Ok(bytes)
+}
+
+fn is_git_resolved(resolved: &str) -> bool {
+    resolved.starts_with("git+")
+        || resolved.starts_with("github:")
+        || resolved.starts_with("gitlab:")
+        || resolved.starts_with("bitbucket:")
 }
 
 fn parse_package_spec(spec: &str) -> (String, String) {
@@ -2486,6 +2548,117 @@ fn dir_size(dir: &std::path::Path) -> u64 {
     total
 }
 
+#[derive(Copy, Clone, Debug)]
+struct ExecSandboxDecision {
+    requested_mode: ExecSandboxMode,
+    effective_mode: ExecSandboxMode,
+}
+
+fn resolve_exec_sandbox(
+    sandbox: bool,
+    sandbox_mode: ExecSandboxMode,
+) -> Result<ExecSandboxDecision> {
+    let agent_mode = std::env::var("OATH_AGENT_MODE")
+        .map(|value| {
+            matches!(
+                value.to_ascii_lowercase().as_str(),
+                "1" | "true" | "yes" | "on"
+            )
+        })
+        .unwrap_or(false);
+
+    let requested_mode = if sandbox {
+        if sandbox_mode == ExecSandboxMode::Off {
+            ExecSandboxMode::Auto
+        } else {
+            sandbox_mode
+        }
+    } else if agent_mode && sandbox_mode == ExecSandboxMode::Off {
+        ExecSandboxMode::Auto
+    } else {
+        sandbox_mode
+    };
+
+    let effective_mode = match requested_mode {
+        ExecSandboxMode::Off => ExecSandboxMode::Off,
+        ExecSandboxMode::Node => {
+            ensure_node_permission_sandbox()?;
+            ExecSandboxMode::Node
+        }
+        ExecSandboxMode::Native => {
+            anyhow::bail!("native exec sandbox is not available in this release")
+        }
+        ExecSandboxMode::Auto => {
+            if node_permission_flag().is_some() {
+                ExecSandboxMode::Node
+            } else if agent_mode || sandbox {
+                anyhow::bail!(
+                    "no supported exec sandbox is available: install a Node version with permission flags or use --sandbox-mode off"
+                );
+            } else {
+                ExecSandboxMode::Off
+            }
+        }
+    };
+
+    Ok(ExecSandboxDecision {
+        requested_mode,
+        effective_mode,
+    })
+}
+
+fn ensure_node_permission_sandbox() -> Result<&'static str> {
+    node_permission_flag().context("Node permission sandbox is unavailable on this Node runtime")
+}
+
+fn node_permission_flag() -> Option<&'static str> {
+    let output = std::process::Command::new("node")
+        .arg("--help")
+        .output()
+        .ok()?;
+    let text = format!(
+        "{}{}",
+        String::from_utf8_lossy(&output.stdout),
+        String::from_utf8_lossy(&output.stderr)
+    );
+    if text.contains("--permission") {
+        Some("--permission")
+    } else if text.contains("--experimental-permission") {
+        Some("--experimental-permission")
+    } else {
+        None
+    }
+}
+
+fn run_node_binary(
+    bin_path: &std::path::Path,
+    args: &[String],
+    exec_path: &std::path::Path,
+    sandbox_mode: ExecSandboxMode,
+) -> Result<std::process::ExitStatus> {
+    let mut cmd = std::process::Command::new("node");
+    if sandbox_mode == ExecSandboxMode::Node {
+        let permission_flag = ensure_node_permission_sandbox()?;
+        let cwd = std::env::current_dir().context("failed to read current dir")?;
+        let tmp = std::env::temp_dir();
+        cmd.arg(permission_flag)
+            .arg(format!("--allow-fs-read={}", cwd.display()))
+            .arg(format!("--allow-fs-read={}", exec_path.display()))
+            .arg(format!("--allow-fs-read={}", tmp.display()))
+            .arg(format!("--allow-fs-write={}", cwd.display()))
+            .arg(format!("--allow-fs-write={}", tmp.display()));
+    }
+
+    cmd.arg(bin_path).args(args).status().with_context(|| {
+        format!(
+            "failed to execute node {} with sandbox mode {}",
+            bin_path.display(),
+            sandbox_mode.as_str()
+        )
+    })
+}
+
+#[allow(clippy::too_many_arguments)]
 async fn cmd_exec(
     package: &str,
     args: &[String],
@@ -2494,6 +2667,8 @@ async fn cmd_exec(
     json: bool,
     require_grade: Option<&str>,
     dry_run: bool,
+    sandbox: bool,
+    sandbox_mode: ExecSandboxMode,
 ) -> Result<()> {
     use oath_analyze::{
         FindingKind, PackageScanner, RiskLevel, ScoreContext, compute_safety_score_contextual,
@@ -2502,10 +2677,11 @@ async fn cmd_exec(
 
     let start = std::time::Instant::now();
     let (pkg_name, pkg_version) = parse_package_spec(package);
+    let sandbox_decision = resolve_exec_sandbox(sandbox, sandbox_mode)?;
 
     // Local node_modules/.bin fast path: already installed by the project (trusted).
     let local_bin = PathBuf::from("node_modules/.bin").join(&pkg_name);
-    if local_bin.exists() && !dry_run {
+    if local_bin.exists() && !dry_run && sandbox_decision.effective_mode == ExecSandboxMode::Off {
         if !json {
             println!("oath exec: running {} (local)", pkg_name);
         }
@@ -2592,14 +2768,19 @@ async fn cmd_exec(
 
     // Download + resolve the full tree + link, so requires work and we can scan.
     let store = ContentStore::default_store()?;
-    if !store.has_package(&pkg_name, &version) {
-        let data = client
-            .fetch_tarball(&info.dist.tarball, info.dist.integrity.as_deref())
-            .await
-            .with_context(|| format!("downloading {pkg_name}@{version}"))?;
-        let tmp = tempfile::tempdir()?;
-        oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
-        store.store_package(&pkg_name, &version, tmp.path())?;
+    if !store
+        .verify_package(&pkg_name, &version, info.dist.integrity.as_deref())
+        .is_verified()
+    {
+        download_and_store_package(
+            &client,
+            &store,
+            &pkg_name,
+            &version,
+            &info.dist.tarball,
+            info.dist.integrity.as_deref(),
+        )
+        .await?;
     }
     let exec_dir = tempfile::tempdir()?;
     let exec_path = exec_dir.path().to_path_buf();
@@ -2623,13 +2804,19 @@ async fn cmd_exec(
     let graph = resolver.resolve(&deps_map, &HashMap::new()).await?;
     let store2 = ContentStore::default_store()?;
     for node in graph.nodes.values() {
-        if !store2.has_package(&node.name, &node.version) {
-            let data = client
-                .fetch_tarball(&node.resolved, node.integrity.as_deref())
-                .await?;
-            let tmp = tempfile::tempdir()?;
-            oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
-            store2.store_package(&node.name, &node.version, tmp.path())?;
+        if !store2
+            .verify_package(&node.name, &node.version, node.integrity.as_deref())
+            .is_verified()
+        {
+            download_and_store_package(
+                &client,
+                &store2,
+                &node.name,
+                &node.version,
+                &node.resolved,
+                node.integrity.as_deref(),
+            )
+            .await?;
         }
     }
     let linker = oath_store::Linker::new(store2);
@@ -2708,6 +2895,8 @@ async fn cmd_exec(
             "obfuscated": obfuscated,
             "unpacked_kb": unpacked_kb,
             "permissions": perms,
+            "sandbox_mode": sandbox_decision.requested_mode.as_str(),
+            "sandbox_effective": sandbox_decision.effective_mode.as_str(),
             "verdict": format!("{:?}", report.overall_risk),
             "findings": serious
                 .iter()
@@ -2750,6 +2939,12 @@ async fn cmd_exec(
                 perms.join(", ")
             }
         );
+        if sandbox_decision.effective_mode != ExecSandboxMode::Off {
+            println!(
+                "  sandbox      {}",
+                sandbox_decision.effective_mode.as_str()
+            );
+        }
         if !serious.is_empty() {
             println!("\n  findings:");
             for f in serious.iter().take(5) {
@@ -2809,10 +3004,7 @@ async fn cmd_exec(
         eprintln!("  fetched + scanned in {:.1}s", elapsed.as_secs_f64());
     }
 
-    let status = std::process::Command::new("node")
-        .arg(&bin_path)
-        .args(args)
-        .status()
+    let status = run_node_binary(&bin_path, args, &exec_path, sandbox_decision.effective_mode)
         .with_context(|| format!("failed to execute node {}", bin_path.display()))?;
     std::process::exit(status.code().unwrap_or(1));
 }
@@ -2835,15 +3027,21 @@ async fn cmd_score(package: &str) -> Result<()> {
 
     // Ensure in store
     let store = ContentStore::default_store()?;
-    let pkg_dir = if store.has_package(&pkg_name, &version) {
+    let pkg_dir = if store
+        .verify_package(&pkg_name, &version, info.dist.integrity.as_deref())
+        .is_verified()
+    {
         store.package_dir(&pkg_name, &version)
     } else {
-        let data = client
-            .fetch_tarball(&info.dist.tarball, info.dist.integrity.as_deref())
-            .await?;
-        let tmp = tempfile::tempdir()?;
-        oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
-        store.store_package(&pkg_name, &version, tmp.path())?;
+        download_and_store_package(
+            &client,
+            &store,
+            &pkg_name,
+            &version,
+            &info.dist.tarball,
+            info.dist.integrity.as_deref(),
+        )
+        .await?;
         store.package_dir(&pkg_name, &version)
     };
 
@@ -3178,6 +3376,133 @@ async fn cmd_remove(packages: Vec<String>) -> Result<()> {
 
 // ---- PUBLISH ----------------------------------------------------------------
 
+fn collect_publish_files(
+    root: &std::path::Path,
+    excludes: &[&str],
+    npmignore: &[String],
+    whitelist: &Option<Vec<String>>,
+) -> Result<Vec<PathBuf>> {
+    let root = root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize project root {}", root.display()))?;
+    let mut files = Vec::new();
+    collect_publish_files_inner(&root, &root, &mut files, excludes, npmignore, whitelist)?;
+    files.sort();
+    files.dedup();
+    Ok(files)
+}
+
+fn collect_publish_files_inner(
+    dir: &std::path::Path,
+    root: &std::path::Path,
+    files: &mut Vec<PathBuf>,
+    excludes: &[&str],
+    npmignore: &[String],
+    whitelist: &Option<Vec<String>>,
+) -> Result<()> {
+    let entries = std::fs::read_dir(dir)
+        .with_context(|| format!("failed to read publish dir {}", dir.display()))?
+        .collect::<std::result::Result<Vec<_>, _>>()
+        .with_context(|| format!("failed to read publish dir entry {}", dir.display()))?;
+
+    for entry in entries {
+        let path = entry.path();
+        let metadata = std::fs::symlink_metadata(&path)
+            .with_context(|| format!("failed to stat publish path {}", path.display()))?;
+        if metadata.file_type().is_symlink() {
+            anyhow::bail!("oath publish: refusing symlink {}", path.display());
+        }
+
+        let canonical = path
+            .canonicalize()
+            .with_context(|| format!("failed to canonicalize publish path {}", path.display()))?;
+        if !canonical.starts_with(root) {
+            anyhow::bail!(
+                "oath publish: refusing out-of-root path {}",
+                canonical.display()
+            );
+        }
+
+        let rel = canonical
+            .strip_prefix(root)
+            .unwrap_or(&canonical)
+            .to_string_lossy()
+            .replace('\\', "/");
+        if rel.is_empty() || should_publish_exclude(&rel, excludes, npmignore) {
+            continue;
+        }
+
+        if !publish_whitelist_allows(&rel, &canonical, whitelist) {
+            continue;
+        }
+
+        if metadata.is_dir() {
+            collect_publish_files_inner(&canonical, root, files, excludes, npmignore, whitelist)?;
+        } else if metadata.is_file() {
+            std::fs::File::open(&canonical)
+                .with_context(|| format!("oath publish: cannot read {}", canonical.display()))?;
+            files.push(canonical);
+        } else {
+            anyhow::bail!(
+                "oath publish: refusing non-regular file {}",
+                canonical.display()
+            );
+        }
+    }
+
+    Ok(())
+}
+
+fn publish_whitelist_allows(
+    rel: &str,
+    path: &std::path::Path,
+    whitelist: &Option<Vec<String>>,
+) -> bool {
+    let Some(whitelist) = whitelist else {
+        return true;
+    };
+    let top = rel.split('/').next().unwrap_or(rel);
+    if whitelist
+        .iter()
+        .any(|w| w.trim_end_matches('/') == top || w.trim_end_matches('/') == rel)
+    {
+        return true;
+    }
+
+    let fname = path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("");
+    matches!(
+        fname,
+        "package.json" | "README.md" | "README" | "LICENSE" | "LICENCE"
+    )
+}
+
+fn should_publish_exclude(rel: &str, excludes: &[&str], npmignore: &[String]) -> bool {
+    for pat in excludes {
+        if rel == *pat || rel.starts_with(&format!("{}/", pat)) {
+            return true;
+        }
+    }
+
+    for pat in npmignore {
+        let pat = pat.trim_end_matches('/');
+        if rel == pat
+            || rel.starts_with(&format!("{}/", pat))
+            || rel.ends_with(&format!(".{}", pat.trim_start_matches("*.")))
+            || (pat.starts_with("*.") && rel.ends_with(&pat[1..]))
+        {
+            return true;
+        }
+    }
+
+    rel.ends_with(".test.js")
+        || rel.ends_with(".spec.js")
+        || rel.ends_with(".test.ts")
+        || rel.ends_with(".spec.ts")
+}
+
 async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> Result<()> {
     use base64::Engine;
     use flate2::Compression;
@@ -3232,103 +3557,12 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
                 .collect()
         });
 
-    // Collect files
-    let mut files_to_pack: Vec<PathBuf> = vec![];
-
-    // Always include these if they exist
-    let _always_include = ["package.json", "README.md", "README", "LICENSE", "LICENCE"];
-
-    fn should_exclude(rel: &str, excludes: &[&str], npmignore: &[String]) -> bool {
-        // Check default excludes
-        for pat in excludes {
-            if rel == *pat
-                || rel.starts_with(&format!("{}/", pat))
-                || rel.starts_with(&format!("{}\\", pat))
-            {
-                return true;
-            }
-        }
-        // Check .npmignore patterns
-        for pat in npmignore {
-            let pat = pat.trim_end_matches('/');
-            if rel == pat
-                || rel.starts_with(&format!("{}/", pat))
-                || rel.ends_with(&format!(".{}", pat.trim_start_matches("*.")))
-                || (pat.starts_with("*.") && rel.ends_with(&pat[1..]))
-            {
-                return true;
-            }
-        }
-        // Default test file exclusions
-        if rel.ends_with(".test.js")
-            || rel.ends_with(".spec.js")
-            || rel.ends_with(".test.ts")
-            || rel.ends_with(".spec.ts")
-        {
-            return true;
-        }
-        false
-    }
-
-    fn collect_files(
-        dir: &std::path::Path,
-        base: &std::path::Path,
-        files: &mut Vec<PathBuf>,
-        excludes: &[&str],
-        npmignore: &[String],
-        whitelist: &Option<Vec<String>>,
-    ) {
-        let Ok(entries) = std::fs::read_dir(dir) else {
-            return;
-        };
-        for entry in entries.filter_map(|e| e.ok()) {
-            let path = entry.path();
-            let rel = path
-                .strip_prefix(base)
-                .unwrap_or(&path)
-                .to_string_lossy()
-                .to_string();
-
-            // If whitelist is set, only include whitelisted paths (at top level)
-            if let Some(wl) = whitelist {
-                let top = rel.split('/').next().unwrap_or(&rel);
-                if !wl
-                    .iter()
-                    .any(|w| w.trim_end_matches('/') == top || w.trim_end_matches('/') == rel)
-                {
-                    // Still include always-include files
-                    let fname = path
-                        .file_name()
-                        .unwrap_or_default()
-                        .to_string_lossy()
-                        .to_string();
-                    let always = ["package.json", "README.md", "README", "LICENSE", "LICENCE"];
-                    if !always.contains(&fname.as_str()) {
-                        continue;
-                    }
-                }
-            }
-
-            if should_exclude(&rel, excludes, npmignore) {
-                continue;
-            }
-
-            if path.is_dir() {
-                collect_files(&path, base, files, excludes, npmignore, whitelist);
-            } else if path.is_file() {
-                files.push(path);
-            }
-        }
-    }
-
-    collect_files(
+    let mut files_to_pack = collect_publish_files(
         &cwd,
-        &cwd,
-        &mut files_to_pack,
         &default_excludes,
         &npmignore_patterns,
         &files_whitelist,
-    );
+    )?;
 
     // Always ensure package.json is first
     let pkg_json_path = cwd.join("package.json");
@@ -3566,42 +3800,13 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
     // Download missing packages
     let store = Arc::new(ContentStore::default_store()?);
     let client = Arc::new(RegistryClient::default_client()?);
-    let mut downloaded = 0usize;
+    let (to_download, _) = missing_store_nodes(&graph, &store);
+    let summary = download_missing_nodes(to_download, Arc::clone(&store), Arc::clone(&client))
+        .await
+        .context("failed to download global dependencies")?;
 
-    let mut to_download = vec![];
-    for node in graph.nodes.values() {
-        if !store.has_package(&node.name, &node.version) {
-            to_download.push(node.clone());
-        }
-    }
-
-    if !to_download.is_empty() {
-        let mut set: JoinSet<Result<(String, String, Vec<u8>)>> = JoinSet::new();
-        for node in to_download {
-            let client = Arc::clone(&client);
-            let resolved = node.resolved.clone();
-            let integrity = node.integrity.clone();
-            let name = node.name.clone();
-            let version = node.version.clone();
-            set.spawn(async move {
-                let data = client
-                    .fetch_tarball(&resolved, integrity.as_deref())
-                    .await
-                    .with_context(|| format!("downloading {name}@{version}"))?;
-                Ok((name, version, data))
-            });
-        }
-        while let Some(res) = set.join_next().await {
-            let (name, version, data) = res??;
-            let tmp = tempfile::tempdir()?;
-            oath_fetch::tarball::extract_tarball(&data, tmp.path())?;
-            store.store_package(&name, &version, tmp.path())?;
-            downloaded += 1;
-        }
-    }
-
-    if downloaded > 0 {
-        println!("  downloaded {} packages", downloaded);
+    if summary.downloaded > 0 {
+        println!("  downloaded {} packages", summary.downloaded);
     }
 
     // Link into global node_modules
@@ -3881,13 +4086,114 @@ mod tests {
         assert_eq!(missing.len(), 1);
         assert_eq!(cached, 0);
 
-        let pkg_dir = store.package_dir("pkg", "1.0.0");
-        std::fs::create_dir_all(&pkg_dir).unwrap();
-        std::fs::write(pkg_dir.join("package.json"), "{}").unwrap();
+        let source = tmp.path().join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("package.json"),
+            r#"{"name":"pkg","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        store
+            .store_package_with_manifest(
+                "pkg",
+                "1.0.0",
+                Some("https://registry.example/pkg.tgz"),
+                None,
+                &source,
+            )
+            .unwrap();
 
         let (missing, cached) = missing_store_nodes(&graph, &store);
         assert!(missing.is_empty());
         assert_eq!(cached, 1);
+    }
+
+    #[test]
+    fn missing_store_nodes_treats_legacy_entries_as_uncached() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ContentStore::new(tmp.path().join("store")).unwrap();
+        let legacy = store.package_dir("pkg", "1.0.0");
+        std::fs::create_dir_all(&legacy).unwrap();
+        std::fs::write(
+            legacy.join("package.json"),
+            r#"{"name":"pkg","version":"1.0.0"}"#,
+        )
+        .unwrap();
+
+        let mut graph = DepGraph::new();
+        graph.nodes.insert(
+            "pkg@1.0.0".to_string(),
+            DepNode {
+                name: "pkg".to_string(),
+                alias: None,
+                version: "1.0.0".to_string(),
+                resolved: "https://registry.example/pkg.tgz".to_string(),
+                integrity: None,
+                dependencies: HashMap::new(),
+                has_install_script: false,
+                dev: false,
+                optional: false,
+                peer_dependencies: HashMap::new(),
+                optional_peers: HashSet::new(),
+                resolved_peers: HashMap::new(),
+            },
+        );
+
+        let (missing, cached) = missing_store_nodes(&graph, &store);
+        assert_eq!(missing.len(), 1);
+        assert_eq!(cached, 0);
+    }
+
+    #[test]
+    fn publish_file_collection_rejects_symlink_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package.json"), "{}").unwrap();
+        std::fs::write(tmp.path().join("index.js"), "console.log(1);\n").unwrap();
+        let outside = tmp.path().join("outside.txt");
+        std::fs::write(&outside, "secret").unwrap();
+        #[cfg(unix)]
+        std::os::unix::fs::symlink(&outside, tmp.path().join("link")).unwrap();
+
+        #[cfg(unix)]
+        {
+            let err = collect_publish_files(tmp.path(), &[], &[], &None).unwrap_err();
+            assert!(err.to_string().contains("refusing symlink"));
+        }
+    }
+
+    #[test]
+    fn publish_file_collection_respects_files_and_always_include() {
+        let tmp = tempfile::tempdir().unwrap();
+        std::fs::write(tmp.path().join("package.json"), "{}").unwrap();
+        std::fs::write(tmp.path().join("README.md"), "# readme\n").unwrap();
+        std::fs::write(tmp.path().join("index.js"), "console.log(1);\n").unwrap();
+        std::fs::write(tmp.path().join("debug.test.js"), "test\n").unwrap();
+        std::fs::create_dir_all(tmp.path().join("src")).unwrap();
+        std::fs::write(tmp.path().join("src/lib.js"), "export {}\n").unwrap();
+
+        let files = collect_publish_files(
+            tmp.path(),
+            &["node_modules", ".git", "test"],
+            &[],
+            &Some(vec!["src".to_string()]),
+        )
+        .unwrap();
+        let root = tmp.path().canonicalize().unwrap();
+        let rels = files
+            .iter()
+            .map(|path| {
+                path.strip_prefix(&root)
+                    .unwrap()
+                    .to_string_lossy()
+                    .replace('\\', "/")
+            })
+            .collect::<Vec<_>>();
+
+        assert!(rels.contains(&"package.json".to_string()));
+        assert!(rels.contains(&"README.md".to_string()));
+        assert!(rels.contains(&"src/lib.js".to_string()));
+        assert!(!rels.contains(&"index.js".to_string()));
+        assert!(!rels.contains(&"debug.test.js".to_string()));
     }
 
     #[test]
