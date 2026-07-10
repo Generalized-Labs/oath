@@ -3,6 +3,31 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.1.7] - 2026-07-10
+
+### Fixed
+- Dependency edges now select the highest resolved package version that satisfies
+  each parent's declared range. This fixes multiversion graphs such as
+  `esbuild@0.27.0` and `esbuild@0.28.1` incorrectly sharing one platform binary.
+- Scanner verdicts now correlate behavior within each source file instead of
+  combining unrelated capabilities from different files into a false positive.
+- Shell download chains are only flagged when the command string is passed to a
+  subprocess API or appears in an install hook, not when documentation mentions
+  commands such as `curl`.
+- Credential environment matching now recognizes credential-shaped names without
+  treating framework metadata such as `NEXT_PRIVATE_*`, `AWS_REGION`, or
+  `GITHUB_SHA` as secrets.
+- `oath exec` safety grades and displayed findings now agree with the AST verdict:
+  Info packages cannot grade below B, review-tier packages cannot grade below C,
+  and only correlated verdict reasons are presented as actionable findings.
+
+### Verified
+- Clean T3-style application install with Next, React, tRPC, TanStack Query,
+  SuperJSON, Zod, AI SDK/OpenAI, Convex, TypeScript, and tsx.
+- `create-t3-app@7.40.0` resolves to an Info/B allow decision without heuristic
+  malware findings; Convex's explicit secret-to-auth-endpoint path remains a
+  review warning rather than a malware-level block.
+
 ## [0.1.6] - 2026-07-10
 
 ### Added

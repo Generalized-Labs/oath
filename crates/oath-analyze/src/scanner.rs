@@ -23,6 +23,9 @@ impl PackageScanner {
         let mut files_scanned = 0usize;
         let mut lines_scanned = 0usize;
         let mut pkg_behavior = Behavior::default();
+        let mut install_behavior = Behavior::default();
+        let mut package_verdict = Verdict::Info;
+        let mut verdict_reasons = Vec::new();
         let mut has_install_script = false;
 
         // Check for install scripts in package.json first
@@ -37,7 +40,7 @@ impl PackageScanner {
                     {
                         has_install_script = true;
                         // The install command itself is often the payload.
-                        behavior::scan_install_command(cmd, &mut pkg_behavior);
+                        behavior::scan_install_command(cmd, &mut install_behavior);
                         all_findings.push(Finding {
                             kind: FindingKind::InstallScript,
                             risk: RiskLevel::Medium,
@@ -103,7 +106,15 @@ impl PackageScanner {
             files_scanned += 1;
 
             // AST-first behavioral facts (capabilities + dangerous combinations).
-            pkg_behavior.merge(&behavior::analyze_file(&source, &relative_path));
+            let file_behavior = behavior::analyze_file(&source, &relative_path);
+            let (file_verdict, file_reasons) = behavior::verdict(&file_behavior, false);
+            merge_verdict(
+                &mut package_verdict,
+                &mut verdict_reasons,
+                file_verdict,
+                file_reasons,
+            );
+            pkg_behavior.merge(&file_behavior);
 
             // Obfuscation detection post-pass on already-read source
             let obfuscation_findings = detect_obfuscation(&source, &relative_path);
@@ -141,13 +152,21 @@ impl PackageScanner {
         capabilities.dynamic_exec |= pkg_behavior.code_exec;
         capabilities.has_install_scripts |= has_install_script;
 
-        // Overall risk is driven by the AST-first behavioral VERDICT, not the
+        pkg_behavior.merge(&install_behavior);
+        let (install_verdict, install_reasons) =
+            behavior::verdict(&install_behavior, has_install_script);
+        merge_verdict(
+            &mut package_verdict,
+            &mut verdict_reasons,
+            install_verdict,
+            install_reasons,
+        );
+
+        // Overall risk is driven by per-file AST-first behavioral verdicts, not
         // max of substring findings (which flagged express grade-F for merely
-        // using fs/http/process.env). Capabilities are neutral; only dangerous
-        // combinations -- strong-source->network, decode->exec, install-hook
-        // payloads -- escalate to Warn/Block.
-        let (verdict, verdict_reasons) = behavior::verdict(&pkg_behavior, has_install_script);
-        let overall_risk = match verdict {
+        // using fs/http/process.env), and not by unrelated capabilities merged
+        // from different files. Only correlated dangerous combinations escalate.
+        let overall_risk = match package_verdict {
             Verdict::Block => RiskLevel::Critical,
             Verdict::Warn => RiskLevel::High,
             Verdict::Info => RiskLevel::Info,
@@ -163,6 +182,27 @@ impl PackageScanner {
             capabilities,
             verdict_reasons,
         })
+    }
+}
+
+fn merge_verdict(
+    current: &mut Verdict,
+    current_reasons: &mut Vec<String>,
+    next: Verdict,
+    next_reasons: Vec<String>,
+) {
+    let rank = |verdict| match verdict {
+        Verdict::Info => 0,
+        Verdict::Warn => 1,
+        Verdict::Block => 2,
+    };
+    if rank(next) > rank(*current) {
+        *current = next;
+    }
+    for reason in next_reasons {
+        if !current_reasons.contains(&reason) {
+            current_reasons.push(reason);
+        }
     }
 }
 

@@ -106,25 +106,54 @@ struct PendingDep {
     alias: Option<String>,
 }
 
-/// Find the resolved key in the graph that matches a dependency name.
-/// Since we resolve one version per package, just look for name@* in the keys.
-fn find_matching_key(
-    all_keys: &[String],
-    graph: &DepGraph,
-    dep_name: &str,
-    _dep_spec: &str,
-) -> Option<String> {
-    // Check for alias-resolved packages first
-    for key in all_keys {
-        if let Some(node) = graph.nodes.get(key) {
-            // Match by alias if set, otherwise by name
+/// Find the highest resolved node whose install name and version satisfy a dependency.
+fn find_matching_key(graph: &DepGraph, dep_name: &str, dep_spec: &str) -> Option<String> {
+    let version_spec = parse_alias_spec(dep_spec)
+        .map(|(_, spec)| spec)
+        .unwrap_or_else(|| dep_spec.to_string());
+    let range = version_spec.parse::<Range>().ok();
+
+    let mut candidates: Vec<(&String, Version)> = graph
+        .nodes
+        .iter()
+        .filter_map(|(key, node)| {
             let matches_name = node.alias.as_deref() == Some(dep_name) || node.name == dep_name;
-            if matches_name {
-                return Some(key.clone());
+            if !matches_name {
+                return None;
             }
-        }
+
+            let version = node.version.parse::<Version>().ok()?;
+            if range
+                .as_ref()
+                .is_some_and(|range| !range.satisfies(&version))
+            {
+                return None;
+            }
+
+            Some((key, version))
+        })
+        .collect();
+
+    candidates.sort_by(|a, b| a.1.cmp(&b.1).then_with(|| a.0.cmp(b.0)));
+    candidates.last().map(|(key, _)| (*key).clone())
+}
+
+#[cfg(test)]
+fn test_node(name: &str, version: &str, alias: Option<&str>) -> DepNode {
+    DepNode {
+        name: name.to_string(),
+        alias: alias.map(str::to_string),
+        version: version.to_string(),
+        resolved: format!("https://registry.example/{name}-{version}.tgz"),
+        integrity: None,
+        dependencies: HashMap::new(),
+        has_install_script: false,
+        dev: false,
+        optional: false,
+        peer_dependencies: HashMap::new(),
+        optional_peers: HashSet::new(),
+        resolved_peers: HashMap::new(),
     }
-    None
 }
 
 /// Parse an npm alias specifier like "npm:real-package@^1.0.0"
@@ -465,9 +494,9 @@ impl Resolver {
             current_level = next_level;
         }
 
-        // Fix up dependency maps: resolve spec strings to actual "name@version" keys
-        // At this point all nodes are resolved, so we can find which key satisfies each dep
-        let all_keys: Vec<String> = graph.nodes.keys().cloned().collect();
+        // Fix up dependency maps: resolve spec strings to actual "name@version" keys.
+        // Multiple versions of one package may coexist, so each edge must retain
+        // the version constraint declared by its parent.
         let mut fixups: Vec<(String, HashMap<String, String>)> = Vec::new();
 
         for (node_key, node) in &graph.nodes {
@@ -475,7 +504,7 @@ impl Resolver {
             for (dep_name, dep_spec) in &node.dependencies {
                 // The dep_spec might be a semver range like "~2.0.0" or "^1.3.8"
                 // Find the node in the graph that has this name and satisfies the spec
-                let resolved_key = find_matching_key(&all_keys, &graph, dep_name, dep_spec);
+                let resolved_key = find_matching_key(&graph, dep_name, dep_spec);
                 if let Some(rk) = resolved_key {
                     resolved_deps.insert(dep_name.clone(), rk);
                 }
@@ -812,4 +841,53 @@ fn resolve_peers(graph: &mut DepGraph) -> PeerReport {
     }
 
     report
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn dependency_edges_select_the_version_that_satisfies_the_parent_spec() {
+        let mut graph = DepGraph::new();
+        graph.nodes.insert(
+            "@esbuild/darwin-arm64@0.28.1".to_string(),
+            test_node("@esbuild/darwin-arm64", "0.28.1", None),
+        );
+        graph.nodes.insert(
+            "@esbuild/darwin-arm64@0.27.0".to_string(),
+            test_node("@esbuild/darwin-arm64", "0.27.0", None),
+        );
+
+        assert_eq!(
+            find_matching_key(&graph, "@esbuild/darwin-arm64", "0.27.0").as_deref(),
+            Some("@esbuild/darwin-arm64@0.27.0")
+        );
+        assert_eq!(
+            find_matching_key(&graph, "@esbuild/darwin-arm64", "0.28.1").as_deref(),
+            Some("@esbuild/darwin-arm64@0.28.1")
+        );
+    }
+
+    #[test]
+    fn dependency_edges_choose_highest_satisfying_version_and_preserve_aliases() {
+        let mut graph = DepGraph::new();
+        graph.nodes.insert(
+            "tool@1.2.0".to_string(),
+            test_node("real-tool", "1.2.0", Some("tool")),
+        );
+        graph.nodes.insert(
+            "tool@1.9.0".to_string(),
+            test_node("real-tool", "1.9.0", Some("tool")),
+        );
+        graph.nodes.insert(
+            "tool@2.0.0".to_string(),
+            test_node("real-tool", "2.0.0", Some("tool")),
+        );
+
+        assert_eq!(
+            find_matching_key(&graph, "tool", "npm:real-tool@^1.0.0").as_deref(),
+            Some("tool@1.9.0")
+        );
+    }
 }

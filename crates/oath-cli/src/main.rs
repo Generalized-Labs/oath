@@ -2852,11 +2852,11 @@ async fn cmd_exec(
             && matches!(f.risk, RiskLevel::High | RiskLevel::Critical)
     });
     let unpacked_kb = dir_size(&pkg_dir) / 1024;
-    let serious: Vec<_> = report
-        .findings
-        .iter()
-        .filter(|f| matches!(f.risk, RiskLevel::High | RiskLevel::Critical))
-        .collect();
+    let serious = if matches!(report.overall_risk, RiskLevel::High | RiskLevel::Critical) {
+        report.verdict_reasons.clone()
+    } else {
+        Vec::new()
+    };
     let mut perms: Vec<&str> = Vec::new();
     if caps.network {
         perms.push("network");
@@ -2898,10 +2898,7 @@ async fn cmd_exec(
             "sandbox_mode": sandbox_decision.requested_mode.as_str(),
             "sandbox_effective": sandbox_decision.effective_mode.as_str(),
             "verdict": format!("{:?}", report.overall_risk),
-            "findings": serious
-                .iter()
-                .map(|f| format!("{:?}: {}", f.kind, f.message))
-                .collect::<Vec<_>>(),
+            "findings": serious,
             "decision": if grade_blocked { "block" } else { "allow" },
             "reason": if grade_blocked { "require-grade" } else { "" },
         });
@@ -2947,8 +2944,8 @@ async fn cmd_exec(
         }
         if !serious.is_empty() {
             println!("\n  findings:");
-            for f in serious.iter().take(5) {
-                println!("    [{:?}] {:?} -- {}", f.risk, f.kind, f.message);
+            for finding in serious.iter().take(5) {
+                println!("    {finding}");
             }
         }
         if grade_blocked {

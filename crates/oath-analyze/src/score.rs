@@ -483,6 +483,29 @@ fn compute_safety_score_inner(
         raw_score += 5;
     }
 
+    // Low-confidence legacy heuristics may still contribute to the score, but
+    // they must not contradict the AST-first verdict. Keep conservative floors
+    // so strict `--require-grade` policies can still reject broad permissions.
+    let verdict_floor = match report.overall_risk {
+        RiskLevel::Info => Some((75, "AST analysis found no correlated dangerous behavior")),
+        RiskLevel::High => Some((
+            60,
+            "AST analysis found reviewable behavior without block-tier corroboration",
+        )),
+        _ => None,
+    };
+    if let Some((floor, description)) = verdict_floor
+        && raw_score < floor
+    {
+        let recovered = floor - raw_score.max(0);
+        factors.push(ScoreFactor {
+            name: "behavioral_verdict".into(),
+            weight: recovered.clamp(0, i16::MAX as i32) as i16,
+            description: description.into(),
+        });
+        raw_score = floor;
+    }
+
     // Clamp to 0-100
     let final_score = raw_score.clamp(0, 100) as u8;
     let grade = score_to_grade(final_score);
@@ -536,5 +559,53 @@ mod tests {
         let dir = PathBuf::from("/tmp/nonexistent-test-pkg");
         let result = compute_safety_score(&report, &dir);
         assert!(result.score <= 75);
+    }
+
+    #[test]
+    fn info_verdict_cannot_be_scored_as_unsafe() {
+        let mut report = empty_report();
+        report.overall_risk = RiskLevel::Info;
+        for _ in 0..10 {
+            report.findings.push(Finding {
+                kind: FindingKind::DataExfiltration,
+                risk: RiskLevel::High,
+                message: "legacy heuristic".into(),
+                file: "index.js".into(),
+                line: 1,
+                snippet: None,
+            });
+        }
+        let dir = PathBuf::from("/tmp/nonexistent-test-pkg");
+        let result = compute_safety_score(&report, &dir);
+
+        assert_eq!(result.score, 75);
+        assert_eq!(result.grade, 'B');
+        assert!(
+            result
+                .factors
+                .iter()
+                .any(|f| f.name == "behavioral_verdict")
+        );
+    }
+
+    #[test]
+    fn warning_verdict_cannot_be_scored_as_block_tier() {
+        let mut report = empty_report();
+        report.overall_risk = RiskLevel::High;
+        for _ in 0..10 {
+            report.findings.push(Finding {
+                kind: FindingKind::DataExfiltration,
+                risk: RiskLevel::High,
+                message: "reviewable heuristic".into(),
+                file: "index.js".into(),
+                line: 1,
+                snippet: None,
+            });
+        }
+        let dir = PathBuf::from("/tmp/nonexistent-test-pkg");
+        let result = compute_safety_score(&report, &dir);
+
+        assert_eq!(result.score, 60);
+        assert_eq!(result.grade, 'C');
     }
 }

