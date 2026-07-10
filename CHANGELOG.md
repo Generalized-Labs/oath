@@ -3,7 +3,7 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
-## [0.1.6] - 2026-07-06
+## [0.1.6] - 2026-07-10
 
 ### Added
 - **Verified package store manifests.** Stored packages now include
@@ -29,6 +29,14 @@ All notable changes to oath are documented here. Format follows
 - `scripts/launch-check.sh` now requires a hydrated non-iCloud checkout with at
   least 10 GiB free by default, then smokes store tamper detection and exec
   sandbox JSON output.
+
+### Fixed
+- Registry metadata, search, and tarball GETs now use bounded retry/backoff for
+  transient transport and HTTP failures. Interrupted tarballs restart from byte
+  zero instead of leaving a partial download in place.
+- The AI compatibility runner now resolves a relative `OATH_BIN` from the repo
+  root, matching its documented invocation even when cases run in temp projects.
+- Updated `crossbeam-epoch` to `0.9.20` to resolve `RUSTSEC-2026-0204`.
 
 ## [0.1.5] - 2026-07-05
 

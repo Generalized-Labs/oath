@@ -3,6 +3,17 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 OATH_BIN="${OATH_BIN:-$ROOT/target/release/oath}"
+case "$OATH_BIN" in
+  /*) ;;
+  */*) OATH_BIN="$ROOT/$OATH_BIN" ;;
+  *)
+    if command -v "$OATH_BIN" >/dev/null 2>&1; then
+      OATH_BIN="$(command -v "$OATH_BIN")"
+    else
+      OATH_BIN="$ROOT/$OATH_BIN"
+    fi
+    ;;
+esac
 MIN_FREE_MIB="${MIN_FREE_MIB:-1200}"
 STAMP="${OATH_COMPAT_STAMP:-$(date -u '+%Y%m%dT%H%M%SZ')}"
 RESULTS_DIR="${OATH_COMPAT_RESULTS_DIR:-$ROOT/compat-results/ai-ecosystem/$STAMP}"
