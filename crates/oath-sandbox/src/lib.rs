@@ -1,17 +1,26 @@
-//! oath-sandbox: permission-gated execution for package scripts and oathx
+//! OS sandbox integration hooks.
 //!
-//! Two modes:
-//! 1. OS sandbox (macOS sandbox-exec, Linux landlock) — for Node scripts that need
-//!    real I/O but should be restricted to declared permissions
-//! 2. Deny-by-default — block network, limit fs to project dir, no env leakage
-//!
-//! This is what makes `oathx` safe: you run arbitrary package binaries but they
-//! can only touch what you explicitly allow.
+//! The executor currently provides the portable safety baseline used by tests:
+//! environment stripping, cwd isolation, and timeouts. Kernel policy enforcement
+//! for macOS Seatbelt and Linux Landlock belongs behind this crate boundary.
 
 pub mod executor;
-pub mod linux;
-pub mod macos;
 pub mod policy;
 
-pub use executor::{ExecResult, SandboxExecutor};
-pub use policy::{Permission, SandboxPolicy};
+/// Returns whether this platform is in scope for OS-level sandboxing.
+pub fn platform_supported() -> bool {
+    cfg!(any(target_os = "macos", target_os = "linux"))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn reports_supported_launch_platforms() {
+        assert_eq!(
+            platform_supported(),
+            cfg!(any(target_os = "macos", target_os = "linux"))
+        );
+    }
+}

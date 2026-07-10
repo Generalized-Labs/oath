@@ -32,6 +32,15 @@ pub fn is_git_spec(spec: &str) -> bool {
         || spec.starts_with("git://")
 }
 
+/// Stable, path-safe filename for cached git dependency tarballs.
+pub fn git_cache_file_name(name: &str, version: &str) -> String {
+    format!(
+        "{}-{}.tgz",
+        safe_cache_component(&name.replace('/', "+")),
+        safe_cache_component(version)
+    )
+}
+
 /// Parse a git dependency spec into a GitSpec
 pub fn parse_git_spec(spec: &str) -> Option<GitSpec> {
     if let Some(rest) = spec.strip_prefix("github:") {
@@ -353,4 +362,39 @@ fn extract_deps_from_json(pkg: &serde_json::Value, key: &str) -> HashMap<String,
                 .collect()
         })
         .unwrap_or_default()
+}
+
+fn safe_cache_component(input: &str) -> String {
+    if input.is_empty() {
+        return "_".to_string();
+    }
+
+    let mut out = String::with_capacity(input.len());
+    for byte in input.bytes() {
+        match byte {
+            b'A'..=b'Z' | b'a'..=b'z' | b'0'..=b'9' | b'.' | b'_' | b'-' | b'@' | b'+' => {
+                out.push(byte as char)
+            }
+            _ => out.push_str(&format!("%{byte:02X}")),
+        }
+    }
+
+    match out.as_str() {
+        "." => "%2E".to_string(),
+        ".." => "%2E%2E".to_string(),
+        _ => out,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::git_cache_file_name;
+
+    #[test]
+    fn git_cache_file_name_encodes_path_separators() {
+        assert_eq!(
+            git_cache_file_name("../evil", "../../outside"),
+            "..+evil-..%2F..%2Foutside.tgz"
+        );
+    }
 }

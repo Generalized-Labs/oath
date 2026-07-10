@@ -3,6 +3,18 @@
 Machine: Apple M1, macOS 15.6.1, Node v22.12.0, bun 1.2.20
 Date: June 23, 2025
 
+These are historical v0.1.x measurements, kept to show methodology and rough
+shape. Refresh this file on the release machine before publishing a new public
+release, especially after resolver, lockfile, linker, scanner, or release-profile
+changes.
+
+Current release checklist:
+
+```sh
+cargo build --release --locked --bin oath
+scripts/launch-check.sh
+```
+
 ## Install (cold -- empty cache, no lockfile)
 
 | Project Size | npm | bun | oath | oath overhead |
@@ -35,14 +47,14 @@ Every install and exec includes:
 - Permission prompt before execution
 - Safety score computation (0-100, grade A-F)
 
-## Key insight
+## Interpretation
 
-oath exec matches npx speed while providing full security scanning.
-oath install is slower than bun (bun uses binary lockfile protocol, no security scanning)
-but competitive with npm while scanning every package for malware.
+In this snapshot, `oath exec` was close to `npx` while adding pre-run scanning.
+`oath install` was slower than bun on larger cold installs because oath scans
+packages and bun uses a binary lockfile protocol.
 
-The tradeoff: 2-6s extra on cold large installs buys you detection of supply chain attacks
-that npm/bun/pnpm would execute silently.
+The intended tradeoff is extra cold-install work in exchange for detection of
+supply-chain attacks that npm/bun/pnpm would otherwise execute silently.
 
 ## Score examples
 

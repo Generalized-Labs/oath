@@ -4,13 +4,19 @@
 //! etag caching, and multiple registry sources.
 
 use anyhow::{Context, Result};
-use reqwest::header::{ACCEPT, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH};
+use bytes::Bytes;
+use futures_util::StreamExt;
+use reqwest::StatusCode;
+use reqwest::header::{ACCEPT, ETAG, HeaderMap, HeaderValue, IF_NONE_MATCH, RETRY_AFTER};
 use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::Duration;
+use tokio::io::AsyncWriteExt;
 use tokio::sync::RwLock;
 
 use crate::packument::Packument;
+use crate::tarball::{IntegrityVerifier, TarballLimits};
 
 /// Abbreviated packument Accept header (much smaller than full application/json)
 const ABBREVIATED_ACCEPT: &str =
@@ -19,6 +25,16 @@ const ABBREVIATED_ACCEPT: &str =
 /// TTL for disk cache in seconds: if the cached file is younger than this,
 /// return it directly without any HTTP request.
 const CACHE_TTL_SECS: u64 = 300; // 5 minutes
+const TARBALL_TIMEOUT_SECS: u64 = 120;
+const REQUEST_ATTEMPTS: usize = 3;
+const RETRY_BASE_DELAY_MS: u64 = 200;
+const RETRY_MAX_DELAY_SECS: u64 = 2;
+
+struct BufferedResponse {
+    status: StatusCode,
+    headers: HeaderMap,
+    body: Bytes,
+}
 
 /// Registry client configuration
 #[derive(Debug, Clone)]
@@ -173,28 +189,30 @@ impl RegistryClient {
         }
         drop(etag_cache);
 
-        let resp = req.send().await.context("registry request failed")?;
+        let resp = self
+            .send_bytes_with_retries(req, "registry request failed")
+            .await?;
 
         // Check for 304 Not Modified
-        if resp.status() == reqwest::StatusCode::NOT_MODIFIED {
+        if resp.status == StatusCode::NOT_MODIFIED {
             tracing::debug!("{name}: not modified (etag cache hit)");
             return self.load_cached_packument(name).await;
         }
 
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        if resp.status == StatusCode::NOT_FOUND {
             anyhow::bail!("package not found: {name}");
         }
 
-        if !resp.status().is_success() {
+        if !resp.status.is_success() {
             anyhow::bail!(
                 "registry returned {}: {}",
-                resp.status(),
-                resp.text().await.unwrap_or_default()
+                resp.status,
+                String::from_utf8_lossy(&resp.body)
             );
         }
 
         // Store new etag
-        if let Some(etag) = resp.headers().get(ETAG)
+        if let Some(etag) = resp.headers.get(ETAG)
             && let Ok(etag_str) = etag.to_str()
         {
             let mut cache = self.etag_cache.write().await;
@@ -204,14 +222,12 @@ impl RegistryClient {
             tokio::fs::write(&etag_path, etag_str).await.ok();
         }
 
-        let body = resp.bytes().await.context("failed to read response body")?;
-
         // Cache to disk
-        self.write_cache(name, &body).await;
+        self.write_cache(name, &resp.body).await;
 
         // Parse
         let packument: Packument =
-            serde_json::from_slice(&body).context("failed to parse packument")?;
+            serde_json::from_slice(&resp.body).context("failed to parse packument")?;
 
         Ok(packument)
     }
@@ -224,17 +240,19 @@ impl RegistryClient {
         if let Some(tok) = self.token_for_url(&url) {
             req = req.bearer_auth(tok);
         }
-        let resp = req.send().await.context("registry request failed")?;
+        let resp = self
+            .send_bytes_with_retries(req, "registry request failed")
+            .await?;
 
-        if resp.status() == reqwest::StatusCode::NOT_FOUND {
+        if resp.status == StatusCode::NOT_FOUND {
             anyhow::bail!("package not found: {name}");
         }
 
-        if !resp.status().is_success() {
-            anyhow::bail!("registry returned {}", resp.status());
+        if !resp.status.is_success() {
+            anyhow::bail!("registry returned {}", resp.status);
         }
 
-        resp.json().await.context("failed to parse full packument")
+        serde_json::from_slice(&resp.body).context("failed to parse full packument")
     }
 
     /// Download a tarball, verify integrity, return bytes
@@ -243,33 +261,138 @@ impl RegistryClient {
         url: &str,
         expected_integrity: Option<&str>,
     ) -> Result<Vec<u8>> {
+        let limits = TarballLimits::from_env()?;
+        let tmp = tempfile::NamedTempFile::new().context("failed to create temp tarball")?;
+        self.fetch_tarball_to_file(url, expected_integrity, tmp.path(), &limits)
+            .await?;
+        std::fs::read(tmp.path())
+            .with_context(|| format!("failed to read temp tarball {}", tmp.path().display()))
+    }
+
+    /// Stream a tarball to disk while enforcing compressed-size and SRI limits.
+    pub async fn fetch_tarball_to_file(
+        &self,
+        url: &str,
+        expected_integrity: Option<&str>,
+        dest: &Path,
+        limits: &TarballLimits,
+    ) -> Result<u64> {
         tracing::debug!("downloading tarball: {url}");
 
-        let mut req = self
-            .http
-            .get(url)
-            .header(ACCEPT, "application/octet-stream");
-        if let Some(tok) = self.token_for_url(url) {
-            req = req.bearer_auth(tok);
+        for attempt in 0..REQUEST_ATTEMPTS {
+            let mut req = self
+                .http
+                .get(url)
+                .header(ACCEPT, "application/octet-stream")
+                .timeout(Duration::from_secs(
+                    self.config.timeout_secs.max(TARBALL_TIMEOUT_SECS),
+                ));
+            if let Some(tok) = self.token_for_url(url) {
+                req = req.bearer_auth(tok);
+            }
+
+            let resp = match req.send().await {
+                Ok(resp)
+                    if should_retry_status(resp.status()) && attempt + 1 < REQUEST_ATTEMPTS =>
+                {
+                    let delay = retry_delay(attempt, Some(resp.headers()));
+                    tracing::debug!(
+                        status = %resp.status(),
+                        attempt = attempt + 1,
+                        delay_ms = delay.as_millis(),
+                        "retrying transient tarball response"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Ok(resp) => resp,
+                Err(err) if is_retryable_request_error(&err) && attempt + 1 < REQUEST_ATTEMPTS => {
+                    let delay = retry_delay(attempt, None);
+                    tracing::debug!(
+                        error = %err,
+                        attempt = attempt + 1,
+                        delay_ms = delay.as_millis(),
+                        "retrying transient tarball request failure"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                Err(err) => return Err(err).context("tarball download failed"),
+            };
+
+            if !resp.status().is_success() {
+                anyhow::bail!("tarball download returned {}", resp.status());
+            }
+
+            if let Some(content_length) = resp.content_length() {
+                limits.check_archive_size(content_length)?;
+            }
+
+            let mut verifier = expected_integrity
+                .map(IntegrityVerifier::new)
+                .transpose()
+                .context("invalid tarball integrity metadata")?;
+            let mut file = tokio::fs::File::create(dest)
+                .await
+                .with_context(|| format!("failed to create {}", dest.display()))?;
+            let mut downloaded = 0u64;
+            let mut stream = resp.bytes_stream();
+            let mut stream_error = None;
+
+            while let Some(chunk) = stream.next().await {
+                match chunk {
+                    Ok(chunk) => {
+                        downloaded = downloaded
+                            .checked_add(chunk.len() as u64)
+                            .context("tarball compressed size overflow")?;
+                        limits.check_archive_size(downloaded)?;
+                        if let Some(verifier) = verifier.as_mut() {
+                            verifier.update(&chunk);
+                        }
+                        file.write_all(&chunk)
+                            .await
+                            .with_context(|| format!("failed to write {}", dest.display()))?;
+                    }
+                    Err(err) => {
+                        stream_error = Some(err);
+                        break;
+                    }
+                }
+            }
+
+            if let Some(err) = stream_error {
+                drop(file);
+                tokio::fs::remove_file(dest).await.ok();
+                if is_retryable_request_error(&err) && attempt + 1 < REQUEST_ATTEMPTS {
+                    let delay = retry_delay(attempt, None);
+                    tracing::debug!(
+                        error = %err,
+                        attempt = attempt + 1,
+                        delay_ms = delay.as_millis(),
+                        "restarting interrupted tarball download"
+                    );
+                    tokio::time::sleep(delay).await;
+                    continue;
+                }
+                return Err(err).context("failed to read tarball chunk");
+            }
+
+            file.flush()
+                .await
+                .with_context(|| format!("failed to flush {}", dest.display()))?;
+
+            if let Some(verifier) = verifier
+                && let Err(err) = verifier.finish()
+            {
+                drop(file);
+                tokio::fs::remove_file(dest).await.ok();
+                return Err(err);
+            }
+
+            return Ok(downloaded);
         }
-        let resp = req.send().await.context("tarball download failed")?;
 
-        if !resp.status().is_success() {
-            anyhow::bail!("tarball download returned {}", resp.status());
-        }
-
-        let bytes = resp
-            .bytes()
-            .await
-            .context("failed to read tarball")?
-            .to_vec();
-
-        // Verify integrity if provided
-        if let Some(sri) = expected_integrity {
-            crate::tarball::verify_integrity(&bytes, sri)?;
-        }
-
-        Ok(bytes)
+        unreachable!("tarball retry loop always returns on the final attempt")
     }
 
     /// Search packages
@@ -285,9 +408,15 @@ impl RegistryClient {
         if let Some(tok) = self.token_for_url(&url) {
             req = req.bearer_auth(tok);
         }
-        let resp = req.send().await?;
+        let resp = self
+            .send_bytes_with_retries(req, "registry search request failed")
+            .await?;
 
-        resp.json().await.context("failed to parse search results")
+        if !resp.status.is_success() {
+            anyhow::bail!("registry search returned {}", resp.status);
+        }
+
+        serde_json::from_slice(&resp.body).context("failed to parse search results")
     }
 
     // -- Private helpers --
@@ -315,6 +444,84 @@ impl RegistryClient {
     fn token_for_url(&self, url: &str) -> Option<String> {
         let host = host_of(url)?;
         self.config.tokens.get(&host).cloned()
+    }
+
+    async fn send_bytes_with_retries(
+        &self,
+        req: reqwest::RequestBuilder,
+        context: &'static str,
+    ) -> Result<BufferedResponse> {
+        if req.try_clone().is_none() {
+            let resp = req.send().await.context(context)?;
+            let status = resp.status();
+            let headers = resp.headers().clone();
+            let body = resp.bytes().await.context(context)?;
+            return Ok(BufferedResponse {
+                status,
+                headers,
+                body,
+            });
+        }
+
+        for attempt in 0..REQUEST_ATTEMPTS {
+            let attempt_req = req
+                .try_clone()
+                .expect("request cloneability checked before retry loop");
+            match attempt_req.send().await {
+                Ok(resp) => {
+                    let status = resp.status();
+                    if should_retry_status(status) && attempt + 1 < REQUEST_ATTEMPTS {
+                        let delay = retry_delay(attempt, Some(resp.headers()));
+                        tracing::debug!(
+                            status = %status,
+                            attempt = attempt + 1,
+                            delay_ms = delay.as_millis(),
+                            "retrying transient registry response"
+                        );
+                        tokio::time::sleep(delay).await;
+                        continue;
+                    }
+
+                    let headers = resp.headers().clone();
+                    match resp.bytes().await {
+                        Ok(body) => {
+                            return Ok(BufferedResponse {
+                                status,
+                                headers,
+                                body,
+                            });
+                        }
+                        Err(err)
+                            if is_retryable_request_error(&err)
+                                && attempt + 1 < REQUEST_ATTEMPTS =>
+                        {
+                            let delay = retry_delay(attempt, None);
+                            tracing::debug!(
+                                error = %err,
+                                attempt = attempt + 1,
+                                delay_ms = delay.as_millis(),
+                                "retrying interrupted registry response body"
+                            );
+                            tokio::time::sleep(delay).await;
+                        }
+                        Err(err) => return Err(err).context(context),
+                    }
+                }
+                Err(err) if is_retryable_request_error(&err) && attempt + 1 < REQUEST_ATTEMPTS => {
+                    let delay = retry_delay(attempt, None);
+                    tracing::debug!(
+                        error = %err,
+                        attempt = attempt + 1,
+                        delay_ms = delay.as_millis(),
+                        "retrying transient registry request failure"
+                    );
+                    tokio::time::sleep(delay).await;
+                }
+                Err(err) => return Err(err).context(context),
+            }
+        }
+
+        unreachable!("registry retry loop always returns on the final attempt")
     }
 
     async fn write_cache(&self, name: &str, data: &[u8]) {
@@ -345,6 +552,37 @@ impl RegistryClient {
     }
 }
 
+fn should_retry_status(status: StatusCode) -> bool {
+    matches!(
+        status,
+        StatusCode::REQUEST_TIMEOUT
+            | StatusCode::TOO_EARLY
+            | StatusCode::TOO_MANY_REQUESTS
+            | StatusCode::INTERNAL_SERVER_ERROR
+            | StatusCode::BAD_GATEWAY
+            | StatusCode::SERVICE_UNAVAILABLE
+            | StatusCode::GATEWAY_TIMEOUT
+    )
+}
+
+fn is_retryable_request_error(err: &reqwest::Error) -> bool {
+    err.is_timeout() || err.is_connect() || err.is_body() || err.is_decode()
+}
+
+fn retry_delay(attempt: usize, headers: Option<&HeaderMap>) -> Duration {
+    let max_delay = Duration::from_secs(RETRY_MAX_DELAY_SECS);
+    if let Some(retry_after) = headers
+        .and_then(|headers| headers.get(RETRY_AFTER))
+        .and_then(|value| value.to_str().ok())
+        .and_then(|value| value.parse::<u64>().ok())
+    {
+        return Duration::from_secs(retry_after).min(max_delay);
+    }
+
+    Duration::from_millis(RETRY_BASE_DELAY_MS.saturating_mul(1u64 << attempt.min(10)))
+        .min(max_delay)
+}
+
 /// URL encoding helper (minimal, just for search)
 mod urlencoding {
     pub fn encode(s: &str) -> String {
@@ -366,6 +604,81 @@ mod urlencoding {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::{AtomicUsize, Ordering};
+    use tokio::io::{AsyncReadExt, AsyncWriteExt};
+
+    async fn flaky_server(
+        statuses: Vec<StatusCode>,
+        success_body: &'static [u8],
+    ) -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let server_attempts = Arc::clone(&attempts);
+
+        let handle = tokio::spawn(async move {
+            for status in statuses {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 4096];
+                let _ = socket.read(&mut request).await.unwrap();
+                server_attempts.fetch_add(1, Ordering::SeqCst);
+
+                let body = if status.is_success() {
+                    success_body
+                } else {
+                    b"retry"
+                };
+                let reason = status.canonical_reason().unwrap_or("Unknown");
+                let response = format!(
+                    "HTTP/1.1 {} {}\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    status.as_u16(),
+                    reason,
+                    body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                socket.write_all(body).await.unwrap();
+            }
+        });
+
+        (format!("http://{address}"), attempts, handle)
+    }
+
+    async fn interrupted_tarball_server(
+        success_body: &'static [u8],
+    ) -> (String, Arc<AtomicUsize>, tokio::task::JoinHandle<()>) {
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        let attempts = Arc::new(AtomicUsize::new(0));
+        let server_attempts = Arc::clone(&attempts);
+
+        let handle = tokio::spawn(async move {
+            for attempt in 0..2 {
+                let (mut socket, _) = listener.accept().await.unwrap();
+                let mut request = [0u8; 4096];
+                let _ = socket.read(&mut request).await.unwrap();
+                server_attempts.fetch_add(1, Ordering::SeqCst);
+
+                if attempt == 0 {
+                    socket
+                        .write_all(
+                            b"HTTP/1.1 200 OK\r\nContent-Length: 100\r\nConnection: close\r\n\r\npartial",
+                        )
+                        .await
+                        .unwrap();
+                    continue;
+                }
+
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Length: {}\r\nConnection: close\r\n\r\n",
+                    success_body.len()
+                );
+                socket.write_all(response.as_bytes()).await.unwrap();
+                socket.write_all(success_body).await.unwrap();
+            }
+        });
+
+        (format!("http://{address}"), attempts, handle)
+    }
 
     fn client_with(scoped: &[(&str, &str)], tokens: &[(&str, &str)]) -> RegistryClient {
         let mut cfg = RegistryConfig::default();
@@ -411,5 +724,113 @@ mod tests {
             c.token_for_url("https://registry.npmjs.org/lodash"),
             Some("legacy".to_string())
         );
+    }
+
+    #[test]
+    fn retry_policy_is_bounded_and_transient_only() {
+        assert_eq!(REQUEST_ATTEMPTS, 3);
+        assert!(should_retry_status(StatusCode::TOO_MANY_REQUESTS));
+        assert!(should_retry_status(StatusCode::BAD_GATEWAY));
+        assert!(should_retry_status(StatusCode::SERVICE_UNAVAILABLE));
+        assert!(!should_retry_status(StatusCode::NOT_FOUND));
+        assert!(!should_retry_status(StatusCode::UNAUTHORIZED));
+        assert_eq!(retry_delay(0, None), Duration::from_millis(200));
+        assert_eq!(retry_delay(1, None), Duration::from_millis(400));
+
+        let mut headers = HeaderMap::new();
+        headers.insert(RETRY_AFTER, HeaderValue::from_static("60"));
+        assert_eq!(retry_delay(0, Some(&headers)), Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn metadata_fetch_retries_transient_responses() {
+        let (url, attempts, server) = flaky_server(
+            vec![
+                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::BAD_GATEWAY,
+                StatusCode::OK,
+            ],
+            br#"{"name":"demo"}"#,
+        )
+        .await;
+        let cache = tempfile::tempdir().unwrap();
+        let client = RegistryClient::new(RegistryConfig {
+            registry_url: url,
+            cache_dir: cache.path().to_path_buf(),
+            timeout_secs: 2,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let packument = client.fetch_packument("demo").await.unwrap();
+        server.await.unwrap();
+
+        assert_eq!(packument.name, "demo");
+        assert_eq!(attempts.load(Ordering::SeqCst), 3);
+    }
+
+    #[tokio::test]
+    async fn metadata_fetch_stops_after_bounded_attempts() {
+        let (url, attempts, server) = flaky_server(
+            vec![
+                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::SERVICE_UNAVAILABLE,
+                StatusCode::SERVICE_UNAVAILABLE,
+            ],
+            br#"{"name":"unused"}"#,
+        )
+        .await;
+        let cache = tempfile::tempdir().unwrap();
+        let client = RegistryClient::new(RegistryConfig {
+            registry_url: url,
+            cache_dir: cache.path().to_path_buf(),
+            timeout_secs: 2,
+            ..Default::default()
+        })
+        .unwrap();
+
+        let error = client.fetch_packument("demo").await.unwrap_err();
+        server.await.unwrap();
+
+        assert!(error.to_string().contains("503 Service Unavailable"));
+        assert_eq!(attempts.load(Ordering::SeqCst), REQUEST_ATTEMPTS);
+    }
+
+    #[tokio::test]
+    async fn tarball_fetch_retries_transient_responses() {
+        let (url, attempts, server) = flaky_server(
+            vec![StatusCode::SERVICE_UNAVAILABLE, StatusCode::OK],
+            b"tarball bytes",
+        )
+        .await;
+        let client = RegistryClient::new(RegistryConfig::default()).unwrap();
+        let output = tempfile::NamedTempFile::new().unwrap();
+
+        let downloaded = client
+            .fetch_tarball_to_file(&url, None, output.path(), &TarballLimits::default())
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        assert_eq!(downloaded, 13);
+        assert_eq!(std::fs::read(output.path()).unwrap(), b"tarball bytes");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
+    }
+
+    #[tokio::test]
+    async fn tarball_fetch_restarts_after_interrupted_body() {
+        let (url, attempts, server) = interrupted_tarball_server(b"complete tarball").await;
+        let client = RegistryClient::new(RegistryConfig::default()).unwrap();
+        let output = tempfile::NamedTempFile::new().unwrap();
+
+        let downloaded = client
+            .fetch_tarball_to_file(&url, None, output.path(), &TarballLimits::default())
+            .await
+            .unwrap();
+        server.await.unwrap();
+
+        assert_eq!(downloaded, 16);
+        assert_eq!(std::fs::read(output.path()).unwrap(), b"complete tarball");
+        assert_eq!(attempts.load(Ordering::SeqCst), 2);
     }
 }

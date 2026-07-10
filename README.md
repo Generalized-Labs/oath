@@ -1,13 +1,19 @@
 # oath
 
-A security-first replacement for **npm, npx, and bun** — it reads every dependency
-for malicious behavior before a line runs. Faster. Safer. No surprises.
+A security-first replacement for **npm install** and **npx** workflows. oath
+checks packages for malicious behavior before third-party code runs, blocks
+dependency install scripts by default, and records installs in a local
+transparency log.
 
 ## Install
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Generalized-Labs/oath/master/install.sh | sh
 ```
+
+The installer downloads the latest GitHub Release binary and verifies the
+matching `.sha256` sidecar before installing. If a release is missing checksums,
+installation fails closed.
 
 Or via Homebrew:
 ```sh
@@ -26,11 +32,16 @@ cargo test --workspace       # run the test suite
 - **Script blocking by default** — postinstall scripts only run for packages you trust
 - **Behavioral analysis** — detects decode→exec payloads, env/secret exfiltration, install-script payloads at install time
 - **Trusts what's proven** — a package with 1M+ weekly downloads and no critical finding grades A, so household tools (prettier, react, lodash) aren't false-flagged; real supply-chain attacks still surface as critical decode→exec/exfil and are blocked
-- **Transparency log** — every install appended to `~/.oath/transparency.log`
-- **Faster** — 0.9s cold, 0.2s warm (abbreviated packuments, 5-min TTL cache, content-addressable store)
-- **Full npm compatibility** — workspaces, git deps, global install, publish, lifecycle scripts
+- **Transparency log** — installs are appended to `~/.oath/transparency.log`
+- **Verified package store** — cached packages carry a manifest with lock integrity, package identity, byte counts, and a deterministic BLAKE3 file tree
+- **Bounded tarball unpacking** — tarballs are streamed to disk, size-limited, path-checked, and restricted to regular files/directories
+- **Fast warm installs** — lockfile and verified-store fast paths avoid unnecessary resolution and relinking
+- **npm compatibility where it matters first** — package.json deps/devDeps, npm aliases, scoped packages, git deps, workspaces, global installs, lifecycle scripts, and publish support are implemented; edge-case compatibility gaps should be reported
 
-Detection is measured against a corpus of popular and real-malware packages — see the [scanner threat model](docs/scanner-threat-model.md) for the methodology, the false-positive/recall tradeoff, and honest limits. Speed numbers are in [BENCHMARKS.md](BENCHMARKS.md).
+Detection is measured against a corpus of popular and real-malware packages —
+see the [scanner threat model](docs/scanner-threat-model.md) for the methodology,
+the false-positive/recall tradeoff, and honest limits. Performance notes are in
+[BENCHMARKS.md](BENCHMARKS.md).
 
 ## Commands
 
@@ -38,11 +49,14 @@ Detection is measured against a corpus of popular and real-malware packages — 
 oath install              # install from package.json
 oath install express      # add + install
 oath install -D typescript # add to devDependencies
+oath ci                   # clean install from oath-lock.json
+oath install --frozen-lockfile # fail if package.json and lockfile disagree
 oath install -g typescript # global install
-oath add lodash            # add dependency
+oath add lodash            # add dependency and install
 oath remove lodash         # remove dependency
 oath run build            # run script with pre/post hooks
 oath exec prettier .      # run package binary (npx replacement)
+oath exec --sandbox tsx   # run with Node permission sandbox when available
 oath publish              # publish to npm registry
 oath log                  # view transparency log
 oath score <pkg>          # security score for a package
@@ -57,7 +71,7 @@ oath install  # from workspace root — installs all packages, hoists shared dep
 
 ## Trusted Scripts
 
-Scripts are blocked by default. Allowlist packages:
+Third-party dependency install scripts are blocked by default. Allowlist packages:
 ```json
 {
   "trustedDependencies": ["esbuild", "prisma"]
@@ -68,6 +82,60 @@ Or allow all for a project:
 ```sh
 oath install --run-scripts
 ```
+
+Project-owned lifecycle scripts such as root `preinstall`, `postinstall`, and
+`prepare` run for plain `oath install`, matching npm-style project behavior.
+
+## Lockfiles and CI
+
+`oath-lock.json` records resolved packages, direct root dependencies, and the
+root graph. `oath install` rewrites it when package.json changes. `oath ci`
+requires package.json and the lockfile to match, removes stale `node_modules`,
+links from the lockfile graph, and never rewrites the lockfile.
+
+Use this in CI:
+
+```sh
+oath ci
+oath verify
+```
+
+## Store Verification
+
+Each package in `~/.oath/store` includes `.oath-store-manifest.json`. `oath`
+checks that manifest before warm installs, `ci`, `verify`, `exec`, `score`, and
+global installs. Old cache entries without a manifest are treated as unverified
+and rebuilt from the registry.
+
+`oath verify` now performs full manifest/tree verification and fails on missing,
+tampered, malformed, or package.json-mismatched store entries.
+
+Tarball safety limits default to 512 MiB compressed, 2 GiB unpacked, and 200k
+entries. Emergency compatibility overrides are available:
+
+```sh
+OATH_MAX_TARBALL_BYTES=1073741824 oath install
+OATH_MAX_UNPACKED_BYTES=4294967296 oath install
+OATH_MAX_TARBALL_ENTRIES=400000 oath install
+```
+
+## Exec Sandboxing
+
+`oath exec` remains unsandboxed by default for human npx compatibility in this
+release. For agents or high-risk workflows:
+
+```sh
+oath exec --sandbox <pkg> -- <args>
+oath exec --sandbox-mode node <pkg>
+OATH_AGENT_MODE=1 oath exec <pkg>
+```
+
+`node` mode uses Node's permission flags when supported, allowing reads from the
+project, temp exec tree, and temp dir, and writes to the project and temp dir.
+Subprocesses, workers, addons, and network stay denied unless Node changes its
+permission defaults. `native` mode currently fails closed; Linux Landlock/seccomp
+is reserved for the next sandbox milestone. On macOS, the public sandbox story is
+Node-permission-only for now.
 
 ## Requirements
 

@@ -3,6 +3,55 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.1.6] - 2026-07-10
+
+### Added
+- **Verified package store manifests.** Stored packages now include
+  `.oath-store-manifest.json` with schema version, lock integrity, resolved URL,
+  package identity, file count, byte count, and a deterministic BLAKE3 file tree.
+- **Full store verification.** `oath verify` now fails on missing, unmanifested,
+  malformed, tampered, or package.json-mismatched store entries.
+- **Bounded tarball extraction.** Tarball downloads stream to temp files while
+  enforcing compressed-size limits and SRI checks; extraction enforces unpacked
+  byte, entry count, path length, path depth, path traversal, UTF-8, and file-type
+  limits.
+- **`oath exec` sandbox flags.** Added `--sandbox` and
+  `--sandbox-mode off|node|native|auto`. Human default remains `off`;
+  `OATH_AGENT_MODE=1` defaults to `auto`. Node mode uses Node permission flags
+  when available; native mode currently fails closed.
+
+### Changed
+- Warm installs, `ci`, `exec`, `score`, and global installs now treat legacy or
+  corrupt store entries as unverified and redownload/rebuild them before linking
+  or scanning.
+- `oath publish` now rejects symlinks and non-regular files, canonicalizes every
+  included path, and fails on out-of-root or unreadable files.
+- `scripts/launch-check.sh` now requires a hydrated non-iCloud checkout with at
+  least 10 GiB free by default, then smokes store tamper detection and exec
+  sandbox JSON output.
+
+### Fixed
+- Registry metadata, search, and tarball GETs now use bounded retry/backoff for
+  transient transport and HTTP failures. Interrupted tarballs restart from byte
+  zero instead of leaving a partial download in place.
+- The AI compatibility runner now resolves a relative `OATH_BIN` from the repo
+  root, matching its documented invocation even when cases run in temp projects.
+- Updated `crossbeam-epoch` to `0.9.20` to resolve `RUSTSEC-2026-0204`.
+
+## [0.1.5] - 2026-07-05
+
+### Added
+- Lockfile v2 root metadata, including roots plus dependency/devDependency
+  snapshots for correct warm installs and frozen installs.
+- Release-readiness docs, security policy, contribution templates, checksum
+  sidecars, launch-check coverage, and AI ecosystem compatibility smoke results.
+
+### Fixed
+- `oath install`, `ci`, `add`, and `remove` state transitions now keep
+  package.json, oath-lock.json, node_modules, and the shared store in sync.
+- Scoped package linker edge cases, unsafe bin handling, installer checksum
+  behavior, tarball path safety, and release workflow checkout handling.
+
 ## [0.1.4] - 2026-06-25
 
 ### Fixed

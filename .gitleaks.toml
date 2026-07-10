@@ -1,0 +1,18 @@
+title = "oath gitleaks config"
+
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "Documentation placeholders and tests"
+paths = [
+  '''README\.md''',
+  '''CONTRIBUTING\.md''',
+  '''SECURITY\.md''',
+  '''crates/.*/tests/.*''',
+]
+regexes = [
+  '''secret123''',
+  '''tok-xyz''',
+  '''YOUR_[A-Z_]+''',
+]
