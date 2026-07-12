@@ -32,7 +32,30 @@ fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
 
 #[cfg(windows)]
 fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
-    std::os::windows::fs::symlink_dir(target, link)
+    let target = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        link.parent().unwrap_or_else(|| Path::new(".")).join(target)
+    };
+    let target = target.canonicalize()?;
+    let target_text = target.to_string_lossy();
+    let target = target_text
+        .strip_prefix(r"\\?\")
+        .unwrap_or(&target_text)
+        .to_string();
+    let output = std::process::Command::new("cmd.exe")
+        .args(["/D", "/C", "mklink", "/J"])
+        .arg(link)
+        .arg(target)
+        .output()?;
+    if output.status.success() {
+        Ok(())
+    } else {
+        Err(std::io::Error::other(format!(
+            "failed to create junction: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )))
+    }
 }
 
 #[cfg(unix)]
