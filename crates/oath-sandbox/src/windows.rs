@@ -51,6 +51,8 @@ fn remove_acl_grant(sid_text: &str, path: &std::path::Path) {
         .arg(format!("*{sid_text}"))
         .arg("/T")
         .arg("/Q")
+        .stdout(std::process::Stdio::null())
+        .stderr(std::process::Stdio::null())
         .status();
 }
 
@@ -73,6 +75,8 @@ unsafe fn grant_workdir(sid: PSID, paths: &[std::path::PathBuf]) -> anyhow::Resu
             .arg(format!("*{sid_text}:(OI)(CI)M"))
             .arg("/T")
             .arg("/Q")
+            .stdout(std::process::Stdio::null())
+            .stderr(std::process::Stdio::null())
             .status()?;
         if !status.success() {
             for granted in &paths[..=index] {
