@@ -260,11 +260,19 @@ pub fn run(
         let mut command = wide(OsStr::new(&command));
         let application = wide(program.as_os_str());
         let cwd = wide(plan.workdir.as_os_str());
-        let mut environment = Vec::new();
+        let mut environment_entries = Vec::new();
         for name in &plan.environment_allowlist {
             if let Ok(value) = std::env::var(name) {
-                environment.extend(wide(OsStr::new(&format!("{name}={value}"))));
+                environment_entries.push(format!("{name}={value}"));
             }
+        }
+        environment_entries.sort_by_key(|entry| entry.to_ascii_lowercase());
+        let mut environment = Vec::new();
+        for entry in environment_entries {
+            environment.extend(wide(OsStr::new(&entry)));
+        }
+        if environment.is_empty() {
+            environment.push(0);
         }
         environment.push(0);
         let mut startup: STARTUPINFOEXW = std::mem::zeroed();

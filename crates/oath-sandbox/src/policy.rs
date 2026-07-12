@@ -53,13 +53,25 @@ pub struct SandboxPlan {
 
 impl SandboxPlan {
     pub fn strict(package: impl Into<String>, workdir: PathBuf) -> Self {
+        #[cfg(target_os = "windows")]
+        let environment_allowlist = {
+            let mut names = vec!["PATH".into(), "TERM".into()];
+            names.extend(
+                ["SystemRoot", "SystemDrive", "ComSpec", "PATHEXT"]
+                    .into_iter()
+                    .map(String::from),
+            );
+            names
+        };
+        #[cfg(not(target_os = "windows"))]
+        let environment_allowlist = vec!["PATH".into(), "TERM".into()];
         Self {
             version: SANDBOX_PLAN_VERSION,
             package: package.into(),
             read_only_paths: vec![workdir.clone()],
             writable_paths: vec![workdir.clone()],
             workdir,
-            environment_allowlist: vec!["PATH".into(), "TERM".into()],
+            environment_allowlist,
             network: NetworkMode::Deny,
             allow_subprocesses: true,
             limits: ResourceLimits::default(),
@@ -179,7 +191,17 @@ impl SandboxPolicy {
 
     pub fn to_plan(&self) -> SandboxPlan {
         let mut plan = SandboxPlan::strict(self.package.clone(), self.workdir.clone());
-        plan.environment_allowlist = self.allowed_env_names();
+        let requested_environment = self.allowed_env_names();
+        #[cfg(not(target_os = "windows"))]
+        {
+            plan.environment_allowlist = requested_environment;
+        }
+        #[cfg(target_os = "windows")]
+        for name in requested_environment {
+            if !plan.environment_allowlist.contains(&name) {
+                plan.environment_allowlist.push(name);
+            }
+        }
         plan.network = if self.allows_network() {
             NetworkMode::Inherit
         } else {
@@ -232,6 +254,9 @@ mod plan_tests {
             .push(Permission::Env(vec!["TERM".into()]));
         let plan = policy.to_plan();
         assert_eq!(plan.network, NetworkMode::Inherit);
+        #[cfg(not(target_os = "windows"))]
         assert_eq!(plan.environment_allowlist, vec!["TERM"]);
+        #[cfg(target_os = "windows")]
+        assert!(plan.environment_allowlist.contains(&"TERM".to_string()));
     }
 }
