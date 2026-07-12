@@ -28,11 +28,11 @@ pub struct BackendCapabilities {
 pub fn native_capabilities() -> BackendCapabilities {
     #[cfg(target_os = "linux")]
     {
-        return linux::capabilities();
+        linux::capabilities()
     }
     #[cfg(target_os = "windows")]
     {
-        return windows::capabilities();
+        windows::capabilities()
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows")))]
     {
