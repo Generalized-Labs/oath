@@ -1,12 +1,12 @@
 use crate::{BackendCapabilities, SandboxPlan};
 use std::{ffi::OsStr, os::windows::ffi::OsStrExt, process::ExitStatus};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, HANDLE, LocalFree},
+    Foundation::{CloseHandle, LocalFree},
     Security::{
         Authorization::ConvertSidToStringSidW,
-        CreateRestrictedToken, DISABLE_MAX_PRIVILEGE, FreeSid,
+        FreeSid,
         Isolation::{CreateAppContainerProfile, DeleteAppContainerProfile},
-        PSID, SECURITY_CAPABILITIES, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY,
+        PSID, SECURITY_CAPABILITIES,
     },
     System::{
         JobObjects::{
@@ -16,9 +16,9 @@ use windows_sys::Win32::{
             SetInformationJobObject,
         },
         Threading::{
-            CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
-            DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
-            GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList, OpenProcessToken,
+            CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessW,
+            DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetExitCodeProcess,
+            INFINITE, InitializeProcThreadAttributeList,
             PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ResumeThread,
             STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
         },
@@ -119,37 +119,6 @@ pub fn run(
     // SAFETY: every pointer below refers to an owned buffer kept alive through process creation;
     // every successfully created Windows handle/SID/attribute list is released exactly once.
     unsafe {
-        let mut source: HANDLE = std::ptr::null_mut();
-        anyhow::ensure!(
-            OpenProcessToken(
-                GetCurrentProcess(),
-                TOKEN_DUPLICATE | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY,
-                &mut source
-            ) != 0,
-            "OpenProcessToken failed: {}",
-            std::io::Error::last_os_error()
-        );
-        let mut restricted: HANDLE = std::ptr::null_mut();
-        if CreateRestrictedToken(
-            source,
-            DISABLE_MAX_PRIVILEGE,
-            0,
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            0,
-            std::ptr::null(),
-            &mut restricted,
-        ) == 0
-        {
-            CloseHandle(source);
-            anyhow::bail!(
-                "CreateRestrictedToken failed: {}",
-                std::io::Error::last_os_error()
-            );
-        }
-        CloseHandle(source);
-
         let nonce = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
             .unwrap_or_default()
@@ -168,14 +137,12 @@ pub fn run(
             &mut sid,
         );
         if result < 0 {
-            CloseHandle(restricted);
             anyhow::bail!("AppContainer profile unavailable: HRESULT {result:#x}");
         }
         let sid_text = match grant_workdir(sid, &plan.writable_paths) {
             Ok(sid_text) => sid_text,
             Err(error) => {
                 FreeSid(sid);
-                CloseHandle(restricted);
                 let _ = DeleteAppContainerProfile(moniker.as_ptr());
                 return Err(error);
             }
@@ -192,7 +159,6 @@ pub fn run(
         let attributes = attribute_storage.as_mut_ptr().cast();
         if InitializeProcThreadAttributeList(attributes, 1, 0, &mut attribute_size) == 0 {
             FreeSid(sid);
-            CloseHandle(restricted);
             anyhow::bail!("InitializeProcThreadAttributeList failed");
         }
         let mut security = SECURITY_CAPABILITIES {
@@ -213,7 +179,6 @@ pub fn run(
         {
             DeleteProcThreadAttributeList(attributes);
             FreeSid(sid);
-            CloseHandle(restricted);
             anyhow::bail!("AppContainer security attribute failed");
         }
 
@@ -221,7 +186,6 @@ pub fn run(
         if job.is_null() {
             DeleteProcThreadAttributeList(attributes);
             FreeSid(sid);
-            CloseHandle(restricted);
             anyhow::bail!("CreateJobObjectW failed");
         }
         let mut limits: JOBOBJECT_EXTENDED_LIMIT_INFORMATION = std::mem::zeroed();
@@ -248,7 +212,6 @@ pub fn run(
             CloseHandle(job);
             DeleteProcThreadAttributeList(attributes);
             FreeSid(sid);
-            CloseHandle(restricted);
             anyhow::bail!("SetInformationJobObject failed");
         }
 
@@ -279,8 +242,11 @@ pub fn run(
         startup.StartupInfo.cb = std::mem::size_of::<STARTUPINFOEXW>() as u32;
         startup.lpAttributeList = attributes;
         let mut process: PROCESS_INFORMATION = std::mem::zeroed();
-        let created = CreateProcessAsUserW(
-            restricted,
+        // The AppContainer security attribute makes Windows create the child
+        // with a restricted, low-integrity AppContainer token. Using
+        // CreateProcessAsUserW with a separately restricted token conflicts
+        // with that documented token-construction path on Windows Server.
+        let created = CreateProcessW(
             application.as_ptr(),
             command.as_mut_ptr(),
             std::ptr::null(),
@@ -294,11 +260,10 @@ pub fn run(
         );
         DeleteProcThreadAttributeList(attributes);
         FreeSid(sid);
-        CloseHandle(restricted);
         if created == 0 {
             CloseHandle(job);
             anyhow::bail!(
-                "CreateProcessAsUserW AppContainer launch failed: {}",
+                "CreateProcessW AppContainer launch failed: {}",
                 std::io::Error::last_os_error()
             );
         }
