@@ -1,5 +1,6 @@
 //! Integration tests for oath-sandbox
 
+#[cfg(unix)]
 use oath_sandbox::executor::SandboxExecutor;
 use oath_sandbox::policy::{Permission, SandboxPolicy};
 use std::path::PathBuf;
@@ -87,6 +88,7 @@ fn test_sandbox_profile_generation() {
 }
 
 #[test]
+#[cfg(unix)]
 fn test_run_echo_sandboxed() {
     let workdir = std::env::temp_dir();
     std::fs::create_dir_all(&workdir).ok();
@@ -104,6 +106,7 @@ fn test_run_echo_sandboxed() {
 }
 
 #[test]
+#[cfg(unix)]
 fn test_sandbox_blocks_network() {
     // Without Seatbelt/Landlock, fallback can't actually block network.
     // This test verifies the sandbox *runs* the command; real network blocking
@@ -125,6 +128,7 @@ fn test_sandbox_blocks_network() {
 }
 
 #[test]
+#[cfg(unix)]
 fn test_sandbox_allows_network_when_granted() {
     let workdir = std::env::temp_dir();
     std::fs::create_dir_all(&workdir).ok();
@@ -147,6 +151,7 @@ fn test_sandbox_allows_network_when_granted() {
 }
 
 #[test]
+#[cfg(unix)]
 fn test_timeout_kills_process() {
     let workdir = std::env::temp_dir();
     std::fs::create_dir_all(&workdir).ok();
@@ -166,6 +171,7 @@ fn test_timeout_kills_process() {
 }
 
 #[test]
+#[cfg(unix)]
 fn test_env_stripping() {
     let workdir = std::env::temp_dir();
     std::fs::create_dir_all(&workdir).ok();

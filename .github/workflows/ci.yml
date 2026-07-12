@@ -89,7 +89,7 @@ jobs:
       - name: Record native sandbox capabilities on Windows
         if: always() && runner.os == 'Windows'
         shell: pwsh
-        run: target/release/oath.exe sandbox-info --json | Out-File -Encoding utf8 sandbox-capabilities-${{ runner.os }}.json
+        run: ./target/release/oath.exe sandbox-info --json | Out-File -Encoding utf8 sandbox-capabilities-${{ runner.os }}.json
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -109,8 +109,8 @@ jobs:
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          target/release/oath.exe --version
-          target/release/oath.exe exec --dry-run --json is-number | Out-File exec.json
+          ./target/release/oath.exe --version
+          ./target/release/oath.exe exec --dry-run --json is-number | Out-File exec.json
           node -e "const a=require('./exec.json').assessment;if(a.schema_version!==2)process.exit(1)"
 
   windows-artifacts:
