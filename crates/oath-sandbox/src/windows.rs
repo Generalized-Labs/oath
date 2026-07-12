@@ -44,7 +44,28 @@ fn wide(value: &OsStr) -> Vec<u16> {
     value.encode_wide().chain(Some(0)).collect()
 }
 fn quote(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\\\""))
+    if !value.is_empty() && !value.chars().any(|ch| ch.is_whitespace() || ch == '"') {
+        return value.to_string();
+    }
+    let mut quoted = String::from("\"");
+    let mut backslashes = 0;
+    for ch in value.chars() {
+        if ch == '\\' {
+            backslashes += 1;
+            continue;
+        }
+        if ch == '"' {
+            quoted.extend(std::iter::repeat_n('\\', backslashes * 2 + 1));
+            quoted.push('"');
+        } else {
+            quoted.extend(std::iter::repeat_n('\\', backslashes));
+            quoted.push(ch);
+        }
+        backslashes = 0;
+    }
+    quoted.extend(std::iter::repeat_n('\\', backslashes * 2));
+    quoted.push('"');
+    quoted
 }
 
 fn remove_acl_grant(sid_text: &str, path: &std::path::Path) {
@@ -327,6 +348,13 @@ pub fn run(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn quotes_windows_arguments_without_changing_safe_tokens() {
+        assert_eq!(quote("/C"), "/C");
+        assert_eq!(quote("exit 0"), "\"exit 0\"");
+        assert_eq!(quote(r#"say "hi""#), r#""say \"hi\"""#);
+    }
+
     #[test]
     fn restricted_appcontainer_job_launches_and_exits() {
         let root =
