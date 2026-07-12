@@ -5,10 +5,13 @@ use windows_sys::Win32::{
     Security::{
         Authorization::ConvertSidToStringSidW,
         FreeSid,
-        Isolation::{CreateAppContainerProfile, DeleteAppContainerProfile},
+        Isolation::{
+            CreateAppContainerProfile, DeleteAppContainerProfile, GetAppContainerFolderPath,
+        },
         PSID, SECURITY_CAPABILITIES,
     },
     System::{
+        Com::CoTaskMemFree,
         JobObjects::{
             AssignProcessToJobObject, CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
             JOB_OBJECT_LIMIT_JOB_MEMORY, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
@@ -88,6 +91,23 @@ unsafe fn grant_workdir(sid: PSID, paths: &[std::path::PathBuf]) -> anyhow::Resu
     Ok(sid_text)
 }
 
+unsafe fn appcontainer_folder(sid_text: &str) -> anyhow::Result<String> {
+    let sid_text = wide(OsStr::new(sid_text));
+    let mut folder: *mut u16 = std::ptr::null_mut();
+    let result = unsafe { GetAppContainerFolderPath(sid_text.as_ptr(), &mut folder) };
+    anyhow::ensure!(
+        result >= 0 && !folder.is_null(),
+        "GetAppContainerFolderPath failed: HRESULT {result:#x}"
+    );
+    let mut length = 0;
+    while unsafe { *folder.add(length) } != 0 {
+        length += 1;
+    }
+    let path = String::from_utf16(unsafe { std::slice::from_raw_parts(folder, length) });
+    unsafe { CoTaskMemFree(folder.cast()) };
+    Ok(path?)
+}
+
 struct AppContainerProfileGuard {
     moniker: Vec<u16>,
     sid_text: String,
@@ -152,6 +172,15 @@ pub fn run(
             sid_text,
             paths: plan.writable_paths.clone(),
         };
+        let appcontainer_home = match appcontainer_folder(&_profile.sid_text) {
+            Ok(path) => path,
+            Err(error) => {
+                FreeSid(sid);
+                return Err(error);
+            }
+        };
+        let appcontainer_temp = std::path::Path::new(&appcontainer_home).join("Temp");
+        std::fs::create_dir_all(&appcontainer_temp)?;
 
         let mut attribute_size = 0usize;
         InitializeProcThreadAttributeList(std::ptr::null_mut(), 1, 0, &mut attribute_size);
@@ -225,7 +254,12 @@ pub fn run(
         let cwd = wide(plan.workdir.as_os_str());
         let mut environment_entries = Vec::new();
         for name in &plan.environment_allowlist {
-            if let Ok(value) = std::env::var(name) {
+            let value = match name.to_ascii_uppercase().as_str() {
+                "LOCALAPPDATA" => Some(appcontainer_home.clone()),
+                "TEMP" | "TMP" => Some(appcontainer_temp.to_string_lossy().into_owned()),
+                _ => std::env::var(name).ok(),
+            };
+            if let Some(value) = value {
                 environment_entries.push(format!("{name}={value}"));
             }
         }

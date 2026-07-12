@@ -57,9 +57,17 @@ impl SandboxPlan {
         let environment_allowlist = {
             let mut names = vec!["PATH".into(), "TERM".into()];
             names.extend(
-                ["SystemRoot", "SystemDrive", "ComSpec", "PATHEXT"]
-                    .into_iter()
-                    .map(String::from),
+                [
+                    "SystemRoot",
+                    "SystemDrive",
+                    "ComSpec",
+                    "PATHEXT",
+                    "LOCALAPPDATA",
+                    "TEMP",
+                    "TMP",
+                ]
+                .into_iter()
+                .map(String::from),
             );
             names
         };

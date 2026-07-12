@@ -1,6 +1,7 @@
 //! Fail-closed Linux launcher using bubblewrap's kernel namespace boundary.
 
 use crate::{BackendCapabilities, NetworkMode, SandboxPlan};
+use std::os::unix::fs::MetadataExt;
 use std::os::unix::process::{CommandExt, ExitStatusExt};
 use std::process::{Command, ExitStatus};
 
@@ -29,6 +30,26 @@ fn bubblewrap() -> Option<&'static str> {
     ["bwrap", "/usr/bin/bwrap"]
         .into_iter()
         .find(|candidate| Command::new(candidate).arg("--version").output().is_ok())
+}
+
+fn current_user_process_count() -> u64 {
+    // RLIMIT_NPROC is charged to the real UID, not the PID namespace. Account
+    // for processes that already exist under a shared CI/service account so
+    // the package receives exactly its declared additional allowance.
+    let uid = unsafe { libc::geteuid() };
+    std::fs::read_dir("/proc")
+        .into_iter()
+        .flatten()
+        .filter_map(Result::ok)
+        .filter(|entry| {
+            entry
+                .file_name()
+                .to_string_lossy()
+                .bytes()
+                .all(|byte| byte.is_ascii_digit())
+                && entry.metadata().is_ok_and(|metadata| metadata.uid() == uid)
+        })
+        .count() as u64
 }
 
 pub fn capabilities() -> BackendCapabilities {
@@ -98,6 +119,7 @@ pub fn run(
         }
     }
     let limits = plan.limits.clone();
+    let nproc_limit = current_user_process_count().saturating_add(limits.max_processes);
     // SAFETY: pre_exec runs after fork and performs only async-signal-safe libc calls.
     unsafe {
         cmd.pre_exec(move || {
@@ -117,7 +139,7 @@ pub fn run(
             if libc::prctl(libc::PR_SET_NO_NEW_PRIVS, 1, 0, 0, 0) != 0 {
                 return Err(std::io::Error::last_os_error());
             }
-            limit(libc::RLIMIT_NPROC, limits.max_processes)?;
+            limit(libc::RLIMIT_NPROC, nproc_limit)?;
             limit(libc::RLIMIT_NOFILE, limits.max_open_files)?;
             limit(libc::RLIMIT_FSIZE, limits.max_file_bytes)?;
             limit(libc::RLIMIT_AS, limits.max_memory_bytes)?;
