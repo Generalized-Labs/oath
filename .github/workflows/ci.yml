@@ -234,6 +234,11 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - run: rustup toolchain install stable && rustup default stable
       - run: sudo apt-get update && sudo apt-get install -y bubblewrap libseccomp-dev
+      - name: Allow unprivileged user namespaces on the disposable runner
+        run: |
+          if [ -e /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]; then
+            sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
+          fi
       - run: cargo build --release --locked --bin oath
       - name: Prove native backend
         run: |
@@ -245,7 +250,7 @@ jobs:
           fi
       - name: Run fail-closed adversarial suite
         if: matrix.strict_available
-        run: cargo test --locked -p oath-sandbox native_linux -- --nocapture
+        run: cargo test --locked -p oath-sandbox native_linux -- --ignored --nocapture
         env:
           OATH_NATIVE_TEST_BIN: ${{ github.workspace }}/target/release/oath
       - run: sha256sum sandbox-capabilities-linux.json > sandbox-capabilities-linux.sha256

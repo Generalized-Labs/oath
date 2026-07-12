@@ -198,6 +198,7 @@ fn test_env_stripping() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "requires the dedicated native Linux release runner"]
 fn native_linux_blocks_secret_environment_and_outside_writes() {
     assert!(
         oath_sandbox::native_capabilities().available,
@@ -225,6 +226,7 @@ fn native_linux_blocks_secret_environment_and_outside_writes() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "requires the dedicated native Linux release runner"]
 fn native_linux_denies_network_by_default() {
     assert!(
         oath_sandbox::native_capabilities().available,
@@ -245,6 +247,7 @@ fn native_linux_denies_network_by_default() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "requires the dedicated native Linux release runner"]
 fn native_linux_denies_proc_credentials_and_unix_sockets() {
     assert!(oath_sandbox::native_capabilities().available);
     let dir = tempfile::tempdir().unwrap();
@@ -268,6 +271,7 @@ fn native_linux_denies_proc_credentials_and_unix_sockets() {
 
 #[cfg(target_os = "linux")]
 #[test]
+#[ignore = "requires the dedicated native Linux release runner"]
 fn native_linux_enforces_child_process_policy() {
     assert!(oath_sandbox::native_capabilities().available);
     let dir = tempfile::tempdir().unwrap();
