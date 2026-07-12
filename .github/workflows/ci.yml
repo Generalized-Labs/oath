@@ -250,7 +250,7 @@ jobs:
           fi
       - name: Run fail-closed adversarial suite
         if: matrix.strict_available
-        run: cargo test --locked -p oath-sandbox native_linux -- --ignored --nocapture
+        run: cargo test --locked -p oath-sandbox native_linux -- --ignored --nocapture --test-threads=1
         env:
           OATH_NATIVE_TEST_BIN: ${{ github.workspace }}/target/release/oath
       - run: sha256sum sandbox-capabilities-linux.json > sandbox-capabilities-linux.sha256

@@ -1,13 +1,12 @@
 use crate::{BackendCapabilities, SandboxPlan};
 use std::{ffi::OsStr, os::windows::ffi::OsStrExt, process::ExitStatus};
 use windows_sys::Win32::{
-    Foundation::{CloseHandle, FreeSid, HANDLE, LocalFree, PSID},
+    Foundation::{CloseHandle, HANDLE, LocalFree},
     Security::{
         Authorization::ConvertSidToStringSidW,
-        CreateRestrictedToken, DISABLE_MAX_PRIVILEGE,
+        CreateRestrictedToken, DISABLE_MAX_PRIVILEGE, FreeSid,
         Isolation::{CreateAppContainerProfile, DeleteAppContainerProfile},
-        OpenProcessToken, SECURITY_CAPABILITIES, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE,
-        TOKEN_QUERY,
+        PSID, SECURITY_CAPABILITIES, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE, TOKEN_QUERY,
     },
     System::{
         JobObjects::{
@@ -19,7 +18,7 @@ use windows_sys::Win32::{
         Threading::{
             CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
             DeleteProcThreadAttributeList, EXTENDED_STARTUPINFO_PRESENT, GetCurrentProcess,
-            GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList,
+            GetExitCodeProcess, INFINITE, InitializeProcThreadAttributeList, OpenProcessToken,
             PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, PROCESS_INFORMATION, ResumeThread,
             STARTUPINFOEXW, UpdateProcThreadAttribute, WaitForSingleObject,
         },
@@ -201,7 +200,7 @@ pub fn run(
         if UpdateProcThreadAttribute(
             attributes,
             0,
-            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES,
+            PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES as usize,
             &mut security as *mut _ as *mut _,
             std::mem::size_of_val(&security),
             std::ptr::null_mut(),
