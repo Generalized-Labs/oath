@@ -121,8 +121,11 @@ pub fn parse_git_spec(spec: &str) -> Option<GitSpec> {
         let (url_no_ref, git_ref) = split_ref(url_part);
         let git_ref = git_ref.map(|r| r.to_string());
         // Convert ssh to https for downloading
-        let https_url = if let Some(repo) = url_no_ref.strip_prefix("git@github.com:") {
-            format!("https://github.com/{}", repo)
+        let https_url = if let Some(repo) = url_no_ref
+            .strip_prefix("git@github.com:")
+            .or_else(|| url_no_ref.strip_prefix("git@github.com/"))
+        {
+            format!("https://github.com/{repo}")
         } else {
             format!("https://{}", url_no_ref)
         };
@@ -285,17 +288,8 @@ async fn resolve_via_git_clone(url: &str, git_ref: &str) -> Result<GitResolved> 
     let pkg_json_data =
         std::fs::read(&pkg_json_path).with_context(|| format!("no package.json in {}", url))?;
 
-    // Create tarball from the clone dir
-    let mut tar_data: Vec<u8> = Vec::new();
-    {
-        use flate2::Compression;
-        use flate2::write::GzEncoder;
-        let enc = GzEncoder::new(&mut tar_data, Compression::default());
-        let mut tar = tar::Builder::new(enc);
-        tar.append_dir_all("package", &clone_dir)
-            .context("failed to create tarball from git clone")?;
-        tar.finish().context("failed to finalize tarball")?;
-    }
+    prune_git_package_metadata(&clone_dir)?;
+    let tar_data = repack_git_package(&clone_dir)?;
 
     parse_git_tarball_from_json(tar_data, &pkg_json_data, url, git_ref)
 }
@@ -310,8 +304,45 @@ fn parse_git_tarball(data: Vec<u8>, resolved_url: &str, _git_ref: &str) -> Resul
     let pkg_json_path = tmp.path().join("package.json");
     let pkg_json_data = std::fs::read(&pkg_json_path)
         .with_context(|| format!("no package.json in tarball from {}", resolved_url))?;
+    prune_git_package_metadata(tmp.path())?;
+    let normalized = repack_git_package(tmp.path())?;
 
-    parse_git_tarball_from_json(data, &pkg_json_data, resolved_url, _git_ref)
+    parse_git_tarball_from_json(normalized, &pkg_json_data, resolved_url, _git_ref)
+}
+
+fn prune_git_package_metadata(root: &std::path::Path) -> Result<()> {
+    for name in [
+        ".git",
+        ".gitignore",
+        ".npmignore",
+        "package-lock.json",
+        "npm-shrinkwrap.json",
+        "pnpm-lock.yaml",
+        "yarn.lock",
+    ] {
+        let path = root.join(name);
+        if path.is_dir() {
+            std::fs::remove_dir_all(&path)?;
+        } else if path.exists() {
+            std::fs::remove_file(&path)?;
+        }
+    }
+    Ok(())
+}
+
+fn repack_git_package(root: &std::path::Path) -> Result<Vec<u8>> {
+    use flate2::Compression;
+    use flate2::write::GzEncoder;
+    let mut tar_data = Vec::new();
+    {
+        let enc = GzEncoder::new(&mut tar_data, Compression::default());
+        let mut tar = tar::Builder::new(enc);
+        tar.append_dir_all("package", root)
+            .context("failed to create normalized git package tarball")?;
+        tar.finish()
+            .context("failed to finalize git package tarball")?;
+    }
+    Ok(tar_data)
 }
 
 fn parse_git_tarball_from_json(
@@ -388,7 +419,7 @@ fn safe_cache_component(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::git_cache_file_name;
+    use super::{git_cache_file_name, parse_git_spec, prune_git_package_metadata};
 
     #[test]
     fn git_cache_file_name_encodes_path_separators() {
@@ -396,5 +427,33 @@ mod tests {
             git_cache_file_name("../evil", "../../outside"),
             "..+evil-..%2F..%2Foutside.tgz"
         );
+    }
+
+    #[test]
+    fn parses_github_ssh_url_with_commit_for_tarball_api() {
+        let spec = parse_git_spec(
+            "git+ssh://git@github.com/webpack/tooling.git#978dc1c9680ef7d79f5f5c02c3439385d7937c39",
+        )
+        .unwrap();
+        assert_eq!(spec.url, "https://github.com/webpack/tooling.git");
+        assert_eq!(spec.github_repo, Some(("webpack".into(), "tooling".into())));
+        assert_eq!(
+            spec.git_ref.as_deref(),
+            Some("978dc1c9680ef7d79f5f5c02c3439385d7937c39")
+        );
+    }
+
+    #[test]
+    fn prunes_root_package_manager_metadata_from_git_packages() {
+        let root = tempfile::tempdir().unwrap();
+        for name in ["yarn.lock", ".npmignore", "package-lock.json"] {
+            std::fs::write(root.path().join(name), b"metadata").unwrap();
+        }
+        std::fs::write(root.path().join("index.js"), b"module.exports = 1").unwrap();
+        prune_git_package_metadata(root.path()).unwrap();
+        assert!(root.path().join("index.js").exists());
+        assert!(!root.path().join("yarn.lock").exists());
+        assert!(!root.path().join(".npmignore").exists());
+        assert!(!root.path().join("package-lock.json").exists());
     }
 }

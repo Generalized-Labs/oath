@@ -1,0 +1,70 @@
+{
+  "schema_version": 2,
+  "generated_at": "2026-07-12T18:45:00Z",
+  "reference_npm": "11.12.1",
+  "placement_runtime": {
+    "npm": "11.12.1",
+    "arborist": "9.4.2",
+    "delivery": "embedded and sha256-verified",
+    "npm_tarball_sha256": "e679850e663b16f5f146ee425d0eb0e3442c1d2bda3d513bbfd7c81f5ee5db38"
+  },
+  "fixtures": {
+    "target": 500,
+    "executed": 500,
+    "equivalent": 500,
+    "failed": 0,
+    "modes": {
+      "clean": { "executed": 102, "equivalent": 102 },
+      "warm": { "executed": 101, "equivalent": 101 },
+      "offline": { "executed": 99, "equivalent": 99 },
+      "repeat": { "executed": 99, "equivalent": 99 },
+      "interrupted": { "executed": 99, "equivalent": 99 }
+    },
+    "full_rerun_required": false
+  },
+  "real_projects": {
+    "target": 100,
+    "corpus_attempt_records": 42,
+    "corpus_exact_equivalents": 9,
+    "targeted_exact_equivalents": 1,
+    "current_unique_exact_equivalents": 10,
+    "reference_rejected_records": 22,
+    "harness_error_records": 4,
+    "compared_non_equivalent_records": 7,
+    "replacement_for_next_head": "NextJSTemplates/play-nextjs@f0a5c55ef1d6198c41ac6354595adadc4c41b924",
+    "remaining_to_gate": 90,
+    "gate_complete": false,
+    "blockers": [
+      "The original manifest contains repositories whose HEAD uses pnpm or Yarn or is rejected by npm 11; these do not count as npm-eligible comparisons.",
+      "Very large eligible projects exhausted the local ephemeral disk while constructing dual npm and Oath trees; the lane needs a large-disk CI runner."
+    ]
+  },
+  "benchmark": {
+    "artifact": "compat-results/benchmarks/installers.json",
+    "platform": "darwin-arm64",
+    "npm_cold_ms": 728.486,
+    "npm_warm_ms": 427.851,
+    "bun_cold_ms": 405.535,
+    "bun_warm_ms": 22.91,
+    "oath_cold_ms": 2683.314,
+    "oath_warm_ms": 1243.498,
+    "speed_claim_allowed": false,
+    "conclusion": "Oath is currently slower than both npm and Bun on this benchmark."
+  },
+  "native_security": {
+    "linux_cross_compile": "passed",
+    "linux_kernel_enforcement": "not executed",
+    "windows_cross_compile": "blocked: MSVC ml64.exe is unavailable on macOS",
+    "windows_native_enforcement": "not executed",
+    "ci_gates_added": true,
+    "gate_complete": false
+  },
+  "workspace_verification": {
+    "cargo_test_workspace_offline": "passed",
+    "cargo_fmt_check": "passed",
+    "cargo_clippy_deny_warnings": "passed",
+    "release_build": "passed"
+  },
+  "ga_gate": "in_progress",
+  "next_action": "Run the curated npm-eligible project lane on large-disk Linux runners and execute the native Linux and Windows security jobs."
+}

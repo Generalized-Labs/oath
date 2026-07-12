@@ -1,0 +1,65 @@
+{
+  "schema_version": 1,
+  "categories": {
+    "frameworks-applications": [
+      "NextJSTemplates/play-nextjs", "vercel/next.js", "nuxt/nuxt", "remix-run/remix", "withastro/astro",
+      "sveltejs/kit", "gatsbyjs/gatsby", "redwoodjs/redwood", "blitz-js/blitz", "umijs/umi",
+      "modern-js-dev/modern.js", "analogjs/analog", "solidjs/solid-start", "QwikDev/qwik", "emberjs/ember.js",
+      "meteor/meteor", "strapi/strapi", "payloadcms/payload", "keystonejs/keystone", "facebook/docusaurus"
+    ],
+    "build-tools": [
+      "vitejs/vite", "webpack/webpack", "rollup/rollup", "parcel-bundler/parcel", "evanw/esbuild",
+      "swc-project/swc", "web-infra-dev/rspack", "vercel/turborepo", "nrwl/nx", "gulpjs/gulp",
+      "gruntjs/grunt", "snowpackjs/snowpack", "egoist/tsup", "unjs/unbuild", "developit/microbundle",
+      "vercel/ncc", "privatenumber/pkgroll", "farm-fe/farm", "rolldown/rolldown", "browserify/browserify"
+    ],
+    "typescript-compilers": [
+      "microsoft/TypeScript", "babel/babel", "typescript-eslint/typescript-eslint", "TypeStrong/ts-node", "alangpierce/sucrase",
+      "oxc-project/oxc", "biomejs/biome", "facebook/flow", "dsherret/ts-morph", "TypeStrong/typedoc",
+      "microsoft/rushstack", "prettier/prettier", "eslint/eslint", "unjs/jiti", "acornjs/acorn",
+      "meriyah/meriyah", "benjamn/recast", "kulshekhar/ts-jest", "evanw/source-map-visualization", "javascript-obfuscator/javascript-obfuscator"
+    ],
+    "test-tools": [
+      "jestjs/jest", "vitest-dev/vitest", "mochajs/mocha", "avajs/ava", "tapjs/tapjs",
+      "jasmine/jasmine", "karma-runner/karma", "microsoft/playwright", "puppeteer/puppeteer", "cypress-io/cypress",
+      "webdriverio/webdriverio", "testing-library/dom-testing-library", "sinonjs/sinon", "chaijs/chai", "istanbuljs/nyc",
+      "storybookjs/storybook", "mswjs/msw", "nock/nock", "DevExpress/testcafe", "lukeed/uvu"
+    ],
+    "server-frameworks": [
+      "expressjs/express", "fastify/fastify", "koajs/koa", "honojs/hono", "hapijs/hapi",
+      "nestjs/nest", "adonisjs/core", "feathersjs/feathers", "loopbackio/loopback-next", "restify/node-restify",
+      "lukeed/polka", "vercel/micro", "middyjs/middy", "moleculerjs/moleculer", "totaljs/framework",
+      "balderdashy/sails", "eggjs/egg", "actionhero/actionhero", "mercurius-js/mercurius", "dotansimha/graphql-yoga"
+    ],
+    "ui-libraries": [
+      "facebook/react", "vuejs/core", "sveltejs/svelte", "preactjs/preact", "solidjs/solid",
+      "alpinejs/alpine", "lit/lit", "angular/angular", "mui/material-ui", "ant-design/ant-design",
+      "chakra-ui/chakra-ui", "mantinedev/mantine", "radix-ui/primitives", "tailwindlabs/headlessui", "shoelace-style/shoelace",
+      "stenciljs/core", "ionic-team/ionic-framework", "emotion-js/emotion", "styled-components/styled-components", "react-hook-form/react-hook-form"
+    ],
+    "database-orm": [
+      "prisma/prisma", "sequelize/sequelize", "typeorm/typeorm", "drizzle-team/drizzle-orm", "knex/knex",
+      "Automattic/mongoose", "mongodb/node-mongodb-native", "redis/node-redis", "redis/ioredis", "brianc/node-postgres",
+      "mysqljs/mysql", "sidorares/node-mysql2", "WiseLibs/better-sqlite3", "tediousjs/tedious", "neo4j/neo4j-javascript-driver",
+      "elastic/elasticsearch-js", "dynamodb-toolbox/dynamodb-toolbox", "kysely-org/kysely", "Vincit/objection.js", "balderdashy/waterline"
+    ],
+    "monorepos-workspaces": [
+      "npm/cli", "lerna/lerna", "changesets/changesets", "microsoft/beachball", "microsoft/lage",
+      "google/wireit", "pnpm/pnpm", "yarnpkg/berry", "rushstack/rushstack", "moonrepo/moon",
+      "manypkg/get-packages", "FormidableLabs/builder", "atlassian/changesets", "Thinkmill/manypkg", "wixplosives/sample-monorepo",
+      "azu/monorepo-utils", "jaredpalmer/tsdx", "facebook/flipper", "mattermost/mattermost-webapp", "WordPress/gutenberg"
+    ],
+    "native-platform": [
+      "nodejs/node-addon-api", "nodejs/node-gyp", "prebuild/prebuild", "prebuild/prebuildify", "mapbox/node-pre-gyp",
+      "napi-rs/napi-rs", "neon-bindings/neon", "lovell/sharp", "Automattic/node-canvas", "kelektiv/node.bcrypt.js",
+      "ranisalt/node-argon2", "fsevents/fsevents", "atom/node-keytar", "TryGhost/node-sqlite3", "mscdex/cpu-features",
+      "laverdet/node-fibers", "lovell/sharp-libvips", "microsoft/node-pty", "kriszyp/lmdb-js", "msgpackr-extract/msgpackr-extract"
+    ],
+    "cli-developer-tools": [
+      "tj/commander.js", "yargs/yargs", "oclif/core", "vadimdemedes/ink", "terkelg/prompts",
+      "SBoudrias/Inquirer.js", "chalk/chalk", "sindresorhus/ora", "sindresorhus/execa", "google/zx",
+      "shelljs/shelljs", "entropitor/dotenv-cli", "isaacs/rimraf", "isaacs/node-glob", "raineorshine/npm-check-updates",
+      "open-cli-tools/concurrently", "remy/nodemon", "semantic-release/semantic-release", "release-it/release-it", "typicode/husky"
+    ]
+  }
+}

@@ -1,0 +1,12 @@
+[
+  {
+    "repository": "expressjs/express",
+    "subdirectory": ".",
+    "category": "server-frameworks"
+  },
+  {
+    "repository": "webpack/webpack",
+    "subdirectory": ".",
+    "category": "build-tools"
+  }
+]

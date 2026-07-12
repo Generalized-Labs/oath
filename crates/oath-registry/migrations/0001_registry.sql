@@ -1,0 +1,11 @@
+CREATE TABLE IF NOT EXISTS organizations (name TEXT PRIMARY KEY, created_at BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS tokens (token_hash TEXT PRIMARY KEY, organization TEXT NOT NULL REFERENCES organizations(name), role TEXT NOT NULL, expires_at BIGINT, kind TEXT NOT NULL DEFAULT 'service');
+CREATE TABLE IF NOT EXISTS package_roles (name TEXT NOT NULL, organization TEXT NOT NULL, principal_org TEXT NOT NULL, role TEXT NOT NULL, PRIMARY KEY(name,principal_org));
+CREATE TABLE IF NOT EXISTS invitations (token_hash TEXT PRIMARY KEY, organization TEXT NOT NULL REFERENCES organizations(name), email TEXT NOT NULL, role TEXT NOT NULL, expires_at BIGINT NOT NULL, accepted_at BIGINT, revoked_at BIGINT);
+CREATE TABLE IF NOT EXISTS organization_members (organization TEXT NOT NULL REFERENCES organizations(name), subject TEXT NOT NULL, email TEXT NOT NULL, role TEXT NOT NULL, created_at BIGINT NOT NULL, PRIMARY KEY(organization,subject));
+CREATE TABLE IF NOT EXISTS stages (id TEXT PRIMARY KEY, organization TEXT NOT NULL REFERENCES organizations(name), name TEXT NOT NULL, version TEXT NOT NULL, tag TEXT NOT NULL, digest TEXT NOT NULL, status TEXT NOT NULL, private BOOLEAN NOT NULL, assessment JSONB NOT NULL, created_at BIGINT NOT NULL, decision_reason TEXT, UNIQUE(name,version));
+CREATE TABLE IF NOT EXISTS versions (name TEXT NOT NULL, version TEXT NOT NULL, organization TEXT NOT NULL REFERENCES organizations(name), digest TEXT NOT NULL, status TEXT NOT NULL, private BOOLEAN NOT NULL, assessment JSONB NOT NULL, published_at BIGINT NOT NULL, PRIMARY KEY(name,version));
+CREATE TABLE IF NOT EXISTS dist_tags (name TEXT NOT NULL, tag TEXT NOT NULL, version TEXT NOT NULL, PRIMARY KEY(name,tag));
+CREATE TABLE IF NOT EXISTS tombstones (name TEXT NOT NULL, version TEXT NOT NULL, status TEXT NOT NULL, reason TEXT NOT NULL, actor_org TEXT NOT NULL, created_at BIGINT NOT NULL, signature TEXT NOT NULL, public_key TEXT NOT NULL, PRIMARY KEY(name,version));
+CREATE TABLE IF NOT EXISTS registry_events (sequence BIGSERIAL PRIMARY KEY, event_json TEXT NOT NULL, previous_hash TEXT NOT NULL, event_hash TEXT NOT NULL UNIQUE, signature TEXT NOT NULL, created_at BIGINT NOT NULL);
+CREATE TABLE IF NOT EXISTS billing_events (provider_event_id TEXT PRIMARY KEY, event_type TEXT NOT NULL, payload JSONB NOT NULL, received_at BIGINT NOT NULL);

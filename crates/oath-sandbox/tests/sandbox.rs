@@ -4,6 +4,28 @@ use oath_sandbox::executor::SandboxExecutor;
 use oath_sandbox::policy::{Permission, SandboxPolicy};
 use std::path::PathBuf;
 
+#[cfg(target_os = "linux")]
+fn run_native_release(
+    plan: &oath_sandbox::SandboxPlan,
+    program: &std::path::Path,
+    args: &[&str],
+) -> std::process::ExitStatus {
+    let oath = std::env::var_os("OATH_NATIVE_TEST_BIN")
+        .expect("OATH_NATIVE_TEST_BIN must point to the release Oath binary");
+    let plan_file = tempfile::NamedTempFile::new().unwrap();
+    serde_json::to_writer(plan_file.as_file(), plan).unwrap();
+    std::process::Command::new(oath)
+        .arg("__sandbox-native-run")
+        .arg("--plan")
+        .arg(plan_file.path())
+        .arg("--program")
+        .arg(program)
+        .arg("--")
+        .args(args)
+        .status()
+        .unwrap()
+}
+
 fn test_workdir() -> PathBuf {
     std::env::temp_dir().join("oath-sandbox-test")
 }
@@ -172,4 +194,88 @@ fn test_env_stripping() {
     unsafe {
         std::env::remove_var("OATH_TEST_SECRET");
     }
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_linux_blocks_secret_environment_and_outside_writes() {
+    assert!(
+        oath_sandbox::native_capabilities().available,
+        "native Linux release tests must not skip unavailable controls"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let plan = oath_sandbox::SandboxPlan::strict("adversarial", dir.path().to_path_buf());
+    // SAFETY: this integration test does not concurrently mutate this variable.
+    unsafe {
+        std::env::set_var("OATH_ADVERSARIAL_SECRET", "must-not-leak");
+    }
+    let status = run_native_release(
+        &plan,
+        std::path::Path::new("/bin/sh"),
+        &[
+            "-c",
+            "test -z \"$OATH_ADVERSARIAL_SECRET\" && ! touch /tmp/oath-escape",
+        ],
+    );
+    unsafe {
+        std::env::remove_var("OATH_ADVERSARIAL_SECRET");
+    }
+    assert!(status.success());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_linux_denies_network_by_default() {
+    assert!(
+        oath_sandbox::native_capabilities().available,
+        "native Linux release tests must not skip unavailable controls"
+    );
+    let dir = tempfile::tempdir().unwrap();
+    let plan = oath_sandbox::SandboxPlan::strict("adversarial", dir.path().to_path_buf());
+    let status = run_native_release(
+        &plan,
+        std::path::Path::new("/usr/bin/python3"),
+        &[
+            "-c",
+            "import socket; socket.create_connection(('1.1.1.1', 53), 1)",
+        ],
+    );
+    assert!(!status.success());
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_linux_denies_proc_credentials_and_unix_sockets() {
+    assert!(oath_sandbox::native_capabilities().available);
+    let dir = tempfile::tempdir().unwrap();
+    let plan = oath_sandbox::SandboxPlan::strict("adversarial", dir.path().to_path_buf());
+    let status = run_native_release(
+        &plan,
+        std::path::Path::new("/bin/sh"),
+        &["-c", "! test -r /etc/passwd && ! test -r /proc/1/environ"],
+    );
+    assert!(status.success());
+    let socket = run_native_release(
+        &plan,
+        std::path::Path::new("/usr/bin/python3"),
+        &["-c", "import socket; socket.socket(socket.AF_UNIX)"],
+    );
+    assert!(
+        !socket.success(),
+        "network-deny must also deny Unix sockets"
+    );
+}
+
+#[cfg(target_os = "linux")]
+#[test]
+fn native_linux_enforces_child_process_policy() {
+    assert!(oath_sandbox::native_capabilities().available);
+    let dir = tempfile::tempdir().unwrap();
+    let mut plan = oath_sandbox::SandboxPlan::strict("no-children", dir.path().to_path_buf());
+    plan.allow_subprocesses = false;
+    let status = run_native_release(&plan, std::path::Path::new("/bin/sh"), &["-c", "/bin/true"]);
+    assert!(
+        !status.success(),
+        "child creation must be denied by seccomp"
+    );
 }

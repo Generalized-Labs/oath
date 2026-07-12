@@ -10,6 +10,7 @@ pub mod git;
 pub mod graph;
 pub mod import;
 pub mod lockfile;
+pub mod placement;
 pub mod resolver;
 
 pub use graph::{DepGraph, DepNode};

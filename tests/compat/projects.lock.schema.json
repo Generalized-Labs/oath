@@ -1,0 +1,31 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Oath pinned npm compatibility corpus",
+  "type": "object",
+  "required": ["schema_version", "npm", "projects"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "npm": { "const": "11.12.1" },
+    "projects": {
+      "type": "array",
+      "minItems": 100,
+      "maxItems": 100,
+      "items": {
+        "type": "object",
+        "required": ["repository", "commit", "subdirectory", "npm", "category", "expected_lock_sha256"],
+        "properties": {
+          "repository": { "type": "string", "pattern": "^[^/]+/[^/]+$" },
+          "commit": { "type": "string", "pattern": "^[0-9a-f]{40}$" },
+          "subdirectory": { "type": "string" },
+          "npm": { "const": "11.12.1" },
+          "category": {
+            "enum": ["frameworks-applications", "build-tools", "typescript-compilers", "test-tools", "server-frameworks", "ui-libraries", "database-orm", "monorepos-workspaces", "native-platform", "cli-developer-tools"]
+          },
+          "expected_lock_sha256": { "type": "string", "pattern": "^[0-9a-f]{64}$" }
+        },
+        "additionalProperties": false
+      }
+    }
+  },
+  "additionalProperties": false
+}

@@ -16,8 +16,38 @@ permissions:
   contents: read
 
 jobs:
-  check:
+  postgres-registry:
     runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: oath
+          POSTGRES_PASSWORD: oath
+          POSTGRES_DB: oath_test
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oath -d oath_test"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      OATH_TEST_DATABASE_URL: postgresql://oath:oath@localhost:5432/oath_test
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Install Rust toolchain
+        run: rustup toolchain install stable && rustup default stable
+      - name: PostgreSQL registry end-to-end test
+        run: cargo test --locked -p oath-registry postgres_api::tests::live_postgres_stage_publish_download_and_revoke
+
+  check:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
     steps:
       - name: Checkout
         uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
@@ -26,6 +56,18 @@ jobs:
         run: |
           rustup toolchain install stable --component rustfmt --component clippy
           rustup default stable
+
+      - name: Install Node npm reference
+        uses: actions/setup-node@v4
+        with:
+          node-version: 24
+
+      - name: Pin npm compatibility reference
+        run: npm install --global npm@11.12.1
+
+      - name: Install Linux sandbox runtime
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y bubblewrap libseccomp-dev
 
       - name: Format
         run: cargo fmt --all -- --check
@@ -38,6 +80,52 @@ jobs:
 
       - name: Release build
         run: cargo build --release --locked --bin oath
+
+      - name: Record native sandbox capabilities
+        if: always()
+        shell: bash
+        run: target/release/oath sandbox-info --json > sandbox-capabilities-${{ runner.os }}.json
+
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: sandbox-capabilities-${{ runner.os }}
+          path: sandbox-capabilities-${{ runner.os }}.json
+
+      - name: npm parity smoke
+        if: runner.os != 'Windows'
+        run: |
+          node scripts/npm-parity.mjs tests/compat/fixtures/basic
+          node scripts/npm-parity.mjs tests/compat/fixtures/alias
+          node scripts/npm-parity.mjs tests/compat/fixtures/workspace
+        env:
+          OATH_BIN: target/debug/oath
+
+      - name: Windows CLI smoke
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          target/debug/oath.exe --version
+          target/debug/oath.exe exec --dry-run --json is-number | Out-File exec.json
+          node -e "const a=require('./exec.json').assessment;if(a.schema_version!==2)process.exit(1)"
+
+  windows-artifacts:
+    strategy:
+      matrix:
+        target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo build --release --locked --bin oath --target ${{ matrix.target }}
+      - shell: pwsh
+        run: Get-FileHash target/${{ matrix.target }}/release/oath.exe -Algorithm SHA256 | Format-List | Out-File oath.exe.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: oath-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/oath.exe
+            oath.exe.sha256
 
   audit:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -56,3 +144,200 @@ jobs:
 
       - name: Cargo audit
         run: cargo audit
+
+  compatibility-scale:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global npm@11.12.1
+      - run: cargo build --locked --bin oath
+      - run: node scripts/compat-scale.mjs --execute
+        env:
+          OATH_COMPAT_SHARD: ${{ matrix.shard }}
+          OATH_COMPAT_SHARDS: 10
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compatibility-fixtures-${{ matrix.shard }}
+          path: compat-results/ga/*.json
+
+  real-project-scale:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    # Organization-managed GitHub larger runner: 8 cores / 300 GB SSD.
+    # Deliberately no 14 GB ubuntu-latest fallback: insufficient disk must fail closed.
+    runs-on: oath-ubuntu-300gb
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global npm@11.12.1
+      - run: cargo build --locked --bin oath
+      - run: node scripts/project-parity.mjs
+        env:
+          OATH_PROJECT_SHARD: ${{ matrix.shard }}
+          OATH_PROJECT_SHARDS: 20
+          OATH_PROJECT_MANIFEST: tests/compat/projects.lock.json
+          OATH_PROJECT_TIMEOUT_MS: 1200000
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compatibility-projects-${{ matrix.shard }}
+          path: compat-results/ga/*.json
+
+  real-project-aggregate:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    needs: real-project-scale
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: compatibility-projects-*
+          path: compat-results/ga
+          merge-multiple: true
+      - run: node scripts/project-corpus.mjs aggregate
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: compatibility-project-summary
+          path: compat-results/ga/project-summary.json
+
+  native-linux-security:
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-22.04
+            strict_available: false
+          - os: ubuntu-24.04
+            strict_available: true
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - run: rustup toolchain install stable && rustup default stable
+      - run: sudo apt-get update && sudo apt-get install -y bubblewrap libseccomp-dev
+      - run: cargo build --release --locked --bin oath
+      - name: Prove native backend
+        run: |
+          target/release/oath sandbox-info --json > sandbox-capabilities-linux.json
+          if [ "${{ matrix.strict_available }}" = true ]; then
+            jq -e '.available and .filesystem_isolation and .network_isolation and .process_isolation and .resource_limits' sandbox-capabilities-linux.json
+          else
+            jq -e '.available == false and (.degraded_reason | length > 0)' sandbox-capabilities-linux.json
+          fi
+      - name: Run fail-closed adversarial suite
+        if: matrix.strict_available
+        run: cargo test --locked -p oath-sandbox native_linux -- --nocapture
+        env:
+          OATH_NATIVE_TEST_BIN: ${{ github.workspace }}/target/release/oath
+      - run: sha256sum sandbox-capabilities-linux.json > sandbox-capabilities-linux.sha256
+      - name: Sign capability report with GitHub artifact attestation
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: sandbox-capabilities-linux.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-linux-${{ matrix.os }}
+          path: sandbox-capabilities-linux.*
+
+  native-windows-security:
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [windows-2022, windows-2025]
+    runs-on: ${{ matrix.os }}
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - run: rustup toolchain install stable && rustup default stable
+      - run: cargo build --release --locked --bin oath
+      - name: Prove native backend
+        shell: pwsh
+        run: |
+          target/release/oath.exe sandbox-info --json | Out-File -Encoding utf8 sandbox-capabilities-windows.json
+          $caps = Get-Content sandbox-capabilities-windows.json | ConvertFrom-Json
+          if (-not ($caps.available -and $caps.filesystem_isolation -and $caps.network_isolation -and $caps.process_isolation -and $caps.resource_limits)) { exit 1 }
+      - name: Run AppContainer, token, Job Object, filesystem, environment, and network tests
+        run: cargo test --locked -p oath-sandbox windows::tests -- --nocapture
+      - shell: pwsh
+        run: Get-FileHash sandbox-capabilities-windows.json -Algorithm SHA256 | Format-List | Out-File sandbox-capabilities-windows.sha256
+      - name: Sign capability report with GitHub artifact attestation
+        if: github.event_name != 'pull_request'
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: sandbox-capabilities-windows.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: native-windows-${{ matrix.os }}
+          path: sandbox-capabilities-windows.*
+
+  release-evidence-gate:
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    needs: [compatibility-scale, real-project-aggregate, native-linux-security, native-windows-security]
+    runs-on: ubuntu-latest
+    steps:
+      - name: Require every independent evidence program
+        env:
+          FIXTURES: ${{ needs.compatibility-scale.result }}
+          PROJECTS: ${{ needs.real-project-aggregate.result }}
+          LINUX: ${{ needs.native-linux-security.result }}
+          WINDOWS: ${{ needs.native-windows-security.result }}
+        run: |
+          test "$FIXTURES" = success
+          test "$PROJECTS" = success
+          test "$LINUX" = success
+          test "$WINDOWS" = success
+          echo "Oath release evidence gate passed"
+
+  reliability-drills:
+    if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: oath
+          POSTGRES_PASSWORD: oath
+          POSTGRES_DB: oath_drills
+        ports: ["5432:5432"]
+        options: >-
+          --health-cmd "pg_isready -U oath -d oath_drills"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - run: sudo apt-get update && sudo apt-get install -y postgresql-client
+      - run: bash scripts/reliability-drills.sh > reliability-drill.json
+        env:
+          OATH_TEST_DATABASE_URL: postgresql://oath:oath@localhost:5432/oath_drills
+          OATH_REGISTRY_DATA: /tmp/oath-registry-drill
+      - uses: actions/upload-artifact@v4
+        with:
+          name: reliability-drill
+          path: reliability-drill.json

@@ -23,6 +23,27 @@ use std::path::{Path, PathBuf};
 
 use crate::cas::ContentStore;
 use oath_resolve::graph::{DepGraph, DepNode};
+use oath_resolve::placement::PlacementPlan;
+
+#[cfg(unix)]
+fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target, link)
+}
+
+#[cfg(unix)]
+fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn symlink_file(target: &Path, link: &Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
+}
 
 /// Links resolved packages into a project's node_modules
 pub struct Linker {
@@ -37,9 +58,123 @@ struct LinkPlan {
     nested: Vec<(String, String, String)>,
 }
 
+fn recover_link_transaction(live: &Path, stage: &Path, backup: &Path) -> Result<()> {
+    if backup.exists() {
+        if live.exists() {
+            std::fs::remove_dir_all(backup)
+                .context("failed to remove committed node_modules backup")?;
+        } else {
+            std::fs::rename(backup, live)
+                .context("failed to restore interrupted node_modules transaction")?;
+        }
+    }
+    if stage.exists() {
+        std::fs::remove_dir_all(stage).context("failed to clean interrupted node_modules stage")?;
+    }
+    Ok(())
+}
+
 impl Linker {
     pub fn new(store: ContentStore) -> Self {
         Self { store }
+    }
+
+    /// Materialize Arborist's exact physical locations from verified CAS entries.
+    /// Arborist never writes package contents; Oath retains the atomic link boundary.
+    pub fn link_placement_plan(
+        &self,
+        plan: &PlacementPlan,
+        project_dir: &Path,
+    ) -> Result<LinkResult> {
+        let live = project_dir.join("node_modules");
+        let stage = project_dir.join(".oath-node_modules-stage");
+        let backup = project_dir.join(".oath-node_modules-backup");
+        recover_link_transaction(&live, &stage, &backup)?;
+        std::fs::create_dir_all(stage.join(".oath"))?;
+        let mut result = LinkResult::default();
+        for node in &plan.nodes {
+            let relative = Path::new(&node.location)
+                .strip_prefix("node_modules")
+                .with_context(|| format!("invalid placement location {}", node.location))?;
+            anyhow::ensure!(
+                !relative.as_os_str().is_empty()
+                    && relative.components().all(|part| !matches!(
+                        part,
+                        std::path::Component::ParentDir
+                            | std::path::Component::RootDir
+                            | std::path::Component::Prefix(_)
+                    )),
+                "unsafe placement location {}",
+                node.location
+            );
+            let destination = stage.join(relative);
+            if node.link {
+                let target = node
+                    .target
+                    .as_ref()
+                    .context("Arborist link node has no target")?;
+                let canonical = std::fs::canonicalize(target)
+                    .with_context(|| format!("resolve workspace link target {target}"))?;
+                anyhow::ensure!(
+                    canonical.starts_with(project_dir),
+                    "workspace link escapes project: {target}"
+                );
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                symlink_dir(&canonical, &destination)?;
+                result.symlinks += 1;
+                continue;
+            }
+            let source = self.store.package_dir(&node.name, &node.version);
+            anyhow::ensure!(
+                source.exists(),
+                "planned package missing from verified store: {}@{}",
+                node.name,
+                node.version
+            );
+            if let Some(parent) = destination.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            hardlink_dir(&source, &destination)?;
+            result.linked += 1;
+
+            let install_name = node.install_name.as_str();
+            let bins = read_bin_entries(&destination.join("package.json"), install_name);
+            let node_modules = destination
+                .parent()
+                .context("placement has no node_modules parent")?;
+            let bin_dir = node_modules.join(".bin");
+            for (bin_name, bin_path) in bins {
+                let target = destination.join(&bin_path);
+                if !target.exists() {
+                    continue;
+                }
+                std::fs::create_dir_all(&bin_dir)?;
+                let link = bin_dir.join(bin_name);
+                if !link.exists() {
+                    symlink_file(&pathdiff_relative(&link, &target), &link)?;
+                    result.bins += 1;
+                }
+            }
+        }
+        std::fs::write(
+            stage.join(".oath").join("placement-plan.json"),
+            serde_json::to_vec(plan)?,
+        )?;
+        if live.exists() {
+            std::fs::rename(&live, &backup).context("failed to stage existing node_modules")?;
+        }
+        if let Err(error) = std::fs::rename(&stage, &live) {
+            if backup.exists() && !live.exists() {
+                let _ = std::fs::rename(&backup, &live);
+            }
+            return Err(error).context("failed to promote Arborist placement");
+        }
+        if backup.exists() {
+            std::fs::remove_dir_all(&backup).context("failed to remove node_modules backup")?;
+        }
+        Ok(result)
     }
 
     /// Analyze the graph and build a hoisting plan.
@@ -131,15 +266,21 @@ impl Linker {
     pub fn link_all(&self, graph: &DepGraph, project_dir: &Path) -> Result<LinkResult> {
         validate_graph_path_names(graph)?;
 
-        let nm_dir = project_dir.join("node_modules");
-        let oath_dir = nm_dir.join(".oath");
+        let live_nm_dir = project_dir.join("node_modules");
+        let stage_nm_dir = project_dir.join(".oath-node_modules-stage");
+        let backup_nm_dir = project_dir.join(".oath-node_modules-backup");
+
+        // Recover a commit interrupted between moving the old tree aside and
+        // promoting the verified staged tree. A live tree always wins; without
+        // one, the backup is restored before any new work starts.
+        recover_link_transaction(&live_nm_dir, &stage_nm_dir, &backup_nm_dir)?;
 
         // No-op fast path: if the previous link's manifest matches this graph
         // exactly and node_modules is present, skip the nuke-and-rebuild.
-        let manifest_path = oath_dir.join(".link-manifest");
+        let live_manifest_path = live_nm_dir.join(".oath").join(".link-manifest");
         let manifest = link_manifest(graph);
-        if nm_dir.exists()
-            && std::fs::read_to_string(&manifest_path)
+        if live_nm_dir.exists()
+            && std::fs::read_to_string(&live_manifest_path)
                 .map(|prev| prev == manifest)
                 .unwrap_or(false)
         {
@@ -149,10 +290,11 @@ impl Linker {
             });
         }
 
-        // Clean existing
-        if nm_dir.exists() {
-            std::fs::remove_dir_all(&nm_dir).context("failed to clean node_modules")?;
-        }
+        // Construct the complete replacement away from the live path. Package
+        // contents, links, shims, and manifest must all succeed before commit.
+        let nm_dir = stage_nm_dir.clone();
+        let oath_dir = nm_dir.join(".oath");
+        let manifest_path = oath_dir.join(".link-manifest");
         std::fs::create_dir_all(&oath_dir).context("failed to create node_modules/.oath")?;
 
         let mut result = LinkResult::default();
@@ -213,7 +355,7 @@ impl Linker {
             }
 
             // Create relative symlink
-            std::os::unix::fs::symlink(&symlink_target, &symlink_path).with_context(|| {
+            symlink_dir(&symlink_target, &symlink_path).with_context(|| {
                 format!(
                     "failed to symlink {} -> {}",
                     symlink_path.display(),
@@ -266,7 +408,7 @@ impl Linker {
             let rel_target = pathdiff_relative(&nested_symlink, &source);
 
             if !nested_symlink.exists() {
-                std::os::unix::fs::symlink(&rel_target, &nested_symlink).with_context(|| {
+                symlink_dir(&rel_target, &nested_symlink).with_context(|| {
                     format!(
                         "failed to create nested symlink {} -> {}",
                         nested_symlink.display(),
@@ -314,7 +456,7 @@ impl Linker {
                     }
                     // Symlink to the dep's virtual package
                     let relative = pathdiff_relative(&target, &source);
-                    std::os::unix::fs::symlink(&relative, &target).with_context(|| {
+                    symlink_dir(&relative, &target).with_context(|| {
                         format!(
                             "failed to symlink dependency {} -> {}",
                             target.display(),
@@ -357,7 +499,7 @@ impl Linker {
                         )?;
                     }
                     let relative = pathdiff_relative(&target, &source);
-                    std::os::unix::fs::symlink(&relative, &target).with_context(|| {
+                    symlink_dir(&relative, &target).with_context(|| {
                         format!(
                             "failed to symlink peer dependency {} -> {}",
                             target.display(),
@@ -389,7 +531,7 @@ impl Linker {
                 if target.exists() && !link_path.exists() {
                     // Create relative symlink from .bin/name -> ../pkg/bin/path
                     let rel = PathBuf::from("..").join(install_name).join(bin_path);
-                    std::os::unix::fs::symlink(&rel, &link_path).with_context(|| {
+                    symlink_file(&rel, &link_path).with_context(|| {
                         format!(
                             "failed to symlink bin {} -> {}",
                             link_path.display(),
@@ -415,7 +557,25 @@ impl Linker {
         }
 
         // Record the manifest so an unchanged re-install can skip the rebuild.
-        let _ = std::fs::write(&manifest_path, &manifest);
+        std::fs::write(&manifest_path, &manifest).context("failed to write link manifest")?;
+
+        // Commit with rename boundaries. If promotion fails, restore the old
+        // tree before returning the error. A crash is recovered on the next run.
+        if live_nm_dir.exists() {
+            std::fs::rename(&live_nm_dir, &backup_nm_dir)
+                .context("failed to stage existing node_modules for replacement")?;
+        }
+        if let Err(error) = std::fs::rename(&stage_nm_dir, &live_nm_dir) {
+            if backup_nm_dir.exists() && !live_nm_dir.exists() {
+                let _ = std::fs::rename(&backup_nm_dir, &live_nm_dir);
+            }
+            return Err(error).context("failed to atomically promote staged node_modules");
+        }
+        if backup_nm_dir.exists()
+            && let Err(error) = std::fs::remove_dir_all(&backup_nm_dir)
+        {
+            tracing::warn!("node_modules committed but backup cleanup failed: {error}");
+        }
 
         Ok(result)
     }
@@ -714,6 +874,7 @@ fn pathdiff_relative(from: &Path, to: &Path) -> PathBuf {
 mod tests {
     use super::*;
     use oath_resolve::graph::{DepGraph, DepNode};
+    use oath_resolve::placement::{PlacementNode, PlacementPlan, PlannerIdentity};
     use std::collections::{HashMap, HashSet};
 
     fn node(name: &str, version: &str, dependencies: HashMap<String, String>) -> DepNode {
@@ -757,6 +918,99 @@ mod tests {
             .clear();
 
         assert_ne!(link_manifest(&graph_a), link_manifest(&graph_b));
+    }
+
+    #[test]
+    fn transaction_recovery_restores_backup_and_discards_partial_stage() {
+        let tmp = tempfile::tempdir().unwrap();
+        let live = tmp.path().join("node_modules");
+        let stage = tmp.path().join(".oath-node_modules-stage");
+        let backup = tmp.path().join(".oath-node_modules-backup");
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(backup.join("previous.txt"), "previous").unwrap();
+        std::fs::create_dir_all(&stage).unwrap();
+        std::fs::write(stage.join("partial.txt"), "partial").unwrap();
+
+        recover_link_transaction(&live, &stage, &backup).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(live.join("previous.txt")).unwrap(),
+            "previous"
+        );
+        assert!(!stage.exists());
+        assert!(!backup.exists());
+    }
+
+    #[test]
+    fn placement_plan_materializes_exact_nested_locations() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ContentStore::new(tmp.path().join("store")).unwrap();
+        for (name, version) in [("dep", "1.0.0"), ("dep", "2.0.0")] {
+            let extracted = tmp.path().join(format!("{name}-{version}"));
+            std::fs::create_dir_all(&extracted).unwrap();
+            std::fs::write(
+                extracted.join("package.json"),
+                format!(r#"{{"name":"{name}","version":"{version}"}}"#),
+            )
+            .unwrap();
+            store.store_package(name, version, &extracted).unwrap();
+        }
+        let node = |location: &str, version: &str| PlacementNode {
+            location: location.into(),
+            install_name: "dep".into(),
+            name: "dep".into(),
+            version: version.into(),
+            resolved: None,
+            integrity: None,
+            dev: false,
+            optional: false,
+            has_install_script: false,
+            link: false,
+            target: None,
+            edges: vec![],
+        };
+        let plan = PlacementPlan {
+            schema_version: 1,
+            planner: PlannerIdentity {
+                name: "@npmcli/arborist".into(),
+                npm: "11.12.1".into(),
+            },
+            project: tmp.path().display().to_string(),
+            nodes: vec![
+                node("node_modules/dep", "2.0.0"),
+                node("node_modules/parent/node_modules/dep", "1.0.0"),
+            ],
+            invalid_edges: vec![],
+        };
+        Linker::new(store)
+            .link_placement_plan(&plan, tmp.path())
+            .unwrap();
+        assert!(tmp.path().join("node_modules/dep/package.json").exists());
+        assert!(
+            tmp.path()
+                .join("node_modules/parent/node_modules/dep/package.json")
+                .exists()
+        );
+    }
+
+    #[test]
+    fn transaction_recovery_keeps_promoted_tree_and_cleans_backup() {
+        let tmp = tempfile::tempdir().unwrap();
+        let live = tmp.path().join("node_modules");
+        let stage = tmp.path().join(".oath-node_modules-stage");
+        let backup = tmp.path().join(".oath-node_modules-backup");
+        std::fs::create_dir_all(&live).unwrap();
+        std::fs::write(live.join("current.txt"), "current").unwrap();
+        std::fs::create_dir_all(&backup).unwrap();
+        std::fs::write(backup.join("previous.txt"), "previous").unwrap();
+
+        recover_link_transaction(&live, &stage, &backup).unwrap();
+
+        assert_eq!(
+            std::fs::read_to_string(live.join("current.txt")).unwrap(),
+            "current"
+        );
+        assert!(!backup.exists());
     }
 
     #[test]

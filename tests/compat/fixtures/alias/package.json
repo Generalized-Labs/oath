@@ -1,0 +1,8 @@
+{
+  "name": "oath-parity-alias",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "number-check": "npm:is-number@7.0.0"
+  }
+}

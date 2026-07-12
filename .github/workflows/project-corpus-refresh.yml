@@ -1,0 +1,56 @@
+name: Refresh pinned npm project corpus
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  preflight:
+    strategy:
+      fail-fast: false
+      matrix:
+        shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
+    # Organization-managed GitHub larger runner: 8 cores / 300 GB SSD.
+    runs-on: oath-ubuntu-300gb
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - run: npm install --global npm@11.12.1
+      - name: Prove npm reference
+        run: test "$(npm --version)" = "11.12.1"
+      - name: Preflight candidate shard
+        run: node scripts/project-corpus.mjs preflight
+        env:
+          OATH_PROJECT_SHARD: ${{ matrix.shard }}
+          OATH_PROJECT_SHARDS: 20
+          OATH_PROJECT_PREFLIGHT_OUTPUT: compat-results/preflight/preflight-${{ matrix.shard }}.json
+          OATH_PROJECT_TIMEOUT_MS: 1200000
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: project-preflight-${{ matrix.shard }}
+          path: compat-results/preflight/preflight-${{ matrix.shard }}.json
+
+  merge:
+    needs: preflight
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/download-artifact@v4
+        with:
+          pattern: project-preflight-*
+          path: compat-results/preflight
+          merge-multiple: true
+      - name: Select ten eligible projects per category
+        run: node scripts/project-corpus.mjs merge-preflight
+      - name: Validate release corpus
+        run: node scripts/project-corpus.mjs validate tests/compat/projects.lock.json
+      - uses: actions/upload-artifact@v4
+        with:
+          name: proposed-projects-lock
+          path: tests/compat/projects.lock.json
