@@ -3806,7 +3806,7 @@ fn collect_publish_files(
 
 fn npm_authoritative_packlist(root: &std::path::Path) -> Result<Vec<PathBuf>> {
     let cache = tempfile::tempdir().context("failed to create isolated npm pack cache")?;
-    let output = std::process::Command::new("npm")
+    let output = npm_command()
         .args(["pack", "--dry-run", "--json", "--ignore-scripts"])
         .current_dir(root)
         .env("npm_config_cache", cache.path())
@@ -3846,6 +3846,17 @@ fn npm_authoritative_packlist(root: &std::path::Path) -> Result<Vec<PathBuf>> {
     paths.sort();
     paths.dedup();
     Ok(paths)
+}
+
+fn npm_command() -> std::process::Command {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("npm.cmd")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("npm")
+    }
 }
 
 fn collect_publish_files_inner(
@@ -4080,7 +4091,7 @@ async fn cmd_publish(
     }
 
     if stage {
-        let mut command = std::process::Command::new("npm");
+        let mut command = npm_command();
         command.args(["stage", "publish", "--tag", dist_tag]);
         command.env("NPM_CONFIG_PROVENANCE", "true");
         let status = command

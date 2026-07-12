@@ -82,9 +82,14 @@ jobs:
         run: cargo build --release --locked --bin oath
 
       - name: Record native sandbox capabilities
-        if: always()
+        if: always() && runner.os != 'Windows'
         shell: bash
         run: target/release/oath sandbox-info --json > sandbox-capabilities-${{ runner.os }}.json
+
+      - name: Record native sandbox capabilities on Windows
+        if: always() && runner.os == 'Windows'
+        shell: pwsh
+        run: target/release/oath.exe sandbox-info --json | Out-File -Encoding utf8 sandbox-capabilities-${{ runner.os }}.json
 
       - uses: actions/upload-artifact@v4
         if: always()
@@ -93,20 +98,19 @@ jobs:
           path: sandbox-capabilities-${{ runner.os }}.json
 
       - name: npm parity smoke
-        if: runner.os != 'Windows'
         run: |
           node scripts/npm-parity.mjs tests/compat/fixtures/basic
           node scripts/npm-parity.mjs tests/compat/fixtures/alias
           node scripts/npm-parity.mjs tests/compat/fixtures/workspace
         env:
-          OATH_BIN: target/release/oath
+          OATH_BIN: ${{ runner.os == 'Windows' && 'target/release/oath.exe' || 'target/release/oath' }}
 
       - name: Windows CLI smoke
         if: runner.os == 'Windows'
         shell: pwsh
         run: |
-          target/debug/oath.exe --version
-          target/debug/oath.exe exec --dry-run --json is-number | Out-File exec.json
+          target/release/oath.exe --version
+          target/release/oath.exe exec --dry-run --json is-number | Out-File exec.json
           node -e "const a=require('./exec.json').assessment;if(a.schema_version!==2)process.exit(1)"
 
   windows-artifacts:
