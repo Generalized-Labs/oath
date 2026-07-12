@@ -15,6 +15,7 @@ fn run_native_release(
     let plan_file = tempfile::NamedTempFile::new().unwrap();
     serde_json::to_writer(plan_file.as_file(), plan).unwrap();
     std::process::Command::new(oath)
+        .env("OATH_ADVERSARIAL_SECRET", "must-not-leak")
         .arg("__sandbox-native-run")
         .arg("--plan")
         .arg(plan_file.path())
@@ -255,7 +256,10 @@ fn native_linux_denies_proc_credentials_and_unix_sockets() {
     let status = run_native_release(
         &plan,
         std::path::Path::new("/bin/sh"),
-        &["-c", "! test -r /etc/passwd && ! test -r /proc/1/environ"],
+        &[
+            "-c",
+            "! test -r /etc/passwd && ! grep -aq OATH_ADVERSARIAL_SECRET /proc/1/environ",
+        ],
     );
     assert!(status.success());
     let socket = run_native_release(

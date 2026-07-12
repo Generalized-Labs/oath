@@ -212,7 +212,8 @@ fn extract_archive<R: Read>(reader: R, dest: &Path, limits: &TarballLimits) -> R
                     std::fs::create_dir_all(parent)
                         .with_context(|| format!("failed to create dir: {}", parent.display()))?;
                 }
-                // Capture mode before consuming entry via io::copy
+                // Capture mode before consuming entry via io::copy.
+                #[cfg(unix)]
                 let mode = entry.header().mode().unwrap_or(0o644);
                 let mut file = std::fs::File::create(&full_path)
                     .with_context(|| format!("failed to create: {}", full_path.display()))?;

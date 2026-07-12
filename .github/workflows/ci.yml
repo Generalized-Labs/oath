@@ -99,7 +99,7 @@ jobs:
           node scripts/npm-parity.mjs tests/compat/fixtures/alias
           node scripts/npm-parity.mjs tests/compat/fixtures/workspace
         env:
-          OATH_BIN: target/debug/oath
+          OATH_BIN: target/release/oath
 
       - name: Windows CLI smoke
         if: runner.os == 'Windows'
@@ -111,6 +111,7 @@ jobs:
 
   windows-artifacts:
     strategy:
+      fail-fast: false
       matrix:
         target: [x86_64-pc-windows-msvc, aarch64-pc-windows-msvc]
     runs-on: windows-latest
