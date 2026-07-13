@@ -31,6 +31,48 @@ fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
 }
 
 #[cfg(windows)]
+fn collect_junction_rebase_plan(root: &Path) -> std::io::Result<Vec<(PathBuf, PathBuf)>> {
+    fn visit(
+        root: &Path,
+        canonical_root: &Path,
+        dir: &Path,
+        plan: &mut Vec<(PathBuf, PathBuf)>,
+    ) -> std::io::Result<()> {
+        for entry in std::fs::read_dir(dir)? {
+            let entry = entry?;
+            let path = entry.path();
+            let file_type = entry.file_type()?;
+            if file_type.is_symlink() {
+                let target = std::fs::read_link(&path)?.canonicalize()?;
+                if let (Ok(link), Ok(target)) =
+                    (path.strip_prefix(root), target.strip_prefix(canonical_root))
+                {
+                    plan.push((link.to_path_buf(), target.to_path_buf()));
+                }
+            } else if file_type.is_dir() {
+                visit(root, canonical_root, &path, plan)?;
+            }
+        }
+        Ok(())
+    }
+
+    let mut plan = Vec::new();
+    let canonical_root = root.canonicalize()?;
+    visit(root, &canonical_root, root, &mut plan)?;
+    Ok(plan)
+}
+
+#[cfg(windows)]
+fn rebase_junctions(root: &Path, plan: &[(PathBuf, PathBuf)]) -> std::io::Result<()> {
+    for (link, target) in plan {
+        let link = root.join(link);
+        std::fs::remove_dir(&link)?;
+        symlink_dir(&root.join(target), &link)?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
 fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     let target = if target.is_absolute() {
         target.to_path_buf()
@@ -583,6 +625,10 @@ impl Linker {
         // Record the manifest so an unchanged re-install can skip the rebuild.
         std::fs::write(&manifest_path, &manifest).context("failed to write link manifest")?;
 
+        #[cfg(windows)]
+        let junction_rebase_plan = collect_junction_rebase_plan(&stage_nm_dir)
+            .context("failed to record staged Windows junctions")?;
+
         // Commit with rename boundaries. If promotion fails, restore the old
         // tree before returning the error. A crash is recovered on the next run.
         if live_nm_dir.exists() {
@@ -594,6 +640,14 @@ impl Linker {
                 let _ = std::fs::rename(&backup_nm_dir, &live_nm_dir);
             }
             return Err(error).context("failed to atomically promote staged node_modules");
+        }
+        #[cfg(windows)]
+        if let Err(error) = rebase_junctions(&live_nm_dir, &junction_rebase_plan) {
+            let _ = std::fs::remove_dir_all(&live_nm_dir);
+            if backup_nm_dir.exists() {
+                let _ = std::fs::rename(&backup_nm_dir, &live_nm_dir);
+            }
+            return Err(error).context("failed to rebase promoted Windows junctions");
         }
         if backup_nm_dir.exists()
             && let Err(error) = std::fs::remove_dir_all(&backup_nm_dir)
