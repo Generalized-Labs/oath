@@ -11,7 +11,7 @@ const oath = resolve(process.env.OATH_BIN ?? "target/debug/oath");
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
 function run(command, args, cwd, home = process.env.HOME ?? process.env.USERPROFILE ?? tmpdir(), extraEnv = {}) {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, CI: "1", HOME: home, OATH_HOME: join(home, ".oath"), npm_config_cache: join(home, ".npm"), ...extraEnv } });
+  const result = spawnSync(command, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, shell: process.platform === "win32" && command.toLowerCase().endsWith(".cmd"), env: { ...process.env, CI: "1", HOME: home, OATH_HOME: join(home, ".oath"), npm_config_cache: join(home, ".npm"), ...extraEnv } });
   return {
     status: result.status,
     stdout: result.stdout ?? "",
