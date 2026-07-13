@@ -340,7 +340,7 @@ jobs:
           OATH_NATIVE_TEST_BIN: ${{ github.workspace }}/target/release/oath
       - run: sha256sum sandbox-capabilities-linux.json > sandbox-capabilities-linux.sha256
       - name: Sign capability report with GitHub artifact attestation
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
           subject-path: sandbox-capabilities-linux.json
@@ -376,7 +376,7 @@ jobs:
       - shell: pwsh
         run: Get-FileHash sandbox-capabilities-windows.json -Algorithm SHA256 | Format-List | Out-File sandbox-capabilities-windows.sha256
       - name: Sign capability report with GitHub artifact attestation
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
           subject-path: sandbox-capabilities-windows.json
