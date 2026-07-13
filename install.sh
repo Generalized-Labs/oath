@@ -20,8 +20,12 @@ case "$OS" in
 esac
 
 BINARY="oath-${PLATFORM}-${ARCH}"
-LATEST=$(curl -fsSL "https://api.github.com/repos/${REPO}/releases/latest" | grep '"tag_name"' | cut -d'"' -f4)
-if [ -z "$LATEST" ]; then
+if ! LATEST_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest"); then
+  echo "oath: could not resolve the latest release of ${REPO}" >&2
+  exit 1
+fi
+LATEST=${LATEST_URL##*/}
+if [ -z "$LATEST" ] || [ "$LATEST" = "latest" ]; then
   echo "oath: could not determine the latest release of ${REPO}" >&2
   exit 1
 fi

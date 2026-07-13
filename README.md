@@ -1,121 +1,253 @@
-# oath
+# Oath
 
-A security-first replacement for **npm install** and **npx** workflows. oath
-checks packages for malicious behavior before third-party code runs, blocks
-dependency install scripts by default, and records installs in a local
-transparency log.
+[![CI](https://github.com/Generalized-Labs/oath/actions/workflows/ci.yml/badge.svg?branch=master)](https://github.com/Generalized-Labs/oath/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/github/v/release/Generalized-Labs/oath?style=flat-square)](https://github.com/Generalized-Labs/oath/releases/latest)
+[![Star tracker](https://img.shields.io/github/stars/Generalized-Labs/oath?style=flat-square&logo=github&label=stars)](https://github.com/Generalized-Labs/oath/stargazers)
+[![License](https://img.shields.io/github/license/Generalized-Labs/oath?style=flat-square)](LICENSE)
+[![Evidence site](https://img.shields.io/badge/evidence-live-1457ff?style=flat-square)](https://generalized-labs.github.io/oath/)
 
-## Install
+Oath is a security-first JavaScript package workflow and assessed `npx`
+alternative. It resolves packages with npm 11 placement semantics, verifies
+their bytes, analyzes code and lifecycle behavior, applies an explicit policy,
+and records what happened. When native containment is requested, Oath reports
+the enforcement backend and fails closed if the required boundary is missing.
+
+Oath does **not** claim that a scanner score proves safety, that every npm
+workflow is already covered, or that it is faster than npm or Bun. See the
+[published evidence](https://generalized-labs.github.io/oath/) and
+[GA evidence contract](docs/GA_EVIDENCE.md) for the measured boundary.
+
+## Five-minute start
+
+### 1. Install the stable release on macOS or Linux
 
 ```sh
 curl -fsSL https://raw.githubusercontent.com/Generalized-Labs/oath/master/install.sh | sh
+export PATH="$HOME/.local/bin:$PATH"
+oath --version
 ```
 
-The installer downloads the latest GitHub Release binary and verifies the
-matching `.sha256` sidecar before installing. If a release is missing checksums,
-installation fails closed.
+The installer selects the correct macOS/Linux asset, downloads its `.sha256`
+sidecar, verifies the binary, and fails closed when the checksum is missing or
+wrong.
 
-Or via Homebrew:
-```sh
-brew install generalized-labs/tap/oath
-```
-
-Or from source (Rust 1.85+):
-```sh
-git clone https://github.com/Generalized-Labs/oath && cd oath
-cargo build --release        # binary at target/release/oath
-cargo test --workspace       # run the test suite
-```
-
-## Why oath
-
-- **Script blocking by default** — postinstall scripts only run for packages you trust
-- **Behavioral analysis** — detects decode→exec payloads, env/secret exfiltration, install-script payloads at install time
-- **Trusts what's proven** — a package with 1M+ weekly downloads and no critical finding grades A, so household tools (prettier, react, lodash) aren't false-flagged; real supply-chain attacks still surface as critical decode→exec/exfil and are blocked
-- **Transparency log** — installs are appended to `~/.oath/transparency.log`
-- **Verified package store** — cached packages carry a manifest with lock integrity, package identity, byte counts, and a deterministic BLAKE3 file tree
-- **Bounded tarball unpacking** — tarballs are streamed to disk, size-limited, path-checked, and restricted to regular files/directories
-- **Fast warm installs** — lockfile and verified-store fast paths avoid unnecessary resolution and relinking
-- **npm compatibility where it matters first** — package.json deps/devDeps, npm aliases, scoped packages, git deps, workspaces, global installs, lifecycle scripts, and publish support are implemented; edge-case compatibility gaps should be reported
-
-Detection is measured against a corpus of popular and real-malware packages —
-see the [scanner threat model](docs/scanner-threat-model.md) for the methodology,
-the false-positive/recall tradeoff, and honest limits. Performance notes are in
-[BENCHMARKS.md](BENCHMARKS.md).
-
-## Commands
+### 2. Create and verify a small project
 
 ```sh
-oath install              # install from package.json
-oath install express      # add + install
-oath install -D typescript # add to devDependencies
-oath ci                   # clean install from oath-lock.json
-oath install --frozen-lockfile # fail if package.json and lockfile disagree
-oath install -g typescript # global install
-oath add lodash            # add dependency and install
-oath remove lodash         # remove dependency
-oath run build            # run script with pre/post hooks
-oath exec prettier .      # run package binary (npx replacement)
-oath exec --dry-run --json tsx # inspect identity, integrity, capabilities, and policy
-oath exec --sandbox-mode native tsx # require native OS containment
-oath publish --dry-run --json # inspect the exact npm packlist and release evidence
-oath publish --stage      # assess, sign, and submit through npm staged publishing
-oath stage list --json    # inspect npm staged releases (npm 11.15+)
-oath transfer create --output oath-transfer --json # signed agent-to-agent handoff
-oath transfer verify oath-transfer --trusted-public-key <base64> --json # verify assets and signer
-oath log                  # view transparency log
-oath score <pkg>          # security score for a package
+mkdir oath-demo && cd oath-demo
+oath init oath-demo
+oath add picocolors@1.1.1
+oath verify
 ```
 
-## Workspaces
+`oath verify` should finish with `lockfile: clean`.
 
-oath detects monorepos automatically:
+### 3. Inspect a package without executing it
+
 ```sh
-oath install  # from workspace root — installs all packages, hoists shared deps
+oath exec --dry-run --json prettier@3.7.4
 ```
 
-## Trusted Scripts
+The result is machine-readable and includes the resolved identity, integrity,
+inferred permissions, findings, policy decision, and effective sandbox mode.
+`--dry-run` does not start package code.
 
-Third-party dependency install scripts are blocked by default. Allowlist packages:
-```json
-{
-  "trustedDependencies": ["esbuild", "prisma"]
-}
+> [!IMPORTANT]
+> The latest public binary is `v0.1.7`. It supports the quick start and core
+> install/exec workflow above. The current `master` branch additionally contains
+> staged publishing, signed transfers, expanded evidence, and native capability
+> reporting that will ship in the next release. Build from source when testing
+> those newer commands. The public `v0.1.7` release does not include Windows
+> binary assets.
+
+## How Oath works
+
+```mermaid
+flowchart LR
+  subgraph Install["install / ci"]
+    M["package.json + lockfile"] --> R["Resolve: npm 11 placement plan"]
+    R --> F["Fetch into content store"]
+    F --> V["Verify integrity + bounded unpack"]
+    V --> A["Analyze code + lifecycle hooks"]
+    A --> P{"Policy decision"}
+    P -->|allow| L["Link node_modules atomically"]
+    P -->|deny| D["Stop with stable reason code"]
+  end
+
+  subgraph Exec["exec / agent run"]
+    Q["Package + binary request"] --> EA["ExecAssessment: identity, diff, risk, capabilities"]
+    EA --> AP{"Approve, abstain, or deny"}
+    AP -->|approved hash + grants| SP["Versioned SandboxPlan"]
+    SP --> SB["Linux / Windows native backend or declared compatibility mode"]
+    SB --> E["Execute + terminate process tree"]
+  end
+
+  subgraph Publish["publish / transfer"]
+    PK["npm's actual packlist"] --> PD["File + capability diff"]
+    PD --> PS["SPDX SBOM + provenance + signed assessment"]
+    PS --> PR["Stage, publish, or signed handoff"]
+  end
+
+  L --> T["Transparency and evidence artifacts"]
+  E --> T
+  PS --> T
 ```
 
-Or allow all for a project:
+The same package identity, integrity hash, assessment, policy decision, granted
+capabilities, backend, and result flow into the evidence record. An approval is
+bound to those values—not merely to a package name—so a new tarball hash requires
+a new decision.
+
+## Evidence snapshot
+
+| Evidence class | Current result | What it means |
+| --- | ---: | --- |
+| Generated stress executions | 500 / 500 | Repeated deterministic cases across three templates; **not** 500 independent npm behaviors |
+| Pinned real-project trees | 100 / 100 | Exact npm/Oath dependency-tree equivalents for the eligible locked corpus |
+| Independent install behaviors | 3 / 3 | Reviewed `basic`, `alias`, and `workspace` behaviors |
+| Native capability reports | 4 / 4 | Ubuntu 24 strict enforcement, Ubuntu 22 fail-closed behavior, and Windows Server 2022/2025 containment |
+
+The post-merge smoke set also matched 108,376 installed entries across Rspack,
+Karma, and Mattermost. The current installer benchmark does **not** support a
+speed claim: Oath was slower than npm and Bun on both cold and warm runs.
+
+- [Live evidence website](https://generalized-labs.github.io/oath/)
+- [Compatibility and security methodology](docs/GA_EVIDENCE.md)
+- [npm workflow contract](docs/NPM_COMPATIBILITY_CONTRACT.md)
+- [Scanner threat model and limitations](docs/scanner-threat-model.md)
+- [Raw installer benchmark](compat-results/benchmarks/installers.json)
+
+## Installation options
+
+### Stable binary: macOS and Linux
+
+Use the checksum-verifying installer shown in the quick start. To choose another
+installation directory:
+
 ```sh
-oath install --run-scripts
+curl -fsSL https://raw.githubusercontent.com/Generalized-Labs/oath/master/install.sh | OATH_INSTALL="$HOME/bin" sh
 ```
 
-Project-owned lifecycle scripts such as root `preinstall`, `postinstall`, and
-`prepare` run for plain `oath install`, matching npm-style project behavior.
+The Homebrew tap exists, but currently trails the GitHub release. Check its
+version before using it:
 
-## Lockfiles and CI
+```sh
+brew info generalized-labs/tap/oath
+```
 
-`oath-lock.json` records resolved packages, direct root dependencies, and the
-root graph. `oath install` rewrites it when package.json changes. `oath ci`
-requires package.json and the lockfile to match, removes stale `node_modules`,
-links from the lockfile graph, and never rewrites the lockfile.
+### Current source: macOS and Linux
 
-Use this in CI:
+Rust 1.85 or newer is required. On Ubuntu/Debian, install the Linux sandbox
+linker dependency first:
+
+```sh
+sudo apt-get update
+sudo apt-get install -y build-essential pkg-config libseccomp-dev
+git clone https://github.com/Generalized-Labs/oath.git
+cd oath
+cargo build --release --locked --bin oath
+./target/release/oath --version
+```
+
+On macOS, the same source steps work without `apt-get`.
+
+### Current source: Windows
+
+Install Rust with the MSVC toolchain and run in PowerShell:
+
+```powershell
+git clone https://github.com/Generalized-Labs/oath.git
+cd oath
+cargo build --release --locked --bin oath
+.\target\release\oath.exe --version
+```
+
+Windows Server 2022 and 2025 native-containment checks pass in CI, but a Windows
+binary is not present in the current `v0.1.7` GitHub release. Do not use the Unix
+installer on Windows.
+
+## Core commands
+
+These commands are available in the stable release:
+
+```sh
+oath install                       # install from package.json
+oath install express               # add and install
+oath install -D typescript         # add to devDependencies
+oath ci                            # clean install from oath-lock.json
+oath install --frozen-lockfile     # fail if manifest and lock disagree
+oath install -g typescript         # global install
+oath add lodash                    # add a dependency
+oath remove lodash                 # remove a dependency
+oath run build                     # run a project script
+oath exec prettier .               # assessed npx-style execution
+oath exec --dry-run --json tsx     # inspect without running
+oath exec --sandbox-mode native tsx # require native containment
+oath scan                          # scan installed dependencies
+oath verify                        # verify lock and store integrity
+oath log                           # inspect the local transparency log
+oath score lodash                  # inspect package evidence
+```
+
+These commands are currently available when building `master` and are planned
+for the next release:
+
+```sh
+oath sandbox-info --json
+oath publish --dry-run --json
+oath publish --stage
+oath stage list --json
+oath transfer create --output oath-transfer --json
+oath transfer verify oath-transfer --trusted-public-key <base64> --json
+```
+
+Run `oath <command> --help` against your installed version before automating a
+new flag.
+
+## Workspaces and lockfiles
+
+Oath detects a workspace root and installs the complete workspace:
+
+```sh
+oath install
+```
+
+`oath-lock.json` records the resolved graph and exact placement. `oath ci`
+requires the manifest and lock to agree, removes stale `node_modules`, links the
+frozen graph, and never rewrites the lock. Platform-specific optional packages
+may differ across operating systems; shared and non-optional graph drift still
+fails the frozen comparison.
+
+Recommended CI steps:
 
 ```sh
 oath ci
 oath verify
 ```
 
-## Store Verification
+## Lifecycle scripts
 
-Each package in `~/.oath/store` includes `.oath-store-manifest.json`. `oath`
-checks that manifest before warm installs, `ci`, `verify`, `exec`, `score`, and
-global installs. Old cache entries without a manifest are treated as unverified
-and rebuilt from the registry.
+Third-party dependency install scripts are blocked by default. Allow only the
+packages your project has reviewed:
 
-`oath verify` now performs full manifest/tree verification and fails on missing,
-tampered, malformed, or package.json-mismatched store entries.
+```json
+{
+  "trustedDependencies": ["esbuild", "prisma"]
+}
+```
 
-Tarball safety limits default to 512 MiB compressed, 2 GiB unpacked, and 200k
+`oath install --run-scripts` enables the compatibility path and may prompt
+before dependency scripts run. Project-owned lifecycle scripts such as root
+`preinstall`, `postinstall`, and `prepare` follow npm-style project behavior.
+
+## Store verification
+
+Packages in `~/.oath/store` carry `.oath-store-manifest.json` with package
+identity, expected integrity, byte counts, and a deterministic BLAKE3 file tree.
+Oath checks it before warm installs, `ci`, `verify`, `exec`, `score`, and global
+installs. Missing or mismatched manifests are not silently trusted.
+
+Tarball limits default to 512 MiB compressed, 2 GiB unpacked, and 200,000
 entries. Emergency compatibility overrides are available:
 
 ```sh
@@ -124,54 +256,61 @@ OATH_MAX_UNPACKED_BYTES=4294967296 oath install
 OATH_MAX_TARBALL_ENTRIES=400000 oath install
 ```
 
-## Exec Sandboxing
+## Execution boundaries
 
-`oath exec` remains unsandboxed by default for human npx compatibility in this
-release. For agents or high-risk workflows:
+Plain `oath exec` defaults to compatibility behavior. For agents or unfamiliar
+packages, request a boundary explicitly:
 
 ```sh
-oath exec --sandbox <pkg> -- <args>
-oath exec --sandbox-mode node <pkg>
-OATH_AGENT_MODE=1 oath exec <pkg>
+oath exec --dry-run --json <package>
+oath exec --sandbox <package> -- <args>
+oath exec --sandbox-mode native <package>
+OATH_AGENT_MODE=1 oath exec <package>
 ```
 
-`node` mode uses Node's permission flags when supported, allowing reads from the
-project, temp exec tree, and temp dir, and writes to the project and temp dir.
-Subprocesses, workers, addons, and network stay denied unless Node changes its
-permission defaults. `native` mode fails closed unless its complete backend
-probe succeeds. Strict Linux mode requires bubblewrap namespaces, Landlock ABI
-V6 (kernel 6.12+), seccomp, `no_new_privs`, and resource limits. Windows uses a
-per-execution restricted token, unique AppContainer profile, ACL-scoped writable
-roots, and Job Object limits. macOS remains Node-permission-only; Oath does not
-present that as Linux- or Windows-equivalent containment.
+- Linux strict mode requires bubblewrap namespaces, Landlock ABI V6, seccomp,
+  `no_new_privs`, and resource limits.
+- Windows uses a restricted token, unique AppContainer profile, ACL-scoped
+  writable roots, and Job Object limits.
+- macOS currently uses Node permission mode and is not described as
+  Linux- or Windows-equivalent containment.
+- Strict mode fails closed. Compatibility mode is separately named and reports
+  degraded guarantees.
 
-Approvals bind package identity, integrity, capabilities, and sandbox policy. A
-new tarball hash always requires a new assessment and decision.
+## Publishing and signed transfer
 
-## Publishing and package transfer
+Current `master` uses npm's actual `npm pack --dry-run --json --ignore-scripts`
+file list as the assessed publish input. It records previous-release file and
+capability diffs and creates a signed assessment, SPDX SBOM, and provenance
+statement. These are review artifacts, not proof that a package is safe.
 
-`oath publish` uses npm's actual `npm pack --dry-run --json --ignore-scripts`
-file list as the authoritative assessment input. It records file and capability
-diffs from the previous Oath assessment and persists a signed assessment, SPDX
-SBOM, and SLSA-shaped provenance statement before publication. These artifacts
-do not prove that a package is safe.
+Staged publishing requires npm 11.15+ and Node 22.14+. Signed transfers require
+the receiver to obtain the expected Ed25519 public key through a separate
+trusted channel. A valid signature without that trust anchor returns
+`abstain`; verified transfers remain `review-required` until a fresh execution
+assessment and sandbox decision are made.
 
-For registry-side review, npm 11.15+ and Node 22.14+ users can stage with
-`oath publish --stage`, then list, view, download, approve, or reject through
-`oath stage`. Approval and rejection require explicit `--yes` confirmation and
-npm proof-of-presence. For an offline or agent-to-agent handoff, `oath transfer`
-creates a signed capsule binding the tarball and evidence hashes. The receiver
-must supply the expected Ed25519 key from a separate trusted channel. Without
-that trust anchor, verification returns `abstain`; with it, verification still
-returns `review-required`. Execute transferred code only after a fresh Oath
-assessment and an appropriate sandbox decision.
+## Develop and verify
+
+```sh
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --locked
+cargo build --release --locked --bin oath
+./scripts/readme-release-smoke.sh # exercises the public release; requires network
+```
+
+Linux contributors need `libseccomp-dev` to link the native sandbox. See
+[CONTRIBUTING.md](CONTRIBUTING.md), and report compatibility gaps with a minimal
+fixture through [GitHub Issues](https://github.com/Generalized-Labs/oath/issues).
 
 ## Requirements
 
-- macOS (arm64, x64), Linux (x64), or Windows (x64, arm64)
-- Linux kernel 6.12+ and bubblewrap for strict native containment
-- Node.js (for running installed packages — oath itself needs none)
+- Node.js for running installed JavaScript packages; the Oath binary itself
+  does not require Node for its baseline commands.
+- Linux kernel 6.12+ and bubblewrap for strict native Linux containment.
+- Windows MSVC toolchain when building the current source on Windows.
 
 ## License
 
-MIT
+[MIT](LICENSE)

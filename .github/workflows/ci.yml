@@ -16,6 +16,17 @@ permissions:
   contents: read
 
 jobs:
+  readme-release-smoke:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Exercise the public README quick start
+        run: ./scripts/readme-release-smoke.sh
+
   agent-workflows:
     runs-on: ubuntu-latest
     steps:
