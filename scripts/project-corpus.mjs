@@ -101,7 +101,20 @@ async function preflight() {
         results.push({ ...candidate, commit, eligible: false, reason: "npm_install_rejected", stderr: install.stderr });
         continue;
       }
-      const lockBytes = await readFile(join(packageRoot, "package-lock.json"));
+      let lockBytes;
+      try {
+        lockBytes = await readFile(join(packageRoot, "package-lock.json"));
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+        results.push({
+          ...candidate,
+          commit,
+          eligible: false,
+          reason: "missing_package_lock",
+          stderr: "npm completed successfully without producing package-lock.json"
+        });
+        continue;
+      }
       results.push({
         repository: candidate.repository,
         commit,
