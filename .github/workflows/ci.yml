@@ -254,6 +254,8 @@ jobs:
     runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Install the workspace Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup default stable
       - name: Prove large-disk runner contract
         shell: bash
         run: |
