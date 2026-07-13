@@ -39,6 +39,10 @@ pub struct Lockfile {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub struct LockEntry {
+    /// Actual registry package name. Omitted for legacy/canonical entries where
+    /// the lock key is already "name@version".
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
     /// Exact resolved version
     pub version: String,
     /// Tarball URL
@@ -69,6 +73,19 @@ pub struct LockEntry {
     pub resolved_peers: BTreeMap<String, String>,
 }
 
+impl LockEntry {
+    /// Return the package name to verify in the content store.
+    pub fn package_name_for_key<'a>(&'a self, key: &'a str) -> String {
+        if let Some(name) = self.name.as_deref() {
+            return name.to_string();
+        }
+        if let Some(name) = npm_tarball_package_name(&self.resolved) {
+            return name;
+        }
+        lock_key_package_name(key).to_string()
+    }
+}
+
 impl Lockfile {
     /// Create a lockfile from a resolved dependency graph
     pub fn from_graph(graph: &DepGraph, project_name: &str, project_version: &str) -> Self {
@@ -92,9 +109,11 @@ impl Lockfile {
         let mut packages = BTreeMap::new();
 
         for (key, node) in &graph.nodes {
+            let canonical_key = format!("{}@{}", node.name, node.version);
             packages.insert(
                 key.clone(),
                 LockEntry {
+                    name: (key != &canonical_key).then(|| node.name.clone()),
                     version: node.version.clone(),
                     resolved: node.resolved.clone(),
                     integrity: node.integrity.clone(),
@@ -165,12 +184,7 @@ impl Lockfile {
         graph.roots = self.roots.clone();
 
         for (key, entry) in &self.packages {
-            // Extract package name from key (format: "name@version")
-            let name = if let Some(at_pos) = key.rfind('@') {
-                key[..at_pos].to_string()
-            } else {
-                key.clone()
-            };
+            let name = entry.package_name_for_key(key);
 
             graph.nodes.insert(
                 key.clone(),
@@ -193,6 +207,41 @@ impl Lockfile {
 
         graph
     }
+}
+
+fn lock_key_package_name(key: &str) -> &str {
+    if let Some(rest) = key.rsplit_once("node_modules/").map(|(_, rest)| rest) {
+        if let Some(scope_rest) = rest.strip_prefix('@') {
+            let mut parts = scope_rest.split('/');
+            if let (Some(scope), Some(package)) = (parts.next(), parts.next()) {
+                return &rest[..scope.len() + 1 + package.len()];
+            }
+        }
+        return rest.split('/').next().unwrap_or(rest);
+    }
+
+    match key.rfind('@') {
+        Some(at) if at > 0 => &key[..at],
+        _ => key,
+    }
+}
+
+fn npm_tarball_package_name(resolved: &str) -> Option<String> {
+    let path = resolved.split(['?', '#']).next().unwrap_or(resolved);
+    let before_tarball = path.split("/-/").next()?;
+    if before_tarball == path {
+        return None;
+    }
+    let mut segments = before_tarball.rsplit('/');
+    let last = segments.next()?.replace("%2f", "/").replace("%2F", "/");
+    if last.starts_with('@') && last.contains('/') {
+        return Some(last);
+    }
+    let previous = segments.next().unwrap_or_default();
+    if previous.starts_with('@') {
+        return Some(format!("{previous}/{last}"));
+    }
+    Some(last)
 }
 
 #[cfg(test)]
@@ -279,6 +328,70 @@ mod tests {
 
         let graph_again = lockfile.to_graph();
         assert_eq!(graph_again.roots, vec!["app@1.0.0"]);
+    }
+
+    #[test]
+    fn location_keyed_lock_entries_preserve_registry_package_name() {
+        let mut graph = DepGraph::new();
+        graph.roots.push("node_modules/alias-number".to_string());
+        let mut node = test_node("is-number", "7.0.0", HashMap::new());
+        node.alias = Some("alias-number".to_string());
+        graph
+            .nodes
+            .insert("node_modules/alias-number".to_string(), node);
+
+        let lockfile = Lockfile::from_graph(&graph, "project", "1.0.0");
+        let entry = lockfile.packages.get("node_modules/alias-number").unwrap();
+        assert_eq!(entry.name.as_deref(), Some("is-number"));
+        assert_eq!(
+            entry.package_name_for_key("node_modules/alias-number"),
+            "is-number"
+        );
+
+        let graph_again = lockfile.to_graph();
+        assert_eq!(
+            graph_again.nodes["node_modules/alias-number"].name,
+            "is-number"
+        );
+    }
+
+    #[test]
+    fn lock_entry_infers_package_name_from_npm_tarball_url() {
+        let entry = LockEntry {
+            name: None,
+            version: "7.0.0".to_string(),
+            resolved: "https://registry.npmjs.org/is-number/-/is-number-7.0.0.tgz".to_string(),
+            integrity: None,
+            dependencies: BTreeMap::new(),
+            dev: false,
+            optional: false,
+            has_install_script: false,
+            alias: Some("alias-number".to_string()),
+            peer_dependencies: BTreeMap::new(),
+            resolved_peers: BTreeMap::new(),
+        };
+        assert_eq!(
+            entry.package_name_for_key("node_modules/alias-number"),
+            "is-number"
+        );
+
+        let scoped = LockEntry {
+            name: None,
+            version: "1.0.0".to_string(),
+            resolved: "https://registry.npmjs.org/@types/node/-/node-1.0.0.tgz".to_string(),
+            integrity: None,
+            dependencies: BTreeMap::new(),
+            dev: false,
+            optional: false,
+            has_install_script: false,
+            alias: None,
+            peer_dependencies: BTreeMap::new(),
+            resolved_peers: BTreeMap::new(),
+        };
+        assert_eq!(
+            scoped.package_name_for_key("node_modules/@types/node"),
+            "@types/node"
+        );
     }
 
     #[test]

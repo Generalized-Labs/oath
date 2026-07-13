@@ -1,6 +1,7 @@
 use anyhow::{Context, Result};
 use serde_json::Value;
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx_core::{query::query, query_scalar::query_scalar, raw_sql::raw_sql, row::Row};
+use sqlx_postgres::{PgPool, PgPoolOptions, PgRow};
 
 use crate::{Principal, StageRecord};
 
@@ -49,7 +50,7 @@ impl PostgresControlPlane {
     }
 
     async fn migrate(&self) -> Result<()> {
-        sqlx::raw_sql(include_str!("../migrations/0001_registry.sql"))
+        raw_sql(include_str!("../migrations/0001_registry.sql"))
             .execute(&self.pool)
             .await
             .context("migrate PostgreSQL control plane")?;
@@ -58,9 +59,9 @@ impl PostgresControlPlane {
 
     pub async fn bootstrap_token(&self, organization: &str, hash: &str, role: &str) -> Result<()> {
         let mut tx = self.pool.begin().await?;
-        sqlx::query("INSERT INTO organizations(name,created_at) VALUES ($1,$2) ON CONFLICT (name) DO NOTHING")
+        query("INSERT INTO organizations(name,created_at) VALUES ($1,$2) ON CONFLICT (name) DO NOTHING")
             .bind(organization).bind(crate::now() as i64).execute(&mut *tx).await?;
-        sqlx::query("INSERT INTO tokens(token_hash,organization,role,expires_at,kind) VALUES ($1,$2,$3,NULL,'bootstrap') ON CONFLICT (token_hash) DO UPDATE SET organization=EXCLUDED.organization, role=EXCLUDED.role, expires_at=NULL, kind='bootstrap'")
+        query("INSERT INTO tokens(token_hash,organization,role,expires_at,kind) VALUES ($1,$2,$3,NULL,'bootstrap') ON CONFLICT (token_hash) DO UPDATE SET organization=EXCLUDED.organization, role=EXCLUDED.role, expires_at=NULL, kind='bootstrap'")
             .bind(hash).bind(organization).bind(role).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
@@ -73,13 +74,13 @@ impl PostgresControlPlane {
         role: &str,
         expires_at: i64,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO tokens(token_hash,organization,role,expires_at,kind) VALUES ($1,$2,$3,$4,'short-lived')")
+        query("INSERT INTO tokens(token_hash,organization,role,expires_at,kind) VALUES ($1,$2,$3,$4,'short-lived')")
             .bind(hash).bind(organization).bind(role).bind(expires_at).execute(&self.pool).await?;
         Ok(())
     }
 
     pub async fn authenticate(&self, hash: &str) -> Result<Option<Principal>> {
-        let row = sqlx::query("SELECT organization,role FROM tokens WHERE token_hash=$1 AND (expires_at IS NULL OR expires_at>$2)")
+        let row = query("SELECT organization,role FROM tokens WHERE token_hash=$1 AND (expires_at IS NULL OR expires_at>$2)")
             .bind(hash).bind(crate::now() as i64).fetch_optional(&self.pool).await?;
         Ok(row.map(|row| Principal {
             organization: row.get("organization"),
@@ -89,7 +90,7 @@ impl PostgresControlPlane {
 
     pub async fn package_role(&self, name: &str, organization: &str) -> Result<Option<String>> {
         Ok(
-            sqlx::query_scalar("SELECT role FROM package_roles WHERE name=$1 AND principal_org=$2")
+            query_scalar("SELECT role FROM package_roles WHERE name=$1 AND principal_org=$2")
                 .bind(name)
                 .bind(organization)
                 .fetch_optional(&self.pool)
@@ -98,7 +99,7 @@ impl PostgresControlPlane {
     }
 
     pub async fn create_stage(&self, stage: &StageRecord) -> Result<()> {
-        sqlx::query("INSERT INTO stages(id,organization,name,version,tag,digest,status,private,assessment,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
+        query("INSERT INTO stages(id,organization,name,version,tag,digest,status,private,assessment,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
             .bind(&stage.id).bind(&stage.organization).bind(&stage.name).bind(&stage.version)
             .bind(&stage.tag).bind(&stage.digest).bind(&stage.status).bind(stage.private)
             .bind(&stage.assessment).bind(stage.created_at as i64).execute(&self.pool).await?;
@@ -106,13 +107,13 @@ impl PostgresControlPlane {
     }
 
     pub async fn read_stage(&self, id: &str) -> Result<Option<StageRecord>> {
-        let row = sqlx::query("SELECT id,organization,name,version,tag,digest,status,private,assessment,created_at FROM stages WHERE id=$1")
+        let row = query("SELECT id,organization,name,version,tag,digest,status,private,assessment,created_at FROM stages WHERE id=$1")
             .bind(id).fetch_optional(&self.pool).await?;
         Ok(row.map(stage_from_row))
     }
 
     pub async fn list_stages(&self, organization: &str) -> Result<Vec<StageRecord>> {
-        Ok(sqlx::query("SELECT id,organization,name,version,tag,digest,status,private,assessment,created_at FROM stages WHERE organization=$1 ORDER BY created_at DESC")
+        Ok(query("SELECT id,organization,name,version,tag,digest,status,private,assessment,created_at FROM stages WHERE organization=$1 ORDER BY created_at DESC")
             .bind(organization).fetch_all(&self.pool).await?.into_iter().map(stage_from_row).collect())
     }
 
@@ -124,13 +125,13 @@ impl PostgresControlPlane {
     ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         if approve {
-            sqlx::query("UPDATE stages SET status='approved',decision_reason=$2 WHERE id=$1 AND status='staged'").bind(&stage.id).bind(reason).execute(&mut *tx).await?;
-            sqlx::query("INSERT INTO versions(name,version,organization,digest,status,private,assessment,published_at) VALUES ($1,$2,$3,$4,'active',$5,$6,$7)")
+            query("UPDATE stages SET status='approved',decision_reason=$2 WHERE id=$1 AND status='staged'").bind(&stage.id).bind(reason).execute(&mut *tx).await?;
+            query("INSERT INTO versions(name,version,organization,digest,status,private,assessment,published_at) VALUES ($1,$2,$3,$4,'active',$5,$6,$7)")
                 .bind(&stage.name).bind(&stage.version).bind(&stage.organization).bind(&stage.digest).bind(stage.private).bind(&stage.assessment).bind(crate::now() as i64).execute(&mut *tx).await?;
-            sqlx::query("INSERT INTO dist_tags(name,tag,version) VALUES ($1,$2,$3) ON CONFLICT (name,tag) DO UPDATE SET version=EXCLUDED.version")
+            query("INSERT INTO dist_tags(name,tag,version) VALUES ($1,$2,$3) ON CONFLICT (name,tag) DO UPDATE SET version=EXCLUDED.version")
                 .bind(&stage.name).bind(&stage.tag).bind(&stage.version).execute(&mut *tx).await?;
         } else {
-            sqlx::query("UPDATE stages SET status='rejected',decision_reason=$2 WHERE id=$1 AND status='staged'").bind(&stage.id).bind(reason).execute(&mut *tx).await?;
+            query("UPDATE stages SET status='rejected',decision_reason=$2 WHERE id=$1 AND status='staged'").bind(&stage.id).bind(reason).execute(&mut *tx).await?;
         }
         tx.commit().await?;
         Ok(())
@@ -143,29 +144,29 @@ impl PostgresControlPlane {
         hash: &str,
         signature: &str,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO registry_events(event_json,previous_hash,event_hash,signature,created_at) VALUES ($1,$2,$3,$4,$5)")
+        query("INSERT INTO registry_events(event_json,previous_hash,event_hash,signature,created_at) VALUES ($1,$2,$3,$4,$5)")
             .bind(event_json).bind(previous).bind(hash).bind(signature).bind(crate::now() as i64).execute(&self.pool).await?;
         Ok(())
     }
 
     pub async fn event_hashes(&self) -> Result<Vec<String>> {
         Ok(
-            sqlx::query_scalar("SELECT event_hash FROM registry_events ORDER BY sequence")
+            query_scalar("SELECT event_hash FROM registry_events ORDER BY sequence")
                 .fetch_all(&self.pool)
                 .await?,
         )
     }
 
     pub async fn latest_event_hash(&self) -> Result<Option<String>> {
-        Ok(sqlx::query_scalar(
-            "SELECT event_hash FROM registry_events ORDER BY sequence DESC LIMIT 1",
+        Ok(
+            query_scalar("SELECT event_hash FROM registry_events ORDER BY sequence DESC LIMIT 1")
+                .fetch_optional(&self.pool)
+                .await?,
         )
-        .fetch_optional(&self.pool)
-        .await?)
     }
 
     pub async fn version(&self, name: &str, version: &str) -> Result<Option<VersionRecord>> {
-        let row = sqlx::query(
+        let row = query(
             "SELECT organization,digest,status,private FROM versions WHERE name=$1 AND version=$2",
         )
         .bind(name)
@@ -181,7 +182,7 @@ impl PostgresControlPlane {
     }
 
     pub async fn package_versions(&self, name: &str) -> Result<Vec<PackageVersionRecord>> {
-        let rows = sqlx::query("SELECT version,digest,status,private,assessment,published_at FROM versions WHERE name=$1 ORDER BY published_at")
+        let rows = query("SELECT version,digest,status,private,assessment,published_at FROM versions WHERE name=$1 ORDER BY published_at")
             .bind(name).fetch_all(&self.pool).await?;
         Ok(rows
             .into_iter()
@@ -197,7 +198,7 @@ impl PostgresControlPlane {
     }
 
     pub async fn dist_tags(&self, name: &str) -> Result<Vec<(String, String)>> {
-        let rows = sqlx::query("SELECT tag,version FROM dist_tags WHERE name=$1")
+        let rows = query("SELECT tag,version FROM dist_tags WHERE name=$1")
             .bind(name)
             .fetch_all(&self.pool)
             .await?;
@@ -219,7 +220,7 @@ impl PostgresControlPlane {
         public_key: &str,
     ) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
-        let updated = sqlx::query("UPDATE versions SET status=$3 WHERE name=$1 AND version=$2")
+        let updated = query("UPDATE versions SET status=$3 WHERE name=$1 AND version=$2")
             .bind(name)
             .bind(version)
             .bind(status)
@@ -230,10 +231,10 @@ impl PostgresControlPlane {
             tx.rollback().await?;
             return Ok(false);
         }
-        sqlx::query("INSERT INTO tombstones(name,version,status,reason,actor_org,created_at,signature,public_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (name,version) DO UPDATE SET status=EXCLUDED.status,reason=EXCLUDED.reason,actor_org=EXCLUDED.actor_org,created_at=EXCLUDED.created_at,signature=EXCLUDED.signature,public_key=EXCLUDED.public_key")
+        query("INSERT INTO tombstones(name,version,status,reason,actor_org,created_at,signature,public_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (name,version) DO UPDATE SET status=EXCLUDED.status,reason=EXCLUDED.reason,actor_org=EXCLUDED.actor_org,created_at=EXCLUDED.created_at,signature=EXCLUDED.signature,public_key=EXCLUDED.public_key")
             .bind(name).bind(version).bind(status).bind(reason).bind(actor_org).bind(crate::now() as i64).bind(signature).bind(public_key).execute(&mut *tx).await?;
         let active: Vec<String> =
-            sqlx::query_scalar("SELECT version FROM versions WHERE name=$1 AND status='active'")
+            query_scalar("SELECT version FROM versions WHERE name=$1 AND status='active'")
                 .bind(name)
                 .fetch_all(&mut *tx)
                 .await?;
@@ -248,7 +249,7 @@ impl PostgresControlPlane {
             .max_by(|(a, _), (b, _)| a.cmp(b))
             .map(|(_, value)| value);
         if let Some(rollback) = rollback {
-            sqlx::query("UPDATE dist_tags SET version=$2 WHERE name=$1 AND version=$3")
+            query("UPDATE dist_tags SET version=$2 WHERE name=$1 AND version=$3")
                 .bind(name)
                 .bind(rollback)
                 .bind(version)
@@ -266,7 +267,7 @@ impl PostgresControlPlane {
         principal_org: &str,
         role: &str,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO package_roles(name,organization,principal_org,role) VALUES ($1,$2,$3,$4) ON CONFLICT (name,principal_org) DO UPDATE SET organization=EXCLUDED.organization,role=EXCLUDED.role")
+        query("INSERT INTO package_roles(name,organization,principal_org,role) VALUES ($1,$2,$3,$4) ON CONFLICT (name,principal_org) DO UPDATE SET organization=EXCLUDED.organization,role=EXCLUDED.role")
             .bind(name).bind(owner_org).bind(principal_org).bind(role).execute(&self.pool).await?;
         Ok(())
     }
@@ -279,13 +280,13 @@ impl PostgresControlPlane {
         role: &str,
         expires_at: i64,
     ) -> Result<()> {
-        sqlx::query("INSERT INTO invitations(token_hash,organization,email,role,expires_at) VALUES ($1,$2,$3,$4,$5)")
+        query("INSERT INTO invitations(token_hash,organization,email,role,expires_at) VALUES ($1,$2,$3,$4,$5)")
             .bind(token_hash).bind(organization).bind(email).bind(role).bind(expires_at).execute(&self.pool).await?;
         Ok(())
     }
 
     pub async fn revoke_invitation(&self, token_hash: &str, organization: &str) -> Result<bool> {
-        Ok(sqlx::query("UPDATE invitations SET revoked_at=$3 WHERE token_hash=$1 AND organization=$2 AND accepted_at IS NULL AND revoked_at IS NULL")
+        Ok(query("UPDATE invitations SET revoked_at=$3 WHERE token_hash=$1 AND organization=$2 AND accepted_at IS NULL AND revoked_at IS NULL")
             .bind(token_hash).bind(organization).bind(crate::now() as i64).execute(&self.pool).await?.rows_affected() == 1)
     }
 
@@ -296,7 +297,7 @@ impl PostgresControlPlane {
         email: &str,
     ) -> Result<Option<InvitationRecord>> {
         let mut tx = self.pool.begin().await?;
-        let row = sqlx::query("SELECT organization,email,role,expires_at FROM invitations WHERE token_hash=$1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>$2 FOR UPDATE")
+        let row = query("SELECT organization,email,role,expires_at FROM invitations WHERE token_hash=$1 AND accepted_at IS NULL AND revoked_at IS NULL AND expires_at>$2 FOR UPDATE")
             .bind(token_hash).bind(crate::now() as i64).fetch_optional(&mut *tx).await?;
         let Some(row) = row else {
             tx.rollback().await?;
@@ -312,9 +313,9 @@ impl PostgresControlPlane {
             tx.rollback().await?;
             anyhow::bail!("invitation email does not match verified identity");
         }
-        sqlx::query("INSERT INTO organization_members(organization,subject,email,role,created_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (organization,subject) DO UPDATE SET email=EXCLUDED.email,role=EXCLUDED.role")
+        query("INSERT INTO organization_members(organization,subject,email,role,created_at) VALUES ($1,$2,$3,$4,$5) ON CONFLICT (organization,subject) DO UPDATE SET email=EXCLUDED.email,role=EXCLUDED.role")
             .bind(&invitation.organization).bind(subject).bind(email).bind(&invitation.role).bind(crate::now() as i64).execute(&mut *tx).await?;
-        sqlx::query("UPDATE invitations SET accepted_at=$2 WHERE token_hash=$1")
+        query("UPDATE invitations SET accepted_at=$2 WHERE token_hash=$1")
             .bind(token_hash)
             .bind(crate::now() as i64)
             .execute(&mut *tx)
@@ -324,7 +325,7 @@ impl PostgresControlPlane {
     }
 
     pub async fn membership(&self, subject: &str) -> Result<Option<(String, String)>> {
-        let row = sqlx::query("SELECT organization,role FROM organization_members WHERE subject=$1 ORDER BY created_at LIMIT 1")
+        let row = query("SELECT organization,role FROM organization_members WHERE subject=$1 ORDER BY created_at LIMIT 1")
             .bind(subject).fetch_optional(&self.pool).await?;
         Ok(row.map(|row| (row.get("organization"), row.get("role"))))
     }
@@ -335,7 +336,7 @@ impl PostgresControlPlane {
         event_type: &str,
         payload: &Value,
     ) -> Result<bool> {
-        Ok(sqlx::query("INSERT INTO billing_events(provider_event_id,event_type,payload,received_at) VALUES ($1,$2,$3,$4) ON CONFLICT (provider_event_id) DO NOTHING")
+        Ok(query("INSERT INTO billing_events(provider_event_id,event_type,payload,received_at) VALUES ($1,$2,$3,$4) ON CONFLICT (provider_event_id) DO NOTHING")
             .bind(event_id).bind(event_type).bind(payload).bind(crate::now() as i64).execute(&self.pool).await?.rows_affected()==1)
     }
 
@@ -344,7 +345,7 @@ impl PostgresControlPlane {
     }
 }
 
-fn stage_from_row(row: sqlx::postgres::PgRow) -> StageRecord {
+fn stage_from_row(row: PgRow) -> StageRecord {
     StageRecord {
         id: row.get("id"),
         organization: row.get("organization"),

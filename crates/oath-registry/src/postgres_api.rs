@@ -13,6 +13,10 @@ use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
 use serde::Deserialize;
 use serde_json::{Value, json};
+#[cfg(test)]
+use sqlx_core::raw_sql::raw_sql;
+#[cfg(test)]
+use sqlx_postgres::PgPool;
 
 use crate::{
     ApiError, DecisionRequest, PackageRoleRequest, Principal, RevokeRequest, StageRecord,
@@ -817,8 +821,8 @@ mod tests {
         let Ok(database_url) = std::env::var("OATH_TEST_DATABASE_URL") else {
             return;
         };
-        let pool = sqlx::PgPool::connect(&database_url).await.unwrap();
-        sqlx::raw_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
+        let pool = PgPool::connect(&database_url).await.unwrap();
+        raw_sql("DROP SCHEMA public CASCADE; CREATE SCHEMA public;")
             .execute(&pool)
             .await
             .unwrap();

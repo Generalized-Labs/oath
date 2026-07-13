@@ -71,7 +71,8 @@ libc = "0.2"
 
 # Storage
 rusqlite = { version = "0.32", features = ["bundled"] }
-sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres", "json"] }
+sqlx-core = { version = "0.8", default-features = false, features = ["_rt-tokio", "_tls-rustls-ring-webpki", "json"] }
+sqlx-postgres = { version = "0.8", default-features = false, features = ["json"] }
 
 # WASM sandbox
 # wasmtime = "29"  # removed: using OS-level sandbox (macOS Seatbelt / Linux Landlock)
