@@ -16,6 +16,69 @@ permissions:
   contents: read
 
 jobs:
+  agent-workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Validate agent skill contracts and evals
+        run: node scripts/validate-agent-skills.mjs
+
+  independent-behavioral:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - run: npm install --global npm@11.12.1
+      - run: cargo build --locked --bin oath
+      - name: Run independent npm behavior contract
+        run: node scripts/compat-behavioral.mjs --execute
+        env:
+          OATH_BIN: ${{ runner.os == 'Windows' && 'target/debug/oath.exe' || 'target/debug/oath' }}
+          OATH_COMPAT_RESULTS: compat-results/behavioral-${{ runner.os }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: compatibility-independent-behavioral-${{ runner.os }}
+          path: compat-results/behavioral-${{ runner.os }}/behavioral-summary.json
+
+  npm-reference-canary:
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Install npm canary
+        run: npm install --global npm@11.18.0
+      - name: Prove canary identity
+        shell: bash
+        run: test "$(npm --version)" = "11.18.0"
+      - run: cargo build --release --locked --bin oath
+      - name: Compare the independent baseline against npm 11.18
+        run: node scripts/compat-behavioral.mjs --execute
+        env:
+          OATH_BIN: ${{ runner.os == 'Windows' && 'target/release/oath.exe' || 'target/release/oath' }}
+          OATH_COMPAT_RESULTS: compat-results/npm-canary
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: npm-11.18-canary-${{ runner.os }}
+          path: compat-results/npm-canary/behavioral-summary.json
+
   postgres-registry:
     runs-on: ubuntu-latest
     services:
@@ -185,6 +248,15 @@ jobs:
     runs-on: oath-ubuntu-300gb
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Prove 300 GB runner contract
+        shell: bash
+        run: |
+          total_kib=$(df -Pk . | awk 'NR==2 {print $2}')
+          free_kib=$(df -Pk . | awk 'NR==2 {print $4}')
+          test "$total_kib" -ge 293601280
+          test "$free_kib" -ge 209715200
+          jq -n --arg runner "${{ runner.name }}" --argjson shard "${{ matrix.shard }}" --argjson total_kib "$total_kib" --argjson free_kib "$free_kib" \
+            '{schema_version:1,runner:$runner,shard:$shard,total_kib:$total_kib,free_kib:$free_kib}' > runner-${{ matrix.shard }}.json
       - uses: actions/setup-node@v4
         with:
           node-version: 24
@@ -200,7 +272,9 @@ jobs:
         if: always()
         with:
           name: compatibility-projects-${{ matrix.shard }}
-          path: compat-results/ga/*.json
+          path: |
+            compat-results/ga/*.json
+            runner-${{ matrix.shard }}.json
 
   real-project-aggregate:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -308,16 +382,18 @@ jobs:
 
   release-evidence-gate:
     if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-    needs: [compatibility-scale, real-project-aggregate, native-linux-security, native-windows-security]
+    needs: [independent-behavioral, compatibility-scale, real-project-aggregate, native-linux-security, native-windows-security]
     runs-on: ubuntu-latest
     steps:
       - name: Require every independent evidence program
         env:
           FIXTURES: ${{ needs.compatibility-scale.result }}
+          BEHAVIORS: ${{ needs.independent-behavioral.result }}
           PROJECTS: ${{ needs.real-project-aggregate.result }}
           LINUX: ${{ needs.native-linux-security.result }}
           WINDOWS: ${{ needs.native-windows-security.result }}
         run: |
+          test "$BEHAVIORS" = success
           test "$FIXTURES" = success
           test "$PROJECTS" = success
           test "$LINUX" = success

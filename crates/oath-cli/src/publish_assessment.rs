@@ -1,6 +1,6 @@
 use anyhow::{Context, Result};
 use base64::Engine;
-use ed25519_dalek::{Signer, SigningKey};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use std::path::{Path, PathBuf};
@@ -51,6 +51,46 @@ pub struct PersistedEvidence {
     pub signing_public_key: String,
     pub sbom_path: String,
     pub provenance_path: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct DetachedSignature {
+    pub algorithm: String,
+    pub signature: String,
+    pub public_key: String,
+}
+
+pub fn sign_json(value: &impl Serialize) -> Result<DetachedSignature> {
+    let key = signing_key()?;
+    let canonical = serde_json::to_vec(value)?;
+    let signature = key.sign(&canonical);
+    Ok(DetachedSignature {
+        algorithm: "ed25519".to_string(),
+        signature: base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
+        public_key: base64::engine::general_purpose::STANDARD
+            .encode(key.verifying_key().to_bytes()),
+    })
+}
+
+pub fn verify_json_signature(value: &impl Serialize, signature: &DetachedSignature) -> Result<()> {
+    anyhow::ensure!(
+        signature.algorithm == "ed25519",
+        "unsupported signature algorithm {}",
+        signature.algorithm
+    );
+    let public_key: [u8; 32] = base64::engine::general_purpose::STANDARD
+        .decode(&signature.public_key)?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid Ed25519 public key length"))?;
+    let signature_bytes: [u8; 64] = base64::engine::general_purpose::STANDARD
+        .decode(&signature.signature)?
+        .try_into()
+        .map_err(|_| anyhow::anyhow!("invalid Ed25519 signature length"))?;
+    let verifying_key = VerifyingKey::from_bytes(&public_key)?;
+    let signature = Signature::from_bytes(&signature_bytes);
+    verifying_key
+        .verify(&serde_json::to_vec(value)?, &signature)
+        .context("Ed25519 signature verification failed")
 }
 
 pub fn spdx_sbom(package: &serde_json::Value, assessment: &PublishAssessment) -> serde_json::Value {
@@ -119,6 +159,23 @@ fn signing_key() -> Result<SigningKey> {
     Ok(SigningKey::from_bytes(&bytes))
 }
 
+fn publish_assessment_root(root: &Path) -> Result<PathBuf> {
+    let home =
+        oath_core::home_dir().context("HOME or USERPROFILE is required for publish evidence")?;
+    let canonical = root
+        .canonicalize()
+        .with_context(|| format!("failed to canonicalize package root {}", root.display()))?;
+    let project_id = format!(
+        "{:x}",
+        Sha256::digest(canonical.to_string_lossy().as_bytes())
+    );
+    Ok(home
+        .join(".oath")
+        .join("publish-assessments")
+        .join("projects")
+        .join(project_id))
+}
+
 pub fn persist_signed(
     root: &Path,
     assessment: &PublishAssessment,
@@ -126,7 +183,7 @@ pub fn persist_signed(
 ) -> Result<PersistedEvidence> {
     let safe_name = assessment.name.replace(['@', '/'], "-");
     let digest = assessment.package_digest.trim_start_matches("sha256:");
-    let directory = root.join(".oath").join("publish-assessments").join(format!(
+    let directory = publish_assessment_root(root)?.join(format!(
         "{}-{}-{}",
         safe_name,
         assessment.version,
@@ -311,32 +368,34 @@ pub fn assess(
 }
 
 pub fn attach_previous_release(root: &Path, assessment: &mut PublishAssessment) -> Result<()> {
-    let base = root.join(".oath").join("publish-assessments");
-    if !base.exists() {
-        return Ok(());
-    }
     let current = assessment.version.parse::<node_semver::Version>().ok();
     let mut candidates = Vec::new();
-    for entry in std::fs::read_dir(base)?.flatten() {
-        let path = entry.path().join("assessment.json");
-        let Ok(bytes) = std::fs::read(path) else {
-            continue;
-        };
-        let Ok(previous) = serde_json::from_slice::<PublishAssessment>(&bytes) else {
-            continue;
-        };
-        if previous.name != assessment.name {
-            continue;
-        }
-        let Some(version) = previous.version.parse::<node_semver::Version>().ok() else {
-            continue;
-        };
-        if current
-            .as_ref()
-            .map(|value| version < *value)
-            .unwrap_or(false)
-        {
-            candidates.push((version, previous));
+    let bases = [
+        publish_assessment_root(root)?,
+        root.join(".oath").join("publish-assessments"),
+    ];
+    for base in bases.into_iter().filter(|base| base.exists()) {
+        for entry in std::fs::read_dir(base)?.flatten() {
+            let path = entry.path().join("assessment.json");
+            let Ok(bytes) = std::fs::read(path) else {
+                continue;
+            };
+            let Ok(previous) = serde_json::from_slice::<PublishAssessment>(&bytes) else {
+                continue;
+            };
+            if previous.name != assessment.name {
+                continue;
+            }
+            let Some(version) = previous.version.parse::<node_semver::Version>().ok() else {
+                continue;
+            };
+            if current
+                .as_ref()
+                .map(|value| version < *value)
+                .unwrap_or(false)
+            {
+                candidates.push((version, previous));
+            }
         }
     }
     let Some((_, previous)) = candidates.into_iter().max_by(|(a, _), (b, _)| a.cmp(b)) else {

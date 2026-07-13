@@ -24,6 +24,7 @@ use oath_workspace::{WorkspaceRoot, detect_workspace_root};
 
 mod approvals;
 mod exec_assessment;
+mod package_transfer;
 mod prompts;
 mod publish_assessment;
 
@@ -53,6 +54,82 @@ enum ExecSandboxMode {
     Node,
     Native,
     Auto,
+}
+
+#[derive(Subcommand)]
+enum StageAction {
+    /// List staged releases visible to the current npm identity.
+    List {
+        package: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// View registry metadata for a staged release.
+    View {
+        stage_id: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// Download a staged tarball into an inspection directory.
+    Download {
+        stage_id: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        registry: Option<String>,
+        #[arg(long, default_value = ".")]
+        destination: PathBuf,
+    },
+    /// Approve a staged release after a human has inspected the downloaded tarball.
+    Approve {
+        stage_id: String,
+        /// Confirm that the staged metadata and downloaded tarball were reviewed.
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        otp: Option<String>,
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// Permanently reject a staged release.
+    Reject {
+        stage_id: String,
+        /// Confirm the permanent rejection.
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        otp: Option<String>,
+        #[arg(long)]
+        registry: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TransferAction {
+    /// Create an integrity-verifiable package transfer capsule from the current package.
+    Create {
+        #[arg(long, default_value = "oath-transfer")]
+        output: PathBuf,
+        #[arg(long, default_value = "latest")]
+        tag: String,
+        #[arg(long)]
+        access: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify all hashes, signatures, and optional signer trust in a transfer capsule.
+    Verify {
+        capsule: PathBuf,
+        /// Expected base64 Ed25519 public key obtained through a trusted channel.
+        #[arg(long)]
+        trusted_public_key: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 impl ExecSandboxMode {
@@ -209,6 +286,16 @@ enum Commands {
         #[arg(long)]
         stage: bool,
     },
+    /// Review and decide npm staged releases (npm 11.15+ compatibility adapter).
+    Stage {
+        #[command(subcommand)]
+        action: StageAction,
+    },
+    /// Create or verify an agent-readable package transfer capsule.
+    Transfer {
+        #[command(subcommand)]
+        action: TransferAction,
+    },
     /// Show recent transparency log entries
     Log {
         /// Number of recent entries to show (default: 10)
@@ -356,6 +443,12 @@ async fn main() -> Result<()> {
             stage,
         } => {
             cmd_publish(tag.as_deref(), access.as_deref(), dry_run, json, stage).await?;
+        }
+        Commands::Stage { action } => {
+            cmd_stage(action)?;
+        }
+        Commands::Transfer { action } => {
+            cmd_transfer(action)?;
         }
         Commands::Log { tail } => {
             cmd_log(tail)?;
@@ -3872,6 +3965,225 @@ fn npm_command() -> std::process::Command {
     }
 }
 
+fn parse_tool_version(raw: &str) -> Result<(u64, u64, u64)> {
+    let raw = raw.trim().trim_start_matches('v');
+    let mut parts = raw.split('.');
+    let major = parts
+        .next()
+        .context("missing major version")?
+        .parse::<u64>()?;
+    let minor = parts
+        .next()
+        .context("missing minor version")?
+        .parse::<u64>()?;
+    let patch = parts
+        .next()
+        .unwrap_or("0")
+        .split('-')
+        .next()
+        .unwrap_or("0")
+        .parse::<u64>()?;
+    Ok((major, minor, patch))
+}
+
+fn command_version(mut command: std::process::Command, name: &str) -> Result<(u64, u64, u64)> {
+    let output = command
+        .arg("--version")
+        .output()
+        .with_context(|| format!("failed to run {name} --version"))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "{name} --version failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    parse_tool_version(&String::from_utf8_lossy(&output.stdout))
+        .with_context(|| format!("could not parse {name} version"))
+}
+
+fn ensure_npm_stage_prerequisites() -> Result<()> {
+    let npm = command_version(npm_command(), "npm")?;
+    let node = command_version(std::process::Command::new("node"), "node")?;
+    anyhow::ensure!(
+        npm >= (11, 15, 0),
+        "oath stage requires npm >= 11.15.0; found {}.{}.{}",
+        npm.0,
+        npm.1,
+        npm.2
+    );
+    anyhow::ensure!(
+        node >= (22, 14, 0),
+        "oath stage requires Node >= 22.14.0; found {}.{}.{}",
+        node.0,
+        node.1,
+        node.2
+    );
+    Ok(())
+}
+
+fn push_optional_flag(args: &mut Vec<String>, flag: &str, value: Option<String>) {
+    if let Some(value) = value {
+        args.push(flag.to_string());
+        args.push(value);
+    }
+}
+
+fn cmd_stage(action: StageAction) -> Result<()> {
+    ensure_npm_stage_prerequisites()?;
+    let (args, destination, confirmation): (Vec<String>, Option<PathBuf>, Option<&str>) =
+        match action {
+            StageAction::List {
+                package,
+                json,
+                registry,
+            } => {
+                let mut args = vec!["stage".into(), "list".into()];
+                if let Some(package) = package {
+                    args.push(package);
+                }
+                if json {
+                    args.push("--json".into());
+                }
+                push_optional_flag(&mut args, "--registry", registry);
+                (args, None, None)
+            }
+            StageAction::View {
+                stage_id,
+                json,
+                registry,
+            } => {
+                let mut args = vec!["stage".into(), "view".into(), stage_id];
+                if json {
+                    args.push("--json".into());
+                }
+                push_optional_flag(&mut args, "--registry", registry);
+                (args, None, None)
+            }
+            StageAction::Download {
+                stage_id,
+                json,
+                registry,
+                destination,
+            } => {
+                let mut args = vec!["stage".into(), "download".into(), stage_id];
+                if json {
+                    args.push("--json".into());
+                }
+                push_optional_flag(&mut args, "--registry", registry);
+                (args, Some(destination), None)
+            }
+            StageAction::Approve {
+                stage_id,
+                yes,
+                otp,
+                registry,
+            } => {
+                anyhow::ensure!(
+                    yes,
+                    "oath stage approve requires --yes after reviewing `oath stage view` and `oath stage download`"
+                );
+                let mut args = vec!["stage".into(), "approve".into(), stage_id];
+                push_optional_flag(&mut args, "--otp", otp);
+                push_optional_flag(&mut args, "--registry", registry);
+                (args, None, Some("approve"))
+            }
+            StageAction::Reject {
+                stage_id,
+                yes,
+                otp,
+                registry,
+            } => {
+                anyhow::ensure!(yes, "oath stage reject is permanent and requires --yes");
+                let mut args = vec!["stage".into(), "reject".into(), stage_id];
+                push_optional_flag(&mut args, "--otp", otp);
+                push_optional_flag(&mut args, "--registry", registry);
+                (args, None, Some("reject"))
+            }
+        };
+
+    if let Some(destination) = &destination {
+        std::fs::create_dir_all(destination).with_context(|| {
+            format!(
+                "failed to create staged-package destination {}",
+                destination.display()
+            )
+        })?;
+    }
+    if let Some(decision) = confirmation {
+        eprintln!(
+            "oath stage: forwarding irreversible `{decision}` to npm; npm will require registry proof-of-presence"
+        );
+    }
+    let mut command = npm_command();
+    command.args(&args);
+    if let Some(destination) = destination {
+        command.current_dir(destination);
+    }
+    let status = command.status().context("failed to invoke npm stage")?;
+    anyhow::ensure!(
+        status.success(),
+        "npm {} failed with status {status}",
+        args.join(" ")
+    );
+    Ok(())
+}
+
+fn cmd_transfer(action: TransferAction) -> Result<()> {
+    match action {
+        TransferAction::Create {
+            output,
+            tag,
+            access,
+            json,
+        } => {
+            let root = std::env::current_dir()?;
+            let package = read_package_json()?;
+            let files = npm_authoritative_packlist(&root)?;
+            let mut assessment =
+                publish_assessment::assess(&root, &files, &package, &tag, access.as_deref())?;
+            publish_assessment::attach_previous_release(&root, &mut assessment)?;
+            anyhow::ensure!(
+                assessment.decision == "allow",
+                "oath transfer: blocked by {}",
+                assessment.reason_code
+            );
+            let evidence = publish_assessment::persist_signed(&root, &assessment, &package)?;
+            let report = package_transfer::create_capsule(&root, &output, &assessment, &evidence)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("oath transfer: created {}", output.display());
+                println!("  package: {}@{}", assessment.name, assessment.version);
+                println!("  tarball: {}", report.tarball.sha512);
+                println!("  decision: review-required");
+                println!(
+                    "  verify before use: oath transfer verify {}",
+                    output.display()
+                );
+            }
+        }
+        TransferAction::Verify {
+            capsule,
+            trusted_public_key,
+            json,
+        } => {
+            let report = package_transfer::verify_capsule(&capsule, trusted_public_key.as_deref())?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("oath transfer: verified {}", capsule.display());
+                println!("  package: {}@{}", report.name, report.version);
+                println!("  signed assessment: cryptographically valid");
+                println!("  signing-key trust: {}", report.signature_trust);
+                println!(
+                    "  decision: {} (verification is not a safety proof)",
+                    report.consumer_decision
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn collect_publish_files_inner(
     dir: &std::path::Path,
     root: &std::path::Path,
@@ -3996,6 +4308,11 @@ async fn cmd_publish(
     use sha1::Sha1;
     use sha2::{Digest, Sha512};
 
+    anyhow::ensure!(
+        !json || dry_run,
+        "oath publish --json is an assessment-only interface and requires --dry-run; stage or publish in a separate explicit command"
+    );
+
     let dist_tag = tag.unwrap_or("latest");
 
     // 1. Read package.json
@@ -4104,6 +4421,7 @@ async fn cmd_publish(
     }
 
     if stage {
+        ensure_npm_stage_prerequisites()?;
         let mut command = npm_command();
         command.args(["stage", "publish", "--tag", dist_tag]);
         command.env("NPM_CONFIG_PROVENANCE", "true");
@@ -4474,6 +4792,13 @@ fn cmd_log(tail: usize) -> Result<()> {
 mod tests {
     use super::*;
     use oath_resolve::DepNode;
+
+    #[test]
+    fn parses_npm_and_node_stage_versions() {
+        assert_eq!(parse_tool_version("11.18.0\n").unwrap(), (11, 18, 0));
+        assert_eq!(parse_tool_version("v22.14.0").unwrap(), (22, 14, 0));
+        assert!(parse_tool_version("unknown").is_err());
+    }
 
     #[test]
     fn previous_release_diff_detects_publisher_and_hook_changes() {

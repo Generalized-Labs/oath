@@ -16,7 +16,23 @@ jobs:
     runs-on: oath-ubuntu-300gb
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: actions/setup-node@v4
+      - name: Prove 300 GB runner contract
+        shell: bash
+        run: |
+          total_kib=$(df -Pk . | awk 'NR==2 {print $2}')
+          free_kib=$(df -Pk . | awk 'NR==2 {print $4}')
+          test "$total_kib" -ge 293601280
+          test "$free_kib" -ge 209715200
+          jq -n \
+            --arg runner "${{ runner.name }}" \
+            --arg os "${{ runner.os }}" \
+            --arg arch "${{ runner.arch }}" \
+            --argjson shard "${{ matrix.shard }}" \
+            --argjson total_kib "$total_kib" \
+            --argjson free_kib "$free_kib" \
+            '{schema_version:1,runner:$runner,os:$os,arch:$arch,shard:$shard,total_kib:$total_kib,free_kib:$free_kib}' \
+            > runner-${{ matrix.shard }}.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24
       - run: npm install --global npm@11.12.1
@@ -29,11 +45,13 @@ jobs:
           OATH_PROJECT_SHARDS: 20
           OATH_PROJECT_PREFLIGHT_OUTPUT: compat-results/preflight/preflight-${{ matrix.shard }}.json
           OATH_PROJECT_TIMEOUT_MS: 1200000
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: project-preflight-${{ matrix.shard }}
-          path: compat-results/preflight/preflight-${{ matrix.shard }}.json
+          path: |
+            compat-results/preflight/preflight-${{ matrix.shard }}.json
+            runner-${{ matrix.shard }}.json
 
   merge:
     needs: preflight
@@ -41,7 +59,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: project-preflight-*
           path: compat-results/preflight
@@ -50,7 +68,7 @@ jobs:
         run: node scripts/project-corpus.mjs merge-preflight
       - name: Validate release corpus
         run: node scripts/project-corpus.mjs validate tests/compat/projects.lock.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: proposed-projects-lock
           path: tests/compat/projects.lock.json

@@ -148,7 +148,7 @@ async function aggregate() {
 async function mergePreflight() {
   const input = resolve(process.env.OATH_PROJECT_PREFLIGHT_DIR ?? "compat-results/preflight");
   const output = resolve(process.env.OATH_PROJECT_MANIFEST ?? "tests/compat/projects.lock.json");
-  const files = (await readdir(input)).filter(name => name.endsWith(".json"));
+  const files = (await readdir(input)).filter(name => /^preflight-\d+\.json$/.test(name));
   const eligible = [];
   for (const file of files) {
     const artifact = await readJson(join(input, file));

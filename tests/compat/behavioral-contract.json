@@ -1,0 +1,24 @@
+{
+  "schema_version": 1,
+  "description": "Independent npm workflow behaviors. Generated stress repetitions are tracked separately.",
+  "behaviors": [
+    {
+      "id": "install-basic-production-dependency",
+      "workflow_slice": "install",
+      "fixture": "basic",
+      "mode": "clean"
+    },
+    {
+      "id": "install-npm-alias",
+      "workflow_slice": "aliases",
+      "fixture": "alias",
+      "mode": "clean"
+    },
+    {
+      "id": "install-workspace-link",
+      "workflow_slice": "workspaces",
+      "fixture": "workspace",
+      "mode": "clean"
+    }
+  ]
+}
