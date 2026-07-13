@@ -49,7 +49,7 @@ All notable changes to oath are documented here. Format follows
   while still rejecting behavioral graph drift.
 - Platform-specific optional packages can differ without making a shared frozen
   lock non-portable across macOS, Linux, and Windows.
-- Twenty-one reviewed real-project lock snapshots were refreshed after registry
+- Twenty-two reviewed real-project lock snapshots were refreshed after registry
   resolution drift; npm and Oath both exited successfully and produced identical
   tree counts, tree hashes, and path sets for every refresh.
 - The real-project harness now retries transient clone, fetch, and reference
