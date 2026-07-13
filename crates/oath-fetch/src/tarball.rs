@@ -204,11 +204,14 @@ fn extract_archive<R: Read>(reader: R, dest: &Path, limits: &TarballLimits) -> R
         let Some(mut relative) = sanitize_tar_path(&path, limits)? else {
             continue;
         };
-        // npm/pacote normalizes a package-root .gitignore to .npmignore when
-        // extracting registry tarballs. Match that observable node_modules
-        // contract rather than exposing the raw archive filename.
-        if relative == Path::new(".gitignore") {
-            relative = PathBuf::from(".npmignore");
+        // npm/pacote normalizes every packaged .gitignore to .npmignore,
+        // including nested files. Match that observable node_modules contract
+        // while preserving the containing directory.
+        if relative
+            .file_name()
+            .is_some_and(|name| name == ".gitignore")
+        {
+            relative.set_file_name(".npmignore");
         }
 
         let full_path = dest.join(&relative);
@@ -432,6 +435,18 @@ mod tests {
         assert_eq!(
             std::fs::read(tmp.path().join(".npmignore")).unwrap(),
             b"node_modules\n"
+        );
+    }
+
+    #[test]
+    fn extract_tarball_normalizes_nested_gitignore_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tar_gz_with_file("package/fixtures/example/.gitignore", b"output\n");
+        extract_tarball(&data, tmp.path()).unwrap();
+        assert!(!tmp.path().join("fixtures/example/.gitignore").exists());
+        assert_eq!(
+            std::fs::read(tmp.path().join("fixtures/example/.npmignore")).unwrap(),
+            b"output\n"
         );
     }
 

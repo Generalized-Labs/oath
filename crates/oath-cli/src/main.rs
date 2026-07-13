@@ -29,16 +29,6 @@ mod prompts;
 mod publish_assessment;
 
 #[cfg(unix)]
-fn platform_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(target, link)
-}
-
-#[cfg(windows)]
-fn platform_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
-    std::os::windows::fs::symlink_dir(target, link)
-}
-
-#[cfg(unix)]
 fn platform_symlink_file(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
     std::os::unix::fs::symlink(target, link)
 }
@@ -1172,7 +1162,7 @@ async fn cmd_ci() -> Result<()> {
 ///   1. Collect all external deps from all workspace packages into a single set
 ///   2. Resolve + download them once as a unified graph
 ///   3. Link them all into root/node_modules (hoisted)
-///   4. Symlink each workspace package itself into root/node_modules/<name>
+///   4. Materialize only the workspace links selected by Arborist
 async fn cmd_install_workspace(
     ws: &WorkspaceRoot,
     dry_run: bool,
@@ -1260,66 +1250,10 @@ async fn cmd_install_workspace(
         link_time.as_secs_f64()
     );
 
-    // Symlink each workspace package into root/node_modules/<name>
-    let nm_dir = ws.root.join("node_modules");
-    let mut ws_symlinks = 0usize;
-    for pkg in &ws.packages {
-        let install_name = &pkg.name;
-        validate_install_name(install_name)?;
-        let symlink_path = nm_dir.join(install_name);
-
-        let expected_target = pkg.path.canonicalize().with_context(|| {
-            format!("failed to resolve workspace package {}", pkg.path.display())
-        })?;
-        if symlink_path
-            .canonicalize()
-            .is_ok_and(|target| target == expected_target)
-        {
-            // The authoritative Arborist placement already materialized this
-            // workspace link. Keep it intact (especially a Windows junction).
-            ws_symlinks += 1;
-            continue;
-        }
-
-        // Handle scoped packages: create @scope dir
-        if install_name.contains('/')
-            && let Some(scope) = install_name.split('/').next()
-        {
-            std::fs::create_dir_all(nm_dir.join(scope))?;
-        }
-
-        // Remove existing symlink if present
-        if symlink_path.exists() || symlink_path.symlink_metadata().is_ok() {
-            std::fs::remove_file(&symlink_path).ok();
-        }
-
-        // Create relative symlink: node_modules/<name> -> ../../packages/ui
-        // For scoped packages (@scope/name), the symlink lives at node_modules/@scope/name
-        // so we must compute the relative path FROM node_modules/@scope/, not node_modules/
-        let symlink_parent = if install_name.contains('/') {
-            if let Some(scope) = install_name.split('/').next() {
-                nm_dir.join(scope)
-            } else {
-                nm_dir.clone()
-            }
-        } else {
-            nm_dir.clone()
-        };
-        let relative_path = relative_path_from(&symlink_parent, &pkg.path)?;
-        platform_symlink_dir(&relative_path, &symlink_path).with_context(|| {
-            format!(
-                "failed to symlink workspace package {} -> {}",
-                symlink_path.display(),
-                relative_path.display()
-            )
-        })?;
-        ws_symlinks += 1;
+    let workspace_link_count = placement_plan.nodes.iter().filter(|node| node.link).count();
+    if workspace_link_count > 0 {
+        println!("  materialized {workspace_link_count} npm-selected workspace links");
     }
-
-    println!(
-        "  symlinked {} workspace packages into node_modules",
-        ws_symlinks
-    );
 
     // Write lockfile at workspace root
     let lockfile = Lockfile::from_graph_with_manifest(
@@ -1382,29 +1316,6 @@ async fn cmd_install_workspace(
     }
 
     Ok(())
-}
-
-/// Compute a relative path from `from_dir` to `to_path`
-fn relative_path_from(from_dir: &std::path::Path, to_path: &std::path::Path) -> Result<PathBuf> {
-    // Find common prefix and build ../.. chain
-    let from_components: Vec<_> = from_dir.components().collect();
-    let to_components: Vec<_> = to_path.components().collect();
-
-    let common_len = from_components
-        .iter()
-        .zip(to_components.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
-
-    let up_count = from_components.len() - common_len;
-    let mut rel = PathBuf::new();
-    for _ in 0..up_count {
-        rel.push("..");
-    }
-    for component in &to_components[common_len..] {
-        rel.push(component);
-    }
-    Ok(rel)
 }
 
 // ---- AUDIT ------------------------------------------------------------------

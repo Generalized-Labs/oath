@@ -51,12 +51,12 @@ async function main () {
     // sources remain validated targets of their node_modules link nodes.
     // Bundled dependencies are already present inside their parent's verified
     // tarball and intentionally have no independent resolved URL.
-    .filter(node => !node.inBundle && node.location && node.location.replaceAll('\\', '/').startsWith('node_modules/') && node.package && node.package.name && node.package.version)
+    .filter(node => !node.inBundle && node.location && node.location.replaceAll('\\', '/').startsWith('node_modules/') && node.package && node.package.name && (node.isLink || node.package.version))
     .map(node => ({
       location: node.location.replaceAll('\\', '/'),
       install_name: node.name,
       name: node.package.name,
-      version: node.package.version,
+      version: node.package.version || '0.0.0',
       resolved: node.resolved || null,
       integrity: node.integrity ? String(node.integrity) : null,
       dev: Boolean(node.dev),

@@ -12,6 +12,7 @@ const PLANNER: &str = include_str!("arborist-plan.cjs");
 const NPM_REFERENCE_VERSION: &str = "11.12.1";
 const ARBORIST_VERSION: &str = "9.4.2";
 const INSTALL_CHECKS_VERSION: &str = "8.0.0";
+const PACKLIST_VERSION: &str = "10.0.4";
 const NPM_RUNTIME: &[u8] = include_bytes!("../vendor/npm-11.12.1.tgz");
 const NPM_RUNTIME_SHA256: &str = "e679850e663b16f5f146ee425d0eb0e3442c1d2bda3d513bbfd7c81f5ee5db38";
 
@@ -235,6 +236,53 @@ impl ArboristPlanner {
     }
 }
 
+/// Return the exact relative file list npm would place in a package tarball.
+/// Git dependencies must be packed from this list rather than from the entire
+/// repository checkout, otherwise editor config, tests, and ignored source can
+/// leak into node_modules and into Oath's assessment surface.
+pub(crate) fn npm_packlist(root: &Path) -> Result<Vec<std::path::PathBuf>> {
+    const SCRIPT: &str = r#"'use strict'
+const Arborist = require(process.argv[3])
+const packlist = require(process.argv[4])
+async function main () {
+  const root = process.argv[2]
+  const tree = await new Arborist({ path: root }).loadActual()
+  const files = await packlist(tree)
+  process.stdout.write(JSON.stringify(files.sort()))
+}
+main().catch(error => { console.error(error.stack || error.message); process.exitCode = 1 })
+"#;
+
+    let runtime = BundledRuntime::extract()?;
+    let script = tempfile::NamedTempFile::new().context("create npm packlist script")?;
+    std::fs::write(script.path(), SCRIPT)?;
+    let root_argument = node_process_path(root);
+    let output = std::process::Command::new("node")
+        .arg(script.path())
+        .arg(root_argument)
+        .arg(runtime.arborist_path())
+        .arg(runtime.packlist_path())
+        .output()
+        .context("launch pinned npm packlist")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "npm packlist failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let files: Vec<std::path::PathBuf> =
+        serde_json::from_slice(&output.stdout).context("decode npm packlist")?;
+    for file in &files {
+        anyhow::ensure!(!file.is_absolute(), "absolute npm packlist path rejected");
+        anyhow::ensure!(
+            file.components()
+                .all(|part| matches!(part, std::path::Component::Normal(_))),
+            "unsafe npm packlist path rejected: {}",
+            file.display()
+        );
+    }
+    Ok(files)
+}
+
 fn hydrate_from_persisted_plan(project: &Path, plan: &mut PlacementPlan) {
     let path = project.join(".oath").join("placement-plan.json");
     let Ok(previous) = PlacementPlan::read(&path) else {
@@ -292,6 +340,11 @@ impl BundledRuntime {
             "npm-install-checks",
             INSTALL_CHECKS_VERSION,
         )?;
+        verify_runtime_package(
+            &package_root.join("node_modules/npm-packlist/package.json"),
+            "npm-packlist",
+            PACKLIST_VERSION,
+        )?;
         Ok(Self {
             _temp: temp,
             package_root,
@@ -304,6 +357,10 @@ impl BundledRuntime {
 
     fn install_checks_path(&self) -> std::path::PathBuf {
         self.package_root.join("node_modules/npm-install-checks")
+    }
+
+    fn packlist_path(&self) -> std::path::PathBuf {
+        self.package_root.join("node_modules/npm-packlist")
     }
 }
 
@@ -428,5 +485,23 @@ mod tests {
         assert_eq!(plan.planner.name, "@npmcli/arborist");
         assert_eq!(plan.planner.npm, NPM_REFERENCE_VERSION);
         assert!(plan.nodes.is_empty());
+    }
+
+    #[test]
+    fn bundled_packlist_obeys_npm_files_field() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("lib")).unwrap();
+        std::fs::write(
+            project.path().join("package.json"),
+            r#"{"name":"packed","version":"1.0.0","files":["lib"]}"#,
+        )
+        .unwrap();
+        std::fs::write(project.path().join("lib/index.js"), "module.exports = 1").unwrap();
+        std::fs::write(project.path().join("secret.txt"), "do not publish").unwrap();
+
+        let files = npm_packlist(project.path()).unwrap();
+        assert!(files.contains(&std::path::PathBuf::from("package.json")));
+        assert!(files.contains(&std::path::PathBuf::from("lib/index.js")));
+        assert!(!files.contains(&std::path::PathBuf::from("secret.txt")));
     }
 }

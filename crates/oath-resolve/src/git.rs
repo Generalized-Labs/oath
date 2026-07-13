@@ -288,8 +288,9 @@ async fn resolve_via_git_clone(url: &str, git_ref: &str) -> Result<GitResolved> 
     let pkg_json_data =
         std::fs::read(&pkg_json_path).with_context(|| format!("no package.json in {}", url))?;
 
+    let packlist = crate::placement::npm_packlist(&clone_dir)?;
     prune_git_package_metadata(&clone_dir)?;
-    let tar_data = repack_git_package(&clone_dir)?;
+    let tar_data = repack_git_package(&clone_dir, &packlist)?;
 
     parse_git_tarball_from_json(tar_data, &pkg_json_data, url, git_ref)
 }
@@ -304,8 +305,9 @@ fn parse_git_tarball(data: Vec<u8>, resolved_url: &str, _git_ref: &str) -> Resul
     let pkg_json_path = tmp.path().join("package.json");
     let pkg_json_data = std::fs::read(&pkg_json_path)
         .with_context(|| format!("no package.json in tarball from {}", resolved_url))?;
+    let packlist = crate::placement::npm_packlist(tmp.path())?;
     prune_git_package_metadata(tmp.path())?;
-    let normalized = repack_git_package(tmp.path())?;
+    let normalized = repack_git_package(tmp.path(), &packlist)?;
 
     parse_git_tarball_from_json(normalized, &pkg_json_data, resolved_url, _git_ref)
 }
@@ -330,15 +332,25 @@ fn prune_git_package_metadata(root: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn repack_git_package(root: &std::path::Path) -> Result<Vec<u8>> {
+fn repack_git_package(root: &std::path::Path, files: &[std::path::PathBuf]) -> Result<Vec<u8>> {
     use flate2::Compression;
     use flate2::write::GzEncoder;
     let mut tar_data = Vec::new();
     {
         let enc = GzEncoder::new(&mut tar_data, Compression::default());
         let mut tar = tar::Builder::new(enc);
-        tar.append_dir_all("package", root)
-            .context("failed to create normalized git package tarball")?;
+        for relative in files {
+            let source = root.join(relative);
+            // npm-packlist never includes its controlling ignore files, but
+            // root package-manager metadata is pruned before this point as an
+            // additional guard. A disappearing entry is therefore skipped.
+            if !source.symlink_metadata().is_ok() {
+                continue;
+            }
+            let archive_path = std::path::Path::new("package").join(relative);
+            tar.append_path_with_name(&source, &archive_path)
+                .with_context(|| format!("pack git dependency file {}", relative.display()))?;
+        }
         tar.finish()
             .context("failed to finalize git package tarball")?;
     }
