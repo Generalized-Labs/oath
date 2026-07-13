@@ -49,10 +49,18 @@ const manifestRows = [
 
 const proof = [
   ["500 / 500", "generated stress executions"],
-  ["3 / 3", "post-merge real-project proofs"],
-  ["35,858", "matched tree entries"],
-  ["0", "successful native escape tests"],
+  ["100 / 100", "pinned real-project trees"],
+  ["3 / 3", "independent install behaviors"],
+  ["4 / 4", "native runner capability reports"],
 ];
+
+const postMergeProjects = [
+  ["Rspack", "4,208", "c14b…c2d"],
+  ["Karma", "33,719", "404c…f7c"],
+  ["Mattermost", "70,449", "bbe6…bb0"],
+];
+
+const evidenceRun = "https://github.com/Generalized-Labs/oath/actions/runs/29240267897";
 
 function App() {
   const [copied, setCopied] = useState(false);
@@ -108,7 +116,7 @@ function App() {
 
           <div className="mt-16 grid gap-8 xl:grid-cols-[1fr_auto] xl:items-end">
             <p className="max-w-xl text-lg font-semibold leading-snug sm:text-xl">
-              Oath resolves like npm, then adds identity, provenance, behavioral diff, capability policy, and a native containment boundary before unfamiliar code gets a process.
+              Oath uses npm 11’s pinned placement contract, then adds identity, provenance, behavioral diff, capability policy, and a native containment boundary before unfamiliar code gets a process.
             </p>
             <Button size="lg" asChild>
               <a href="#manifest">Inspect the manifest <ArrowDownRight className="h-5 w-5" /></a>
@@ -155,7 +163,7 @@ function App() {
 
       <section id="proof" className="border-b-2 border-carbon">
         <div className="section-label">
-          <span>01 / release evidence</span><span>Measured, not marketed</span>
+          <span>01 / release evidence</span><a href={evidenceRun} target="_blank" rel="noreferrer">Run 29240267897 / passed ↗</a>
         </div>
         <div className="grid sm:grid-cols-2 xl:grid-cols-4">
           {proof.map(([number, label], index) => (
@@ -167,9 +175,9 @@ function App() {
         </div>
         <div className="grid border-t-2 border-carbon lg:grid-cols-[1.3fr_.7fr]">
           <div className="p-6 sm:p-10">
-            <div className="mb-4 font-mono text-[10px] font-black uppercase tracking-[0.2em] text-cobalt">Post-merge / npm 11.12.1 / clean install</div>
+            <div className="mb-4 font-mono text-[10px] font-black uppercase tracking-[0.2em] text-cobalt">Post-merge / npm 11.12.1 / Node 24.13.0 / clean install</div>
             <div className="grid gap-px border-2 border-carbon bg-carbon sm:grid-cols-3">
-              {[['Express', '7,139', 'd04c…0da9'], ['Koa', '9,041', 'ab20…c96d'], ['Redux', '19,678', 'd7ba…cb9']].map(([name, files, hash]) => (
+              {postMergeProjects.map(([name, files, hash]) => (
                 <div key={name} className="bg-paper p-5">
                   <div className="flex items-center justify-between font-display text-2xl font-black uppercase"><span>{name}</span><Check className="h-5 w-5 text-cobalt" /></div>
                   <div className="mt-8 font-mono text-[10px] uppercase leading-6"><strong>{files}</strong> entries<br />tree / {hash}<br />difference / 0</div>
@@ -180,7 +188,7 @@ function App() {
           <aside className="border-t-2 border-carbon bg-hazard p-6 sm:p-10 lg:border-l-2 lg:border-t-0">
             <ShieldAlert className="mb-8 h-10 w-10" />
             <h2 className="font-display text-4xl font-black uppercase leading-[0.9] tracking-[-0.05em]">Same tree. More evidence.</h2>
-            <p className="mt-6 max-w-md font-semibold leading-relaxed">On Express, Oath matched all 7,139 entries and still surfaced correlated secret-stealer markers in a transitive package for review.</p>
+            <p className="mt-6 max-w-md font-semibold leading-relaxed">Across Rspack, Karma, and Mattermost, Oath matched 108,376 entries after the release merge. Scanner findings remain review evidence—not proof of compromise or safety.</p>
           </aside>
         </div>
       </section>
@@ -193,7 +201,7 @@ function App() {
           <h2 className="max-w-5xl font-display text-[clamp(3.4rem,8vw,8rem)] font-black uppercase leading-[0.82] tracking-[-0.075em]">
             Oath does not make the speed claim. <span className="text-hazard">Bun does.</span>
           </h2>
-          <p className="mt-8 max-w-2xl text-lg font-semibold leading-relaxed">Bun leads with speed. npm defines the compatibility baseline. Oath’s proof is that code runs with an assessed identity, explicit grants, and a recorded enforcement backend.</p>
+          <p className="mt-8 max-w-2xl text-lg font-semibold leading-relaxed">Bun leads with speed. npm defines the compatibility baseline. Oath’s measured wedge is an assessed identity, explicit grants, and a recorded enforcement backend before execution.</p>
         </div>
         <div className="grid border-t-2 border-carbon lg:grid-cols-3">
           {competitors.map((item, index) => (
@@ -226,7 +234,7 @@ function App() {
         </div>
         <ol className="divide-y-2 divide-carbon">
           {[
-            ["01", "Resolve like npm", "Bundled Arborist 9.4.2 implements the pinned npm 11.12.1 placement contract."],
+            ["01", "Place like npm", "Bundled Arborist 9.4.2 implements the pinned npm 11.12.1 placement contract."],
             ["02", "Bind trust to bytes", "Approvals attach to package identity, integrity hash, policy, and exact granted capabilities."],
             ["03", "Show the evidence", "Publisher, provenance, age, behavioral diff, hooks, code signals, size, and requested access."],
             ["04", "Apply the boundary", "Linux uses namespaces, seccomp, Landlock, and limits. Windows uses AppContainer, ACL roots, and Job Objects."],
@@ -248,13 +256,13 @@ function App() {
           </div>
           <div className="flex flex-col justify-center gap-3 border-t-2 border-paper bg-paper p-6 text-carbon lg:min-w-[360px] lg:border-l-2 lg:border-t-0">
             <Button size="lg" onClick={copyCommand}>{copied ? "Command copied" : "Copy install command"} <Copy className="h-4 w-4" /></Button>
-            <Button size="lg" variant="outline" asChild><a href="https://github.com/Generalized-Labs/oath" target="_blank" rel="noreferrer">Read the evidence <ArrowUpRight className="h-4 w-4" /></a></Button>
+            <Button size="lg" variant="outline" asChild><a href={evidenceRun} target="_blank" rel="noreferrer">Read the evidence <ArrowUpRight className="h-4 w-4" /></a></Button>
             <Button size="lg" variant="outline" asChild><a href="https://github.com/Generalized-Labs/oath/issues/new?template=design-partner.yml" target="_blank" rel="noreferrer">Join the private beta <ArrowUpRight className="h-4 w-4" /></a></Button>
           </div>
         </div>
         <footer className="mt-8 flex flex-col justify-between gap-4 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-evidence sm:flex-row">
           <span>Oath / Generalized Labs / 2026</span>
-          <span>No scanner score is proof of safety. The evidence and boundary are separate.</span>
+          <span><a href="https://docs.npmjs.com/cli/v11/commands/npm-exec/" target="_blank" rel="noreferrer">npm exec</a> / <a href="https://bun.sh/docs/pm/cli/install" target="_blank" rel="noreferrer">Bun install</a> / No scanner score is proof of safety.</span>
         </footer>
       </section>
     </main>
