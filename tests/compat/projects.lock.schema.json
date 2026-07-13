@@ -2,10 +2,11 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "title": "Oath pinned npm compatibility corpus",
   "type": "object",
-  "required": ["schema_version", "npm", "projects"],
+  "required": ["schema_version", "npm", "node", "projects"],
   "properties": {
     "schema_version": { "const": 1 },
     "npm": { "const": "11.12.1" },
+    "node": { "const": "24.13.0" },
     "projects": {
       "type": "array",
       "minItems": 100,

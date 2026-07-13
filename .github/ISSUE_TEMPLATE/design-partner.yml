@@ -1,0 +1,42 @@
+name: Oath private-beta design partner
+description: Apply to test Oath with a real JavaScript package workflow.
+title: "[Design partner] "
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Oath is a developer preview. The 100-project compatibility gate and hosted-registry GA gates are not complete. Design partners receive direct support and agree to share workflow evidence and limitations.
+  - type: input
+    id: organization
+    attributes:
+      label: Organization or project
+    validations:
+      required: true
+  - type: dropdown
+    id: workflow
+    attributes:
+      label: Primary workflow
+      options:
+        - Safe replacement for npx/npm exec
+        - npm-compatible installs and CI
+        - Staged publishing review
+        - Private registry and policy
+        - AI-agent package execution
+    validations:
+      required: true
+  - type: textarea
+    id: stack
+    attributes:
+      label: Stack and package-manager constraints
+      description: Include operating systems, Node/npm versions, workspaces, private registries, and native addons.
+    validations:
+      required: true
+  - type: checkboxes
+    id: consent
+    attributes:
+      label: Beta expectations
+      options:
+        - label: I understand Oath is not yet a GA npm replacement.
+          required: true
+        - label: I can share anonymized compatibility and decision-latency metrics.
+          required: true

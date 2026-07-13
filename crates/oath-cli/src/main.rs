@@ -13,29 +13,22 @@ use oath_analyze::{PackageScanner, RiskLevel};
 use oath_core::policy::OathPolicy;
 use oath_fetch::RegistryClient;
 use oath_fetch::tarball::TarballLimits;
-use oath_resolve::git::{git_cache_file_name, parse_git_spec, resolve_git_spec};
+use oath_resolve::git::{
+    git_cache_file_name, is_git_spec, pack_local_package, parse_git_spec, resolve_git_spec,
+};
 use oath_resolve::graph::{DepNode, PeerResolution};
 use oath_resolve::placement::{ArboristPlanner, PlacementPlan, PlacementRequest};
 use oath_resolve::resolver::{ResolveOptions, Resolver};
 use oath_resolve::{DepGraph, Lockfile};
 use oath_store::cas::{ContentStore, PackageVerification};
-use oath_store::linker::{Linker, validate_install_name};
+use oath_store::linker::Linker;
 use oath_workspace::{WorkspaceRoot, detect_workspace_root};
 
 mod approvals;
 mod exec_assessment;
+mod package_transfer;
 mod prompts;
 mod publish_assessment;
-
-#[cfg(unix)]
-fn platform_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
-    std::os::unix::fs::symlink(target, link)
-}
-
-#[cfg(windows)]
-fn platform_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
-    std::os::windows::fs::symlink_dir(target, link)
-}
 
 #[cfg(unix)]
 fn platform_symlink_file(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
@@ -53,6 +46,82 @@ enum ExecSandboxMode {
     Node,
     Native,
     Auto,
+}
+
+#[derive(Subcommand)]
+enum StageAction {
+    /// List staged releases visible to the current npm identity.
+    List {
+        package: Option<String>,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// View registry metadata for a staged release.
+    View {
+        stage_id: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// Download a staged tarball into an inspection directory.
+    Download {
+        stage_id: String,
+        #[arg(long)]
+        json: bool,
+        #[arg(long)]
+        registry: Option<String>,
+        #[arg(long, default_value = ".")]
+        destination: PathBuf,
+    },
+    /// Approve a staged release after a human has inspected the downloaded tarball.
+    Approve {
+        stage_id: String,
+        /// Confirm that the staged metadata and downloaded tarball were reviewed.
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        otp: Option<String>,
+        #[arg(long)]
+        registry: Option<String>,
+    },
+    /// Permanently reject a staged release.
+    Reject {
+        stage_id: String,
+        /// Confirm the permanent rejection.
+        #[arg(long)]
+        yes: bool,
+        #[arg(long)]
+        otp: Option<String>,
+        #[arg(long)]
+        registry: Option<String>,
+    },
+}
+
+#[derive(Subcommand)]
+enum TransferAction {
+    /// Create an integrity-verifiable package transfer capsule from the current package.
+    Create {
+        #[arg(long, default_value = "oath-transfer")]
+        output: PathBuf,
+        #[arg(long, default_value = "latest")]
+        tag: String,
+        #[arg(long)]
+        access: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Verify all hashes, signatures, and optional signer trust in a transfer capsule.
+    Verify {
+        capsule: PathBuf,
+        /// Expected base64 Ed25519 public key obtained through a trusted channel.
+        #[arg(long)]
+        trusted_public_key: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
 }
 
 impl ExecSandboxMode {
@@ -209,6 +278,16 @@ enum Commands {
         #[arg(long)]
         stage: bool,
     },
+    /// Review and decide npm staged releases (npm 11.15+ compatibility adapter).
+    Stage {
+        #[command(subcommand)]
+        action: StageAction,
+    },
+    /// Create or verify an agent-readable package transfer capsule.
+    Transfer {
+        #[command(subcommand)]
+        action: TransferAction,
+    },
     /// Show recent transparency log entries
     Log {
         /// Number of recent entries to show (default: 10)
@@ -356,6 +435,12 @@ async fn main() -> Result<()> {
             stage,
         } => {
             cmd_publish(tag.as_deref(), access.as_deref(), dry_run, json, stage).await?;
+        }
+        Commands::Stage { action } => {
+            cmd_stage(action)?;
+        }
+        Commands::Transfer { action } => {
+            cmd_transfer(action)?;
         }
         Commands::Log { tail } => {
             cmd_log(tail)?;
@@ -846,7 +931,12 @@ async fn cmd_install(
         // Fall back to the store dir if the linked path doesn't exist.
         let install_name = node.alias.as_deref().unwrap_or(&node.name);
         let linked_pkg_dir = cwd.join("node_modules").join(install_name);
-        let store_pkg_dir = store.package_dir(&node.name, &node.version);
+        let store_pkg_dir = store.package_dir_for(
+            &node.name,
+            &node.version,
+            Some(&node.resolved),
+            node.integrity.as_deref(),
+        );
         let pkg_dir = if linked_pkg_dir.exists() {
             linked_pkg_dir
         } else {
@@ -909,8 +999,12 @@ async fn cmd_install(
         let scanned: Vec<_> = nodes
             .par_iter()
             .filter_map(|node| {
-                // Canonical store layout (name/version).
-                let pkg_dir = store.package_dir(&node.name, &node.version);
+                let pkg_dir = store.package_dir_for(
+                    &node.name,
+                    &node.version,
+                    Some(&node.resolved),
+                    node.integrity.as_deref(),
+                );
                 if !pkg_dir.exists() {
                     return None;
                 }
@@ -1079,7 +1173,7 @@ async fn cmd_ci() -> Result<()> {
 ///   1. Collect all external deps from all workspace packages into a single set
 ///   2. Resolve + download them once as a unified graph
 ///   3. Link them all into root/node_modules (hoisted)
-///   4. Symlink each workspace package itself into root/node_modules/<name>
+///   4. Materialize only the workspace links selected by Arborist
 async fn cmd_install_workspace(
     ws: &WorkspaceRoot,
     dry_run: bool,
@@ -1167,66 +1261,10 @@ async fn cmd_install_workspace(
         link_time.as_secs_f64()
     );
 
-    // Symlink each workspace package into root/node_modules/<name>
-    let nm_dir = ws.root.join("node_modules");
-    let mut ws_symlinks = 0usize;
-    for pkg in &ws.packages {
-        let install_name = &pkg.name;
-        validate_install_name(install_name)?;
-        let symlink_path = nm_dir.join(install_name);
-
-        let expected_target = pkg.path.canonicalize().with_context(|| {
-            format!("failed to resolve workspace package {}", pkg.path.display())
-        })?;
-        if symlink_path
-            .canonicalize()
-            .is_ok_and(|target| target == expected_target)
-        {
-            // The authoritative Arborist placement already materialized this
-            // workspace link. Keep it intact (especially a Windows junction).
-            ws_symlinks += 1;
-            continue;
-        }
-
-        // Handle scoped packages: create @scope dir
-        if install_name.contains('/')
-            && let Some(scope) = install_name.split('/').next()
-        {
-            std::fs::create_dir_all(nm_dir.join(scope))?;
-        }
-
-        // Remove existing symlink if present
-        if symlink_path.exists() || symlink_path.symlink_metadata().is_ok() {
-            std::fs::remove_file(&symlink_path).ok();
-        }
-
-        // Create relative symlink: node_modules/<name> -> ../../packages/ui
-        // For scoped packages (@scope/name), the symlink lives at node_modules/@scope/name
-        // so we must compute the relative path FROM node_modules/@scope/, not node_modules/
-        let symlink_parent = if install_name.contains('/') {
-            if let Some(scope) = install_name.split('/').next() {
-                nm_dir.join(scope)
-            } else {
-                nm_dir.clone()
-            }
-        } else {
-            nm_dir.clone()
-        };
-        let relative_path = relative_path_from(&symlink_parent, &pkg.path)?;
-        platform_symlink_dir(&relative_path, &symlink_path).with_context(|| {
-            format!(
-                "failed to symlink workspace package {} -> {}",
-                symlink_path.display(),
-                relative_path.display()
-            )
-        })?;
-        ws_symlinks += 1;
+    let workspace_link_count = placement_plan.nodes.iter().filter(|node| node.link).count();
+    if workspace_link_count > 0 {
+        println!("  materialized {workspace_link_count} npm-selected workspace links");
     }
-
-    println!(
-        "  symlinked {} workspace packages into node_modules",
-        ws_symlinks
-    );
 
     // Write lockfile at workspace root
     let lockfile = Lockfile::from_graph_with_manifest(
@@ -1289,29 +1327,6 @@ async fn cmd_install_workspace(
     }
 
     Ok(())
-}
-
-/// Compute a relative path from `from_dir` to `to_path`
-fn relative_path_from(from_dir: &std::path::Path, to_path: &std::path::Path) -> Result<PathBuf> {
-    // Find common prefix and build ../.. chain
-    let from_components: Vec<_> = from_dir.components().collect();
-    let to_components: Vec<_> = to_path.components().collect();
-
-    let common_len = from_components
-        .iter()
-        .zip(to_components.iter())
-        .take_while(|(a, b)| a == b)
-        .count();
-
-    let up_count = from_components.len() - common_len;
-    let mut rel = PathBuf::new();
-    for _ in 0..up_count {
-        rel.push("..");
-    }
-    for component in &to_components[common_len..] {
-        rel.push(component);
-    }
-    Ok(rel)
 }
 
 // ---- AUDIT ------------------------------------------------------------------
@@ -1872,7 +1887,12 @@ fn cmd_why(package: &str) -> Result<()> {
 
         // Scan from store for capabilities/risk
         let store = ContentStore::default_store()?;
-        let pkg_dir = store.package_dir(name, version);
+        let pkg_dir = store.package_dir_for(
+            name,
+            version,
+            node.get("resolved").and_then(|value| value.as_str()),
+            node.get("integrity").and_then(|value| value.as_str()),
+        );
 
         if pkg_dir.exists() {
             match PackageScanner::scan(name, version, &pkg_dir) {
@@ -2074,7 +2094,12 @@ fn cmd_verify() -> Result<()> {
             continue;
         }
 
-        match store.verify_package(name, &entry.version, entry.integrity.as_deref()) {
+        match store.verify_package_variant(
+            name,
+            &entry.version,
+            Some(&entry.resolved),
+            entry.integrity.as_deref(),
+        ) {
             PackageVerification::Verified(_) => {
                 println!("  {key:<40} ok");
                 ok += 1;
@@ -2326,19 +2351,38 @@ fn lockfile_all_cached(lockfile: &Lockfile, store: &ContentStore) -> bool {
             key.as_str()
         };
         store
-            .verify_package(name, &entry.version, entry.integrity.as_deref())
+            .verify_package_variant(
+                name,
+                &entry.version,
+                Some(&entry.resolved),
+                entry.integrity.as_deref(),
+            )
             .is_verified()
     })
 }
 
 fn missing_store_nodes(graph: &DepGraph, store: &ContentStore) -> (Vec<DepNode>, usize) {
     let mut to_download = Vec::new();
+    let mut scheduled = HashSet::new();
     let mut cached = 0usize;
     for node in graph.nodes.values() {
-        match store.verify_package(&node.name, &node.version, node.integrity.as_deref()) {
+        match store.verify_package_variant(
+            &node.name,
+            &node.version,
+            Some(&node.resolved),
+            node.integrity.as_deref(),
+        ) {
             PackageVerification::Verified(_) => cached += 1,
             PackageVerification::Missing | PackageVerification::Corrupt(_) => {
-                to_download.push(node.clone());
+                let identity = (
+                    node.name.clone(),
+                    node.version.clone(),
+                    node.resolved.clone(),
+                    node.integrity.clone(),
+                );
+                if scheduled.insert(identity) {
+                    to_download.push(node.clone());
+                }
             }
         }
     }
@@ -2435,7 +2479,7 @@ async fn download_missing_nodes(
             tmp.path(),
             &limits,
         )?;
-        store.store_package_with_manifest(
+        store.store_package_variant_with_manifest(
             &downloaded.name,
             &downloaded.version,
             Some(&downloaded.resolved),
@@ -2460,12 +2504,15 @@ async fn download_tarball_to_temp(
     let temp_dir = tempfile::tempdir().context("failed to create temp tarball dir")?;
     let tarball_path = temp_dir.path().join("package.tgz");
 
-    let bytes = if is_git_resolved(&resolved) {
+    let bytes = if let Some(local_path) = file_dependency_path(&resolved)? {
+        materialize_file_dependency(&local_path, &tarball_path, &limits)
+            .with_context(|| format!("packing local dependency {name}@{version}"))?
+    } else if is_git_resolved(&resolved) {
         let home = oath_core::home_dir().unwrap_or_else(std::env::temp_dir);
         let cache_file = home
             .join(".oath")
             .join("git-cache")
-            .join(git_cache_file_name(&name, &version));
+            .join(git_cache_file_name(&name, &version, &resolved));
         if !cache_file.exists() {
             let spec = parse_git_spec(&resolved)
                 .with_context(|| format!("invalid git dependency URL {resolved}"))?;
@@ -2522,12 +2569,15 @@ async fn download_and_store_package(
     let limits = TarballLimits::from_env()?;
     let temp_dir = tempfile::tempdir().context("failed to create temp tarball dir")?;
     let tarball_path = temp_dir.path().join("package.tgz");
-    let bytes = if is_git_resolved(resolved) {
+    let bytes = if let Some(local_path) = file_dependency_path(resolved)? {
+        materialize_file_dependency(&local_path, &tarball_path, &limits)
+            .with_context(|| format!("packing local dependency {name}@{version}"))?
+    } else if is_git_resolved(resolved) {
         let home = oath_core::home_dir().unwrap_or_else(std::env::temp_dir);
         let cache_file = home
             .join(".oath")
             .join("git-cache")
-            .join(git_cache_file_name(name, version));
+            .join(git_cache_file_name(name, version, resolved));
         if !cache_file.exists() {
             anyhow::bail!("git dep {name}@{version} not in cache and no tarball URL available");
         }
@@ -2552,7 +2602,7 @@ async fn download_and_store_package(
 
     let extracted = tempfile::tempdir().context("failed to create temp extract dir")?;
     oath_fetch::tarball::extract_tarball_file_limited(&tarball_path, extracted.path(), &limits)?;
-    store.store_package_with_manifest(
+    store.store_package_variant_with_manifest(
         name,
         version,
         Some(resolved),
@@ -2563,10 +2613,47 @@ async fn download_and_store_package(
 }
 
 fn is_git_resolved(resolved: &str) -> bool {
-    resolved.starts_with("git+")
-        || resolved.starts_with("github:")
-        || resolved.starts_with("gitlab:")
-        || resolved.starts_with("bitbucket:")
+    is_git_spec(resolved)
+}
+
+fn file_dependency_path(resolved: &str) -> Result<Option<PathBuf>> {
+    if !resolved.starts_with("file:") {
+        return Ok(None);
+    }
+    let url = reqwest::Url::parse(resolved)
+        .with_context(|| format!("invalid local dependency URL {resolved}"))?;
+    anyhow::ensure!(url.scheme() == "file", "unsupported local dependency URL");
+    let path = url
+        .to_file_path()
+        .map_err(|_| anyhow::anyhow!("local dependency URL is not a file path: {resolved}"))?;
+    anyhow::ensure!(
+        path.exists(),
+        "local dependency does not exist: {}",
+        path.display()
+    );
+    Ok(Some(path))
+}
+
+fn materialize_file_dependency(
+    source: &std::path::Path,
+    tarball_path: &std::path::Path,
+    limits: &TarballLimits,
+) -> Result<u64> {
+    if source.is_dir() {
+        let tarball = pack_local_package(source)?;
+        limits.check_archive_size(tarball.len() as u64)?;
+        std::fs::write(tarball_path, &tarball)?;
+        return Ok(tarball.len() as u64);
+    }
+    anyhow::ensure!(
+        source.is_file(),
+        "unsupported local dependency: {}",
+        source.display()
+    );
+    let bytes = std::fs::metadata(source)?.len();
+    limits.check_archive_size(bytes)?;
+    std::fs::copy(source, tarball_path)?;
+    Ok(bytes)
 }
 
 fn parse_package_spec(spec: &str) -> (String, String) {
@@ -3450,10 +3537,20 @@ async fn cmd_score(package: &str) -> Result<()> {
     // Ensure in store
     let store = ContentStore::default_store()?;
     let pkg_dir = if store
-        .verify_package(&pkg_name, &version, info.dist.integrity.as_deref())
+        .verify_package_variant(
+            &pkg_name,
+            &version,
+            Some(&info.dist.tarball),
+            info.dist.integrity.as_deref(),
+        )
         .is_verified()
     {
-        store.package_dir(&pkg_name, &version)
+        store.package_dir_for(
+            &pkg_name,
+            &version,
+            Some(&info.dist.tarball),
+            info.dist.integrity.as_deref(),
+        )
     } else {
         download_and_store_package(
             &client,
@@ -3464,7 +3561,12 @@ async fn cmd_score(package: &str) -> Result<()> {
             info.dist.integrity.as_deref(),
         )
         .await?;
-        store.package_dir(&pkg_name, &version)
+        store.package_dir_for(
+            &pkg_name,
+            &version,
+            Some(&info.dist.tarball),
+            info.dist.integrity.as_deref(),
+        )
     };
 
     // Scan
@@ -3872,6 +3974,225 @@ fn npm_command() -> std::process::Command {
     }
 }
 
+fn parse_tool_version(raw: &str) -> Result<(u64, u64, u64)> {
+    let raw = raw.trim().trim_start_matches('v');
+    let mut parts = raw.split('.');
+    let major = parts
+        .next()
+        .context("missing major version")?
+        .parse::<u64>()?;
+    let minor = parts
+        .next()
+        .context("missing minor version")?
+        .parse::<u64>()?;
+    let patch = parts
+        .next()
+        .unwrap_or("0")
+        .split('-')
+        .next()
+        .unwrap_or("0")
+        .parse::<u64>()?;
+    Ok((major, minor, patch))
+}
+
+fn command_version(mut command: std::process::Command, name: &str) -> Result<(u64, u64, u64)> {
+    let output = command
+        .arg("--version")
+        .output()
+        .with_context(|| format!("failed to run {name} --version"))?;
+    anyhow::ensure!(
+        output.status.success(),
+        "{name} --version failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    parse_tool_version(&String::from_utf8_lossy(&output.stdout))
+        .with_context(|| format!("could not parse {name} version"))
+}
+
+fn ensure_npm_stage_prerequisites() -> Result<()> {
+    let npm = command_version(npm_command(), "npm")?;
+    let node = command_version(std::process::Command::new("node"), "node")?;
+    anyhow::ensure!(
+        npm >= (11, 15, 0),
+        "oath stage requires npm >= 11.15.0; found {}.{}.{}",
+        npm.0,
+        npm.1,
+        npm.2
+    );
+    anyhow::ensure!(
+        node >= (22, 14, 0),
+        "oath stage requires Node >= 22.14.0; found {}.{}.{}",
+        node.0,
+        node.1,
+        node.2
+    );
+    Ok(())
+}
+
+fn push_optional_flag(args: &mut Vec<String>, flag: &str, value: Option<String>) {
+    if let Some(value) = value {
+        args.push(flag.to_string());
+        args.push(value);
+    }
+}
+
+fn cmd_stage(action: StageAction) -> Result<()> {
+    ensure_npm_stage_prerequisites()?;
+    let (args, destination, confirmation): (Vec<String>, Option<PathBuf>, Option<&str>) =
+        match action {
+            StageAction::List {
+                package,
+                json,
+                registry,
+            } => {
+                let mut args = vec!["stage".into(), "list".into()];
+                if let Some(package) = package {
+                    args.push(package);
+                }
+                if json {
+                    args.push("--json".into());
+                }
+                push_optional_flag(&mut args, "--registry", registry);
+                (args, None, None)
+            }
+            StageAction::View {
+                stage_id,
+                json,
+                registry,
+            } => {
+                let mut args = vec!["stage".into(), "view".into(), stage_id];
+                if json {
+                    args.push("--json".into());
+                }
+                push_optional_flag(&mut args, "--registry", registry);
+                (args, None, None)
+            }
+            StageAction::Download {
+                stage_id,
+                json,
+                registry,
+                destination,
+            } => {
+                let mut args = vec!["stage".into(), "download".into(), stage_id];
+                if json {
+                    args.push("--json".into());
+                }
+                push_optional_flag(&mut args, "--registry", registry);
+                (args, Some(destination), None)
+            }
+            StageAction::Approve {
+                stage_id,
+                yes,
+                otp,
+                registry,
+            } => {
+                anyhow::ensure!(
+                    yes,
+                    "oath stage approve requires --yes after reviewing `oath stage view` and `oath stage download`"
+                );
+                let mut args = vec!["stage".into(), "approve".into(), stage_id];
+                push_optional_flag(&mut args, "--otp", otp);
+                push_optional_flag(&mut args, "--registry", registry);
+                (args, None, Some("approve"))
+            }
+            StageAction::Reject {
+                stage_id,
+                yes,
+                otp,
+                registry,
+            } => {
+                anyhow::ensure!(yes, "oath stage reject is permanent and requires --yes");
+                let mut args = vec!["stage".into(), "reject".into(), stage_id];
+                push_optional_flag(&mut args, "--otp", otp);
+                push_optional_flag(&mut args, "--registry", registry);
+                (args, None, Some("reject"))
+            }
+        };
+
+    if let Some(destination) = &destination {
+        std::fs::create_dir_all(destination).with_context(|| {
+            format!(
+                "failed to create staged-package destination {}",
+                destination.display()
+            )
+        })?;
+    }
+    if let Some(decision) = confirmation {
+        eprintln!(
+            "oath stage: forwarding irreversible `{decision}` to npm; npm will require registry proof-of-presence"
+        );
+    }
+    let mut command = npm_command();
+    command.args(&args);
+    if let Some(destination) = destination {
+        command.current_dir(destination);
+    }
+    let status = command.status().context("failed to invoke npm stage")?;
+    anyhow::ensure!(
+        status.success(),
+        "npm {} failed with status {status}",
+        args.join(" ")
+    );
+    Ok(())
+}
+
+fn cmd_transfer(action: TransferAction) -> Result<()> {
+    match action {
+        TransferAction::Create {
+            output,
+            tag,
+            access,
+            json,
+        } => {
+            let root = std::env::current_dir()?;
+            let package = read_package_json()?;
+            let files = npm_authoritative_packlist(&root)?;
+            let mut assessment =
+                publish_assessment::assess(&root, &files, &package, &tag, access.as_deref())?;
+            publish_assessment::attach_previous_release(&root, &mut assessment)?;
+            anyhow::ensure!(
+                assessment.decision == "allow",
+                "oath transfer: blocked by {}",
+                assessment.reason_code
+            );
+            let evidence = publish_assessment::persist_signed(&root, &assessment, &package)?;
+            let report = package_transfer::create_capsule(&root, &output, &assessment, &evidence)?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("oath transfer: created {}", output.display());
+                println!("  package: {}@{}", assessment.name, assessment.version);
+                println!("  tarball: {}", report.tarball.sha512);
+                println!("  decision: review-required");
+                println!(
+                    "  verify before use: oath transfer verify {}",
+                    output.display()
+                );
+            }
+        }
+        TransferAction::Verify {
+            capsule,
+            trusted_public_key,
+            json,
+        } => {
+            let report = package_transfer::verify_capsule(&capsule, trusted_public_key.as_deref())?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("oath transfer: verified {}", capsule.display());
+                println!("  package: {}@{}", report.name, report.version);
+                println!("  signed assessment: cryptographically valid");
+                println!("  signing-key trust: {}", report.signature_trust);
+                println!(
+                    "  decision: {} (verification is not a safety proof)",
+                    report.consumer_decision
+                );
+            }
+        }
+    }
+    Ok(())
+}
+
 fn collect_publish_files_inner(
     dir: &std::path::Path,
     root: &std::path::Path,
@@ -3996,6 +4317,11 @@ async fn cmd_publish(
     use sha1::Sha1;
     use sha2::{Digest, Sha512};
 
+    anyhow::ensure!(
+        !json || dry_run,
+        "oath publish --json is an assessment-only interface and requires --dry-run; stage or publish in a separate explicit command"
+    );
+
     let dist_tag = tag.unwrap_or("latest");
 
     // 1. Read package.json
@@ -4104,6 +4430,7 @@ async fn cmd_publish(
     }
 
     if stage {
+        ensure_npm_stage_prerequisites()?;
         let mut command = npm_command();
         command.args(["stage", "publish", "--tag", dist_tag]);
         command.env("NPM_CONFIG_PROVENANCE", "true");
@@ -4476,6 +4803,13 @@ mod tests {
     use oath_resolve::DepNode;
 
     #[test]
+    fn parses_npm_and_node_stage_versions() {
+        assert_eq!(parse_tool_version("11.18.0\n").unwrap(), (11, 18, 0));
+        assert_eq!(parse_tool_version("v22.14.0").unwrap(), (22, 14, 0));
+        assert!(parse_tool_version("unknown").is_err());
+    }
+
+    #[test]
     fn previous_release_diff_detects_publisher_and_hook_changes() {
         let packument = serde_json::json!({
             "versions": {
@@ -4657,7 +4991,7 @@ mod tests {
         )
         .unwrap();
         store
-            .store_package_with_manifest(
+            .store_package_variant_with_manifest(
                 "pkg",
                 "1.0.0",
                 Some("https://registry.example/pkg.tgz"),

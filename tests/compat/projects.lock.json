@@ -1,0 +1,807 @@
+{
+  "schema_version": 1,
+  "npm": "11.12.1",
+  "node": "24.13.0",
+  "projects": [
+    {
+      "repository": "NextJSTemplates/play-nextjs",
+      "commit": "f0a5c55ef1d6198c41ac6354595adadc4c41b924",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "frameworks-applications",
+      "expected_lock_sha256": "989e845765ef8c4b16d2c24bb9287f983371e1d71b2edb84cf80dde2ebda5320"
+    },
+    {
+      "repository": "solidjs/solid-start",
+      "commit": "0c95804d9e0b617dcc2c7003e7051e3533fbe28b",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "frameworks-applications",
+      "expected_lock_sha256": "af78e600baf60284d911f4727acbb5f4f1c9b7ca8ae1fb2e59ffbcfda8cc5d73"
+    },
+    {
+      "repository": "meteor/meteor",
+      "commit": "67712f69146b3ed88e43c1c20d25d970058d2bf0",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "frameworks-applications",
+      "expected_lock_sha256": "7262de28cc50a8d56f4990fdaf2ab1c12d6729b35474e2118f4926506bf5caa6"
+    },
+    {
+      "repository": "sahat/hackathon-starter",
+      "commit": "e00a36cde0143d2b5c634a15a81ee3e3cda792fc",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "frameworks-applications",
+      "expected_lock_sha256": "97df60932fbd27483eb224dfe5be27a1cde52c8cf7ba8e567b4dacceadd000d1"
+    },
+    {
+      "repository": "ixartz/Next-js-Boilerplate",
+      "commit": "9926cc1f8664f67eca63065bf1c31bc4f60b09c2",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "frameworks-applications",
+      "expected_lock_sha256": "f5dad5f35ea603ab0f60c50681346e3bb753ff53fe0125bd0ed511e55803f538"
+    },
+    {
+      "repository": "Skolaczk/next-starter",
+      "commit": "9580bcf3da204f2b1e028d59f59028898210e8d2",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "frameworks-applications",
+      "expected_lock_sha256": "7affbcebbf295402f107bd52944d9353575df45e0c0834f848023b86e27a026a"
+    },
+    {
+      "repository": "vercel-labs/botid-nextjs-starter",
+      "commit": "95d714a58946e2e97a23483f59a7bb00c8e5187c",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "frameworks-applications",
+      "expected_lock_sha256": "b6ec187a390c2ffe59f63f10ec0ee2524ea35bf2f0d4d73d9f9acf83b7b8f587"
+    },
+    {
+      "repository": "reddit/devvit-template-react",
+      "commit": "bee528c76b388978cd3c24ca9e6af3402c6116e6",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "frameworks-applications",
+      "expected_lock_sha256": "98d81a608ba2752acb55a7ee178a7efc27d53bc707920c7610fbe4804231239e"
+    },
+    {
+      "repository": "CodelyTV/typescript-react_best_practices-vite_template",
+      "commit": "304e1cc5b65c64f52a2c4a5c18b3f9b5a722b170",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "frameworks-applications",
+      "expected_lock_sha256": "dbafa2fbd6d53da7a7b1e4dad1839455ec899e643002c037aa36ed625ad70067"
+    },
+    {
+      "repository": "wbkd/react-starter",
+      "commit": "b4acaeabeb8a0c3710a6021edab0c8cdb848467f",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "frameworks-applications",
+      "expected_lock_sha256": "4d2098c94c971808ad2df67638df1bd8eee7f23b68c67ba9345c5fc123225802"
+    },
+    {
+      "repository": "webpack/webpack",
+      "commit": "0034b8ac8d6b235e6d51820215a20605a6098fd3",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "build-tools",
+      "expected_lock_sha256": "9886d157922bfd9b5937d25c2150cbbb40aae216cdce93fb53d7a2b3b7709104"
+    },
+    {
+      "repository": "rollup/rollup",
+      "commit": "4b860802d9656a0d8ffccc0a87bb9c2f5d82cff8",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "build-tools",
+      "expected_lock_sha256": "1829ad39620976935ead3e46f15ebe3a2fafa5d33820b97ff22fc64d259127b7"
+    },
+    {
+      "repository": "web-infra-dev/rspack",
+      "commit": "8ab773f47dd6ac1c06f6090274a16417ad79897c",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "build-tools",
+      "expected_lock_sha256": "caf069a179100839943c616d38c701eee829f15e50653c0a640087fcbf853367"
+    },
+    {
+      "repository": "vercel/turborepo",
+      "commit": "ed1724965d854cd9c2f8b71a0fa826ec786be161",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "build-tools",
+      "expected_lock_sha256": "6ecfa8117a295878d1e347efd6d153918d4512069854c39b79e0be18a0172ddc"
+    },
+    {
+      "repository": "gulpjs/gulp",
+      "commit": "61f22dc11bb14234b555253095fa1d224ce0eab1",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "build-tools",
+      "expected_lock_sha256": "3c015d4ec391cc15a1019d1e5dff4d91ad23109bec5ae7b6810e78d7fe74bc0b"
+    },
+    {
+      "repository": "gruntjs/grunt",
+      "commit": "1d8bf42bd4cdd4b8f7710ca308ec89be7d1ebd37",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "build-tools",
+      "expected_lock_sha256": "6438b2279008465f5bb36de62ce00a1a76288db3d02ae888ad4407f838a942f9"
+    },
+    {
+      "repository": "snowpackjs/snowpack",
+      "commit": "7f9b5455683a9d7632dbd7f4ed6db9ec2bb7c760",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "build-tools",
+      "expected_lock_sha256": "fc6647e23412fde2bd3cd2d99357b9852f4b8cbc760fd8db2d500a3f262c3e18"
+    },
+    {
+      "repository": "egoist/tsup",
+      "commit": "b6bcae8504d018cfc94203f50f15a3ce43943332",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "build-tools",
+      "expected_lock_sha256": "a5855efb5d464310e54307871331474be9c0d0de68190d4fd42820904a3ba94d"
+    },
+    {
+      "repository": "unjs/unbuild",
+      "commit": "cf1c30333df2d6b19e6208f67157024975bdba82",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "build-tools",
+      "expected_lock_sha256": "5daee73216467d2b529444deca704431db5093413841fcfbc6815f5c99fc2f94"
+    },
+    {
+      "repository": "developit/microbundle",
+      "commit": "9f56e06b0d1d412f3f0aa4c94d332e77791dd09b",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "build-tools",
+      "expected_lock_sha256": "0964a3261ff17e9b310cf1110b75f4175243a826a23853695299698a3dc4da5a"
+    },
+    {
+      "repository": "microsoft/TypeScript",
+      "commit": "637d5746b70257028fb95aad32ddec6b26ab0a14",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "typescript-compilers",
+      "expected_lock_sha256": "fee046e932f0ee95acc905e43fbb4b3655a314ada796286c70bb34f507717226"
+    },
+    {
+      "repository": "TypeStrong/ts-node",
+      "commit": "ddb05ef23be92a90c3ecac5a0220435c65ebbd2a",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "typescript-compilers",
+      "expected_lock_sha256": "3ae63c1864f1cbde365c023ea6373aa2514644191bb0553bb665a52c40e6f244"
+    },
+    {
+      "repository": "alangpierce/sucrase",
+      "commit": "280ee202e73b18e396069782bd41e1eaaccbf620",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "typescript-compilers",
+      "expected_lock_sha256": "b831d8ab9111be2f25aef4f66eeb8579a6e399ab17d7711386b23057a4429c5a"
+    },
+    {
+      "repository": "facebook/flow",
+      "commit": "2304a9a1337c98f5a34531b3932ea743b7317fe4",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "typescript-compilers",
+      "expected_lock_sha256": "ba439b63d50719d855220c017fc3835b1622883b65861686674733f20eaf8fe1"
+    },
+    {
+      "repository": "dsherret/ts-morph",
+      "commit": "699815f54ae9b5c2a93f016ba1a9df1e8ac1c014",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "typescript-compilers",
+      "expected_lock_sha256": "97c84aeb929b0ec801de858a9921a45ea9be67d6f6ac5eb770e765e120588948"
+    },
+    {
+      "repository": "TypeStrong/typedoc",
+      "commit": "6d8c856bbb46b089371952981f113c3e318818fd",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "typescript-compilers",
+      "expected_lock_sha256": "5d7f04912c673468c920e349cf9edac2154d559ad12cd58133ebc20125381528"
+    },
+    {
+      "repository": "prettier/prettier",
+      "commit": "41a8b99bb8d7d68c00d90d5b8fbaed20511d4cfd",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "typescript-compilers",
+      "expected_lock_sha256": "b49e9ef2e3b4a2341a2d8b8f37b7759be1c3c3b803bcd60c07fe9d1b65485a2a"
+    },
+    {
+      "repository": "eslint/eslint",
+      "commit": "c5963f74bfa82a5b7ccc0607dcdcc695b8c97a31",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "typescript-compilers",
+      "expected_lock_sha256": "7a743ff846abc55d22a7854191b85a103e1eabeefa59bf9926eaa31c98dfe58a"
+    },
+    {
+      "repository": "unjs/jiti",
+      "commit": "fd3bb289b75ed207edfb686d671ed50144f7e90f",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "typescript-compilers",
+      "expected_lock_sha256": "4327965192c5cadc3bfa1d7f84dd8ec3784755500db1d005178956daab9a11f0"
+    },
+    {
+      "repository": "acornjs/acorn",
+      "commit": "b7c31b626e135c4ed130ff5063c44c20ea8e231a",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "typescript-compilers",
+      "expected_lock_sha256": "42fe5fbaf92212fcbdc9154fc2f9de6ab2344645a60008fe3b16dbd4094ef8b1"
+    },
+    {
+      "repository": "mochajs/mocha",
+      "commit": "a017f08f4d784489949e2b9744716a4f1e705b6d",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "test-tools",
+      "expected_lock_sha256": "9f31ade711bf6e681fe3d453616f1439518fb9311af716aa5754123f3f666f6a"
+    },
+    {
+      "repository": "avajs/ava",
+      "commit": "bbfd946322fdeca2b547a691d947fb4e18c0c67f",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "test-tools",
+      "expected_lock_sha256": "6255b59870c361804ad089cb1587aca31a838cee9bd7ef2fb874a79fa6b10982"
+    },
+    {
+      "repository": "tapjs/tapjs",
+      "commit": "ce77a9a8a5b0dd6f137ac6da1d8ee309ccb45027",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "test-tools",
+      "expected_lock_sha256": "932b7e8b3004f0dbf9e411afa952f03490e745a823b251e7687b08e24183cbd3"
+    },
+    {
+      "repository": "jasmine/jasmine",
+      "commit": "670eea279e2b03e0f880986c90a46fb4ab7b5131",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "test-tools",
+      "expected_lock_sha256": "8ee68c411b04166eba499cfeb9a88e363269485d1e64972355be94948ab186c4"
+    },
+    {
+      "repository": "karma-runner/karma",
+      "commit": "84f85e7016efc2266fa6b3465f494a3fa151c85c",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "test-tools",
+      "expected_lock_sha256": "6e9c5467bd3b540273810d8bc65161167eef5b7e04593c84acf0cee8b27ba292"
+    },
+    {
+      "repository": "microsoft/playwright",
+      "commit": "b635709153e72aeacc5cb6f13a6546b5c8dd2bb6",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "test-tools",
+      "expected_lock_sha256": "23ca1e154cb7cae9cf7bb57844d54588d2c2613c2b9df5494e57e0731312404b"
+    },
+    {
+      "repository": "puppeteer/puppeteer",
+      "commit": "3232cd4bd432107d2007e9d582fee5ade311a1df",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "test-tools",
+      "expected_lock_sha256": "0e859f691bd5f707031875c59efb2e463258897525364d1d210f3f2dab8736b5"
+    },
+    {
+      "repository": "testing-library/dom-testing-library",
+      "commit": "e395d5b8ecd4ec95cc02540ddcf16571ecd33e0f",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "test-tools",
+      "expected_lock_sha256": "34ee82978ce5b47760895a50e70e9cf5806c19344916f340c4827d62ef0b3001"
+    },
+    {
+      "repository": "sinonjs/sinon",
+      "commit": "cf5d9e8de1a5307ed7b329b6306ee86982453db7",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "test-tools",
+      "expected_lock_sha256": "0dd6613f11c2a0ea446478bb8c4c1ea3c8ac0c456600417150e333827d1f8f4e"
+    },
+    {
+      "repository": "chaijs/chai",
+      "commit": "21b1becd3151a465c3f52e90e516360d917bd074",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "test-tools",
+      "expected_lock_sha256": "243eed5f4aa8c86645366c9629426498fd3a151d75bff1779cb39e12174c92fa"
+    },
+    {
+      "repository": "expressjs/express",
+      "commit": "ae6dd37680e3a00618d6c8a3e522f0ee4eeba1a4",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "server-frameworks",
+      "expected_lock_sha256": "59f24146c75577e937aa96ff8df6753302a31d0cee39c10d7855babfab94161a"
+    },
+    {
+      "repository": "fastify/fastify",
+      "commit": "de3752df84bb8dd35a8226bb467f05862f4da57c",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "server-frameworks",
+      "expected_lock_sha256": "0fcc37c010fe03861025e7afbe8f617fb3af69d5b1dfcdc80eb7cef05c6a0ff6"
+    },
+    {
+      "repository": "koajs/koa",
+      "commit": "52d5e8ff5ac79f2479463b53df2999900ae95115",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "server-frameworks",
+      "expected_lock_sha256": "5998cd9ce44bdacb4a527549ff3baace8ed1e20955ca3a802b1c50455366e685"
+    },
+    {
+      "repository": "honojs/hono",
+      "commit": "b2ae3a2204a48ce15a26448fd746d39745eb1837",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "server-frameworks",
+      "expected_lock_sha256": "5ff8a442a39cf72ffd6f1c432bf21aaac5210fd12841fde6f10d687e70675e2f"
+    },
+    {
+      "repository": "adonisjs/core",
+      "commit": "595c48602aa39e5cfdfaf24f4ac7396425c1c083",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "server-frameworks",
+      "expected_lock_sha256": "5cf0e15b5fe6da7edaf5fd3fda6f0c3e4d5e335f945792adae3176884176f1c1"
+    },
+    {
+      "repository": "feathersjs/feathers",
+      "commit": "cf42ae4bc7c315b350d96f15127335471f452b4c",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "server-frameworks",
+      "expected_lock_sha256": "3ce3d47f0d2e8a400ffbaa4a005f59cbeeb883aa83ee5ac6f9535ec0d76c1ab0"
+    },
+    {
+      "repository": "loopbackio/loopback-next",
+      "commit": "8648b6d272bdff65221c056e50002ae8c4a7e9b2",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "server-frameworks",
+      "expected_lock_sha256": "7d2f024aef9803fda5bc0cb25321512d91660b24cd467c55c7601f06d5cd17ce"
+    },
+    {
+      "repository": "restify/node-restify",
+      "commit": "fca987f736cf109b706876e838f01a70d033940e",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "server-frameworks",
+      "expected_lock_sha256": "2f6093304e22ac3a1443df3cb38e9282285c603f62d65c2ebecf72f8c495d204"
+    },
+    {
+      "repository": "lukeed/polka",
+      "commit": "c36cf8b5d1a57164e64fdd7d4e0d0f80ab262dc0",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "server-frameworks",
+      "expected_lock_sha256": "f3fabf3b266afefce7e0d6db24b5f031086a038af2dc4723ec7a1170a55ba4f6"
+    },
+    {
+      "repository": "middyjs/middy",
+      "commit": "a103830e25c379389f94c914e06ff989dfcf292f",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "server-frameworks",
+      "expected_lock_sha256": "3c346d7371b6533724033b37edb2faff54c06e3cc6c0d1ac115bd5ec33a9c3ee"
+    },
+    {
+      "repository": "preactjs/preact",
+      "commit": "67c9935e3e692bcf43f37b34bd7429054903c0d1",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "ui-libraries",
+      "expected_lock_sha256": "4c202de16f315c54a922bb9c16888b14e24c1147113f3fe83725a7a3e8862ca1"
+    },
+    {
+      "repository": "alpinejs/alpine",
+      "commit": "8c26b5399674b5021d9ab6980eaa1ff3dcce463f",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "ui-libraries",
+      "expected_lock_sha256": "0012b93a89dddca6431eb458619af6e1015a40b87de9faf705d175c253b991f5"
+    },
+    {
+      "repository": "lit/lit",
+      "commit": "c42ee1e96b8fd61f7256f61d715daef572e76e52",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "ui-libraries",
+      "expected_lock_sha256": "c200d9cbd368ef637aaaee71260d9d2735998aed4bcb64e05b8e67045e250060"
+    },
+    {
+      "repository": "ant-design/ant-design",
+      "commit": "3fb6aa78c71fc80719319201451cc0b8bd9697f7",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "ui-libraries",
+      "expected_lock_sha256": "7c50f79990144b61f71d4bf17e444cca2f6c256f363ace190dc21683a59b496c"
+    },
+    {
+      "repository": "radix-ui/primitives",
+      "commit": "e4e06649716b0134ece0df9e067403992cfeb47d",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "ui-libraries",
+      "expected_lock_sha256": "7712df481ba15e27a9f4f8d189522135aa92b419233e64c29949d2b5d947191e"
+    },
+    {
+      "repository": "tailwindlabs/headlessui",
+      "commit": "eea57cf46fd6767ed1059012f7073b88eb159fba",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "ui-libraries",
+      "expected_lock_sha256": "524ac77bf334973ba6d28a7caa7def4d451b63ccd53e7aa97199fe7d6014a591"
+    },
+    {
+      "repository": "shoelace-style/shoelace",
+      "commit": "25bd8ec776609670a932f21390be59a495df497d",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "ui-libraries",
+      "expected_lock_sha256": "5fdd4b5f78df8aff1a94b684245bf5ba92cbe40cf2d2e79ba2b1217b56579649"
+    },
+    {
+      "repository": "stenciljs/core",
+      "commit": "1dca7692a6b279ef65156285e90fd9ea4852116f",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "ui-libraries",
+      "expected_lock_sha256": "7b5e9fa327001c7d21185bffec76a287d7fbacaf4bb1b150e88b2f2b0bd38f6c"
+    },
+    {
+      "repository": "ionic-team/ionic-framework",
+      "commit": "4f2ab734fa62389f0b757746a8ed4d05697ef81f",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "ui-libraries",
+      "expected_lock_sha256": "a16207a84e4dafe2cf2a921fb8a40c1e823e7e094ba7b65cdfd4f7643ca2277a"
+    },
+    {
+      "repository": "styled-components/styled-components",
+      "commit": "50df1a9190740f47a13601afb3b053ec1bdbdcca",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "ui-libraries",
+      "expected_lock_sha256": "6c633521d712021da617e6751ee2199e77fd95e20d371ab7e20ff874ffbd6103"
+    },
+    {
+      "repository": "knex/knex",
+      "commit": "e25d54bcb707714a17f5a5744eba5c4246bb4d1d",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "database-orm",
+      "expected_lock_sha256": "5a35d6a44199d9e4042f2e6cb73acf2f0b8ec5f4309b8f68b802f964a1df9a8b"
+    },
+    {
+      "repository": "Automattic/mongoose",
+      "commit": "0c3034d2886b5ff11eac8f3749cb33a896f53a57",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "database-orm",
+      "expected_lock_sha256": "dd97d2f8bddd46b5211818b2bd30956be70d73d6db632fb7d46e49562bc07637"
+    },
+    {
+      "repository": "mongodb/node-mongodb-native",
+      "commit": "52f5e61c8a439f9284c82f72357c376783f055b4",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "database-orm",
+      "expected_lock_sha256": "2629d5856587d21ae1ab4adc5e6387e3e24bd7d374fdf155054ddb60638d22ba"
+    },
+    {
+      "repository": "redis/node-redis",
+      "commit": "d29677ac4d3e86d307a76160df7a28baf02709a9",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "database-orm",
+      "expected_lock_sha256": "15405edd444ba08bcfb153c31760e09078da4afb9e31631dffea1213aaf45fc5"
+    },
+    {
+      "repository": "redis/ioredis",
+      "commit": "09b8d04b62481e68521359a43cb3638e09e92565",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "database-orm",
+      "expected_lock_sha256": "14487d0410cac13a48a05ff20d39134dc766dd0001c2d8987922c17b339b30c6"
+    },
+    {
+      "repository": "brianc/node-postgres",
+      "commit": "1a38e1d774fd77a5f2ab37baa2d35720a1146672",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "database-orm",
+      "expected_lock_sha256": "4437cf067f38a465243ed483ebb504dce04c3fc52b9b9de9e4c58a10469318cf"
+    },
+    {
+      "repository": "mysqljs/mysql",
+      "commit": "dc9c152a87ec51a1f647447268917243d2eab1fd",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "database-orm",
+      "expected_lock_sha256": "e88f0bc1a3a5d234cdaed03ee44c60bd7e0e443f2bea26b59c8ef7138d95e5be"
+    },
+    {
+      "repository": "sidorares/node-mysql2",
+      "commit": "6b933f6d248b8fb5f3004d85d9562e9f5abdd16f",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "database-orm",
+      "expected_lock_sha256": "4638608d2deabc6a98fa6a610f29f1ad80333184b65aeb58919742886a8295c5"
+    },
+    {
+      "repository": "WiseLibs/better-sqlite3",
+      "commit": "87131354ba00f1ddbb1eb54f5239d558dc3fe141",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "database-orm",
+      "expected_lock_sha256": "4d6d6dc0297810c3cc10506f00750f00e269f483139c02f6e7c79e0a01e1e0f0"
+    },
+    {
+      "repository": "tediousjs/tedious",
+      "commit": "da2375a9af5919d8d8ab788040b4155f09ab084e",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "database-orm",
+      "expected_lock_sha256": "e451e5ab88cd69dfc0aeca5798d7bb8dfc14074739ecfa10190d4aed435ad8d7"
+    },
+    {
+      "repository": "npm/cli",
+      "commit": "7b1f6c173d17b3bf30e45426f6df39473c6a1163",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "monorepos-workspaces",
+      "expected_lock_sha256": "1378086c59cdf5d9e9305f16e6a74418ed06d16e8f38ef61537bfbe4190e442c"
+    },
+    {
+      "repository": "lerna/lerna",
+      "commit": "294e33a2a6885bb34fdd8e48125eaf80d1058db1",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "monorepos-workspaces",
+      "expected_lock_sha256": "731a16242aa81091f19aab7d1bd3b73a9d3d9f170375cad7726202efe6d89a69"
+    },
+    {
+      "repository": "google/wireit",
+      "commit": "e82171c914dcf4ffd1e7a6c52b300a1d6df62f0a",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "monorepos-workspaces",
+      "expected_lock_sha256": "35b0c4b66c622fede38390b7ab4501f138021bc709239207edefbf2bb2e30790"
+    },
+    {
+      "repository": "FormidableLabs/builder",
+      "commit": "5283eae54465823de1a70778c75074af40205f04",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "monorepos-workspaces",
+      "expected_lock_sha256": "49fbd1aa3fdce214dac5dc2292e117195bf41962d8bd9d565477b7dd7d8491b5"
+    },
+    {
+      "repository": "Thinkmill/manypkg",
+      "commit": "97e2ab9bc64e45af099f63f25c515f3792738cfb",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "monorepos-workspaces",
+      "expected_lock_sha256": "0c6ffc7f358bca0bbbdc6e525a9b104a457b5c48bdf38c3ba79c128343463ef8"
+    },
+    {
+      "repository": "wixplosives/sample-monorepo",
+      "commit": "800c1696a77ba79dd4981aeb32a5a7d142ab5a90",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "monorepos-workspaces",
+      "expected_lock_sha256": "a6ba64f83887a3f441cfbd8cedb4fa5032eaaa16e8d49282da9055da6171c133"
+    },
+    {
+      "repository": "azu/monorepo-utils",
+      "commit": "4f1f19db58fba12711127943146bf6e6debcb422",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "monorepos-workspaces",
+      "expected_lock_sha256": "5a478d1f4a60e811120379f0ac63975186ab00c80a253b615c43e448911116a7"
+    },
+    {
+      "repository": "jaredpalmer/tsdx",
+      "commit": "5b1aa0d67788bfb5ae46e6845e2e4e07c1c73e99",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "monorepos-workspaces",
+      "expected_lock_sha256": "16a1372baec4de22331cc6dea2d55ce5f41565c20a15905211bca1951d20aa39"
+    },
+    {
+      "repository": "mattermost/mattermost-webapp",
+      "commit": "149cb00b8282fbf3c31a82ed31b1be4d0b660883",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "monorepos-workspaces",
+      "expected_lock_sha256": "cd03abaa420357490e001742451f05786759e9db90efb8cd9aa565acf98dbbbe"
+    },
+    {
+      "repository": "WordPress/gutenberg",
+      "commit": "431fb5ae1502040a3ad83372e2cf809e648f7df3",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "monorepos-workspaces",
+      "expected_lock_sha256": "5da02b9dcfb231037b3f5aa912e04fc9dd57b3e71aa9a56156d8a2ddcc99df5f"
+    },
+    {
+      "repository": "nodejs/node-addon-api",
+      "commit": "13c28f6673776e4015cd8d675e92b143177bb816",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "native-platform",
+      "expected_lock_sha256": "8f96435c44fd6fe26eb40b4edb114f4b0112a4ad9c95c9de73f1bea3652c3d9b"
+    },
+    {
+      "repository": "nodejs/node-gyp",
+      "commit": "ef586e1304b6b05b24ab696b2e849f0c075c3be5",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "native-platform",
+      "expected_lock_sha256": "c661cb774105b6ceac8570ccf064436058e16dc57e65b6f91885fa88356d960b"
+    },
+    {
+      "repository": "prebuild/prebuild",
+      "commit": "015687e30189dc1d378116c720cf0cbd54423d4c",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "native-platform",
+      "expected_lock_sha256": "4f4a13af57160cb8d46bd7d5c9e9cd16ae5eff17687a74cea6e6b638b6603f4f"
+    },
+    {
+      "repository": "prebuild/prebuildify",
+      "commit": "633d8ff6c225e80834f043855d92ae6c6c55a75f",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "native-platform",
+      "expected_lock_sha256": "6c23b02113d431dd535a30b80db381227c29e77c13fe7da5bcd3584dcf82a970"
+    },
+    {
+      "repository": "mapbox/node-pre-gyp",
+      "commit": "14fe6fdcf51861e4bc8b7333765b27a23ccc9ae5",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "native-platform",
+      "expected_lock_sha256": "3f91fd64a3b941c82d6e908a22d3cc22919c7d447ebaffb1f8543513c6066150"
+    },
+    {
+      "repository": "neon-bindings/neon",
+      "commit": "38960e4381d9ad13b551cdf2d261f609167c9bc2",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "native-platform",
+      "expected_lock_sha256": "f6169e004f60836763ada91e0a033206c9ac3b03b4d89a8b7e11ce1c5b276c58"
+    },
+    {
+      "repository": "lovell/sharp",
+      "commit": "7f045b7006745a71ade3c8d0a9d515c5d675e48d",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "native-platform",
+      "expected_lock_sha256": "cc6473344a123c6479ea6fd0d75d1e99a731fc0b8d11923716db0f8fa634c047"
+    },
+    {
+      "repository": "Automattic/node-canvas",
+      "commit": "cffde0df80b385f5787c29369194966b39496066",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "native-platform",
+      "expected_lock_sha256": "122d2661674e8fe08af5766af55c6a200679538ee8fd2ae955adba7a168a4869"
+    },
+    {
+      "repository": "kelektiv/node.bcrypt.js",
+      "commit": "24aa3c50a990db8cea4f545cd21b8740ea0364ea",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "native-platform",
+      "expected_lock_sha256": "d60af1447edee0519f26235fde94ee26a179ed2b07ae50836a20816fdc439ef5"
+    },
+    {
+      "repository": "ranisalt/node-argon2",
+      "commit": "60e11efeab37cf8c74eda8e4d0949ca2b3f98943",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "native-platform",
+      "expected_lock_sha256": "18cea357abf0069eae7b893844d92e25d435a9bb51c59ab4f37f1351f62de7ba"
+    },
+    {
+      "repository": "tj/commander.js",
+      "commit": "ba6d13ddb4243e5913367734f8c159089ffe7834",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "cli-developer-tools",
+      "expected_lock_sha256": "b92530c30cb2ab5770f24e632e60a8b031e2c90cc268b5c1ffe524907c84c233"
+    },
+    {
+      "repository": "yargs/yargs",
+      "commit": "4153e0f097aeaf43a71a2530db6dda51dff2c544",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "cli-developer-tools",
+      "expected_lock_sha256": "fbab2725e79189189ff45ccef1cdee7b7400af5bdb7197b407c2aea118177130"
+    },
+    {
+      "repository": "oclif/core",
+      "commit": "2cd460c3d252488692fdd1ed1aef45b2359f1e04",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "cli-developer-tools",
+      "expected_lock_sha256": "a240a74845602a284d96530c042b4c53d8d9bbdfc561d173a1d2a58156ef850c"
+    },
+    {
+      "repository": "vadimdemedes/ink",
+      "commit": "25766aec618bd62030069f57dd081e5ebdd46add",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "cli-developer-tools",
+      "expected_lock_sha256": "d333e754c053bf7855a00a16c6db7b2c649c36efa610a8eae97a127eaa12cd45"
+    },
+    {
+      "repository": "terkelg/prompts",
+      "commit": "58771d2911fc2a9c3751a0143ed66cf4321c8514",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "cli-developer-tools",
+      "expected_lock_sha256": "f739cb0d3703ef182501b4ed7737e58dd44310c5814af279b95c2cce04135e8b"
+    },
+    {
+      "repository": "chalk/chalk",
+      "commit": "aa06bb5ac3f14df9fda8cfb54274dfc165ddfdef",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "cli-developer-tools",
+      "expected_lock_sha256": "fa515ad809b317a7f969b529dab10841b0fa35e58d36b410bf4c4ca9e1aba5fd"
+    },
+    {
+      "repository": "sindresorhus/ora",
+      "commit": "86403dcc176ad26a94f3005774f8c7fbebad2714",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "cli-developer-tools",
+      "expected_lock_sha256": "f01935cc562276fbdb98567e1d11725cc9d1e849329da77885e7558ef458eb2e"
+    },
+    {
+      "repository": "sindresorhus/execa",
+      "commit": "5944b2d176c69591d0eb35a383d0c16758060ae8",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "cli-developer-tools",
+      "expected_lock_sha256": "f50aad4c72202d9cf1eccf30d166b222f76241f50395a600f2cb81c656fd23bd"
+    },
+    {
+      "repository": "google/zx",
+      "commit": "00a2c484e219c2e84bfc3a199febf7fbce2cfbf4",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "cli-developer-tools",
+      "expected_lock_sha256": "764171c5e516826de9bc5be21f0b89c96062a6a8abe7c924a57755d368ed87c2"
+    },
+    {
+      "repository": "shelljs/shelljs",
+      "commit": "f364da6625945414440bb15210f102ba5fc10ed9",
+      "subdirectory": ".",
+      "npm": "11.12.1",
+      "category": "cli-developer-tools",
+      "expected_lock_sha256": "0c82d86ff58a5c52416fb727034863251dce3903d432fb46b760bc3bfe9e00a8"
+    }
+  ]
+}

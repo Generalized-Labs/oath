@@ -58,7 +58,11 @@ oath run build            # run script with pre/post hooks
 oath exec prettier .      # run package binary (npx replacement)
 oath exec --dry-run --json tsx # inspect identity, integrity, capabilities, and policy
 oath exec --sandbox-mode native tsx # require native OS containment
-oath publish              # publish to npm registry
+oath publish --dry-run --json # inspect the exact npm packlist and release evidence
+oath publish --stage      # assess, sign, and submit through npm staged publishing
+oath stage list --json    # inspect npm staged releases (npm 11.15+)
+oath transfer create --output oath-transfer --json # signed agent-to-agent handoff
+oath transfer verify oath-transfer --trusted-public-key <base64> --json # verify assets and signer
 oath log                  # view transparency log
 oath score <pkg>          # security score for a package
 ```
@@ -143,6 +147,24 @@ present that as Linux- or Windows-equivalent containment.
 
 Approvals bind package identity, integrity, capabilities, and sandbox policy. A
 new tarball hash always requires a new assessment and decision.
+
+## Publishing and package transfer
+
+`oath publish` uses npm's actual `npm pack --dry-run --json --ignore-scripts`
+file list as the authoritative assessment input. It records file and capability
+diffs from the previous Oath assessment and persists a signed assessment, SPDX
+SBOM, and SLSA-shaped provenance statement before publication. These artifacts
+do not prove that a package is safe.
+
+For registry-side review, npm 11.15+ and Node 22.14+ users can stage with
+`oath publish --stage`, then list, view, download, approve, or reject through
+`oath stage`. Approval and rejection require explicit `--yes` confirmation and
+npm proof-of-presence. For an offline or agent-to-agent handoff, `oath transfer`
+creates a signed capsule binding the tarball and evidence hashes. The receiver
+must supply the expected Ed25519 key from a separate trusted channel. Without
+that trust anchor, verification returns `abstain`; with it, verification still
+returns `review-required`. Execute transferred code only after a fresh Oath
+assessment and an appropriate sandbox decision.
 
 ## Requirements
 

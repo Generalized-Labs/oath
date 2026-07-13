@@ -16,15 +16,16 @@ skipped checks to look like security evidence.
 Oath has two independent release programs:
 
 1. Compatibility runs 100 pinned, npm-11.12.1-eligible projects in 20 shards on
-   the organization-managed `oath-ubuntu-300gb` larger-runner pool. npm and Oath
-   trees are materialized sequentially. A final aggregation job requires 100
-   unique exact comparisons at the pinned commit and lock hash.
+   the approved Blacksmith `blacksmith-16vcpu-ubuntu-2404` runner pool. npm and
+   Oath trees are materialized sequentially. A final aggregation job requires
+   100 unique exact comparisons at the pinned commit and lock hash.
 2. Native security runs on Ubuntu 22.04, Ubuntu 24.04, Windows Server 2022, and
-   Windows Server 2025. Strict Linux mode requires Landlock ABI V6 (kernel
-   6.12+): Ubuntu 24.04 runs the adversarial suite, while the hosted Ubuntu
-   22.04/kernel 6.8 lane must prove that strict mode fails closed. Missing
-   controls never trigger a compatibility fallback. Capability reports are
-   checksummed, attested through GitHub OIDC, and retained with the test output.
+   Windows Server 2025. Strict Linux mode runs only when the launcher verifies
+   its required namespaces, seccomp, Landlock, resource, filesystem, and
+   network controls on the native kernel. Ubuntu 22.04 must prove fail-closed
+   behavior when the full contract is unavailable. Missing controls never
+   trigger a compatibility fallback. Capability reports are checksummed,
+   attested through GitHub OIDC, and retained with the test output.
 
 Moving repository HEAD is never a release input. Candidate refresh and npm
 eligibility preflight happen in a separate canary process.
@@ -37,12 +38,13 @@ eligibility preflight happen in a separate canary process.
   security gates.
 - The checked-in pinned corpus becomes release-critical evidence and requires
   review when commits or lock hashes change.
-- GitHub Team or Enterprise is required for the managed larger-runner option;
-  ephemeral one-job self-hosted VMs are the supported alternative.
+- The corpus execution boundary includes Blacksmith as an approved third-party
+  runner provider; job permissions and credentials remain minimized.
 
 ## Release gate
 
-- 500/500 differential fixtures.
+- 500/500 generated stress executions, explicitly labeled as repetitions.
+- Every reviewed independent behavioral fixture passes on the OS matrix.
 - 100/100 pinned real projects, ten in each required category.
 - Zero successful Linux or Windows adversarial escapes.
 - No skipped/unavailable native controls.

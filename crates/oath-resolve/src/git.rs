@@ -9,6 +9,7 @@
 //!   gitlab:user/repo
 
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 /// A parsed git dependency specification
@@ -29,13 +30,18 @@ pub fn is_git_spec(spec: &str) -> bool {
         || spec.starts_with("bitbucket:")
         || spec.starts_with("git+https://")
         || spec.starts_with("git+ssh://")
+        || spec.starts_with("ssh://")
         || spec.starts_with("git://")
 }
 
 /// Stable, path-safe filename for cached git dependency tarballs.
-pub fn git_cache_file_name(name: &str, version: &str) -> String {
+pub fn git_cache_file_name(name: &str, version: &str, resolved_url: &str) -> String {
+    let source = Sha256::digest(resolved_url.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     format!(
-        "{}-{}.tgz",
+        "{}-{}-{source}.tgz",
         safe_cache_component(&name.replace('/', "+")),
         safe_cache_component(version)
     )
@@ -115,7 +121,10 @@ pub fn parse_git_spec(spec: &str) -> Option<GitSpec> {
         });
     }
 
-    if let Some(url_part) = spec.strip_prefix("git+ssh://") {
+    if let Some(url_part) = spec
+        .strip_prefix("git+ssh://")
+        .or_else(|| spec.strip_prefix("ssh://"))
+    {
         // git+ssh://git@github.com/user/repo.git
         // strip "git+ssh://"
         let (url_no_ref, git_ref) = split_ref(url_part);
@@ -288,8 +297,9 @@ async fn resolve_via_git_clone(url: &str, git_ref: &str) -> Result<GitResolved> 
     let pkg_json_data =
         std::fs::read(&pkg_json_path).with_context(|| format!("no package.json in {}", url))?;
 
+    let packlist = crate::placement::npm_packlist(&clone_dir)?;
     prune_git_package_metadata(&clone_dir)?;
-    let tar_data = repack_git_package(&clone_dir)?;
+    let tar_data = repack_git_package(&clone_dir, &packlist)?;
 
     parse_git_tarball_from_json(tar_data, &pkg_json_data, url, git_ref)
 }
@@ -304,8 +314,9 @@ fn parse_git_tarball(data: Vec<u8>, resolved_url: &str, _git_ref: &str) -> Resul
     let pkg_json_path = tmp.path().join("package.json");
     let pkg_json_data = std::fs::read(&pkg_json_path)
         .with_context(|| format!("no package.json in tarball from {}", resolved_url))?;
+    let packlist = crate::placement::npm_packlist(tmp.path())?;
     prune_git_package_metadata(tmp.path())?;
-    let normalized = repack_git_package(tmp.path())?;
+    let normalized = repack_git_package(tmp.path(), &packlist)?;
 
     parse_git_tarball_from_json(normalized, &pkg_json_data, resolved_url, _git_ref)
 }
@@ -330,19 +341,41 @@ fn prune_git_package_metadata(root: &std::path::Path) -> Result<()> {
     Ok(())
 }
 
-fn repack_git_package(root: &std::path::Path) -> Result<Vec<u8>> {
+fn repack_git_package(root: &std::path::Path, files: &[std::path::PathBuf]) -> Result<Vec<u8>> {
     use flate2::Compression;
     use flate2::write::GzEncoder;
     let mut tar_data = Vec::new();
     {
         let enc = GzEncoder::new(&mut tar_data, Compression::default());
         let mut tar = tar::Builder::new(enc);
-        tar.append_dir_all("package", root)
-            .context("failed to create normalized git package tarball")?;
+        for relative in files {
+            let source = root.join(relative);
+            // npm-packlist never includes its controlling ignore files, but
+            // root package-manager metadata is pruned before this point as an
+            // additional guard. A disappearing entry is therefore skipped.
+            if !source.symlink_metadata().is_ok() {
+                continue;
+            }
+            let archive_path = std::path::Path::new("package").join(relative);
+            tar.append_path_with_name(&source, &archive_path)
+                .with_context(|| format!("pack git dependency file {}", relative.display()))?;
+        }
         tar.finish()
             .context("failed to finalize git package tarball")?;
     }
     Ok(tar_data)
+}
+
+/// Pack a local `file:` directory with npm's pinned packlist contract. npm
+/// treats directory dependencies as packages, not arbitrary recursive copies.
+pub fn pack_local_package(root: &std::path::Path) -> Result<Vec<u8>> {
+    anyhow::ensure!(
+        root.join("package.json").is_file(),
+        "local dependency has no package.json: {}",
+        root.display()
+    );
+    let files = crate::placement::npm_packlist(root)?;
+    repack_git_package(root, &files)
 }
 
 fn parse_git_tarball_from_json(
@@ -424,8 +457,8 @@ mod tests {
     #[test]
     fn git_cache_file_name_encodes_path_separators() {
         assert_eq!(
-            git_cache_file_name("../evil", "../../outside"),
-            "..+evil-..%2F..%2Foutside.tgz"
+            git_cache_file_name("../evil", "../../outside", "git+https://example.test/repo"),
+            "..+evil-..%2F..%2Foutside-25c821b83477fbe91a49a7136290f4d062c46e017bc91cc0daf18ee34c212f31.tgz"
         );
     }
 

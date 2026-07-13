@@ -12,13 +12,30 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
-    # Organization-managed GitHub larger runner: 8 cores / 300 GB SSD.
-    runs-on: oath-ubuntu-300gb
+    # Approved Blacksmith runner: 16 cores / 64 GB RAM / 750 GB SSD.
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: actions/setup-node@v4
+      - name: Prove large-disk runner contract
+        shell: bash
+        run: |
+          total_kib=$(df -Pk . | awk 'NR==2 {print $2}')
+          free_kib=$(df -Pk . | awk 'NR==2 {print $4}')
+          test "$total_kib" -ge 293601280
+          test "$free_kib" -ge 209715200
+          jq -n \
+            --arg runner "${{ runner.name }}" \
+            --arg os "${{ runner.os }}" \
+            --arg arch "${{ runner.arch }}" \
+            --arg commit "${{ github.sha }}" \
+            --argjson shard "${{ matrix.shard }}" \
+            --argjson total_kib "$total_kib" \
+            --argjson free_kib "$free_kib" \
+            '{schema_version:1,runner:$runner,os:$os,arch:$arch,commit:$commit,shard:$shard,total_kib:$total_kib,free_kib:$free_kib}' \
+            > runner-${{ matrix.shard }}.json
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 24
+          node-version: 24.13.0
       - run: npm install --global npm@11.12.1
       - name: Prove npm reference
         run: test "$(npm --version)" = "11.12.1"
@@ -29,11 +46,13 @@ jobs:
           OATH_PROJECT_SHARDS: 20
           OATH_PROJECT_PREFLIGHT_OUTPUT: compat-results/preflight/preflight-${{ matrix.shard }}.json
           OATH_PROJECT_TIMEOUT_MS: 1200000
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: project-preflight-${{ matrix.shard }}
-          path: compat-results/preflight/preflight-${{ matrix.shard }}.json
+          path: |
+            compat-results/preflight/preflight-${{ matrix.shard }}.json
+            runner-${{ matrix.shard }}.json
 
   merge:
     needs: preflight
@@ -41,16 +60,24 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: project-preflight-*
-          path: compat-results/preflight
+          # Each artifact retains its repo-relative compat-results/preflight path.
+          # Extract at the checkout root so merge-preflight reads that path once,
+          # rather than compat-results/preflight/compat-results/preflight.
+          path: .
           merge-multiple: true
       - name: Select ten eligible projects per category
         run: node scripts/project-corpus.mjs merge-preflight
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: project-corpus-selection
+          path: compat-results/preflight/selection-summary.json
       - name: Validate release corpus
         run: node scripts/project-corpus.mjs validate tests/compat/projects.lock.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: proposed-projects-lock
           path: tests/compat/projects.lock.json

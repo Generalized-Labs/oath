@@ -7,11 +7,12 @@ use std::path::Path;
 
 use crate::graph::{DepGraph, DepNode};
 
-pub const PLACEMENT_PLAN_VERSION: u32 = 1;
+pub const PLACEMENT_PLAN_VERSION: u32 = 2;
 const PLANNER: &str = include_str!("arborist-plan.cjs");
 const NPM_REFERENCE_VERSION: &str = "11.12.1";
 const ARBORIST_VERSION: &str = "9.4.2";
 const INSTALL_CHECKS_VERSION: &str = "8.0.0";
+const PACKLIST_VERSION: &str = "10.0.4";
 const NPM_RUNTIME: &[u8] = include_bytes!("../vendor/npm-11.12.1.tgz");
 const NPM_RUNTIME_SHA256: &str = "e679850e663b16f5f146ee425d0eb0e3442c1d2bda3d513bbfd7c81f5ee5db38";
 
@@ -21,6 +22,8 @@ pub struct PlacementPlan {
     pub planner: PlannerIdentity,
     pub project: String,
     pub nodes: Vec<PlacementNode>,
+    #[serde(default)]
+    pub removed_locations: Vec<String>,
     pub invalid_edges: Vec<PlacementEdge>,
 }
 
@@ -41,6 +44,8 @@ pub struct PlacementNode {
     pub dev: bool,
     pub optional: bool,
     pub has_install_script: bool,
+    #[serde(default)]
+    pub reuse_existing: bool,
     pub link: bool,
     pub target: Option<String>,
     pub edges: Vec<PlacementEdge>,
@@ -235,6 +240,53 @@ impl ArboristPlanner {
     }
 }
 
+/// Return the exact relative file list npm would place in a package tarball.
+/// Git dependencies must be packed from this list rather than from the entire
+/// repository checkout, otherwise editor config, tests, and ignored source can
+/// leak into node_modules and into Oath's assessment surface.
+pub(crate) fn npm_packlist(root: &Path) -> Result<Vec<std::path::PathBuf>> {
+    const SCRIPT: &str = r#"'use strict'
+const Arborist = require(process.argv[3])
+const packlist = require(process.argv[4])
+async function main () {
+  const root = process.argv[2]
+  const tree = await new Arborist({ path: root }).loadActual()
+  const files = await packlist(tree)
+  process.stdout.write(JSON.stringify(files.sort()))
+}
+main().catch(error => { console.error(error.stack || error.message); process.exitCode = 1 })
+"#;
+
+    let runtime = BundledRuntime::extract()?;
+    let script = tempfile::NamedTempFile::new().context("create npm packlist script")?;
+    std::fs::write(script.path(), SCRIPT)?;
+    let root_argument = node_process_path(root);
+    let output = std::process::Command::new("node")
+        .arg(script.path())
+        .arg(root_argument)
+        .arg(runtime.arborist_path())
+        .arg(runtime.packlist_path())
+        .output()
+        .context("launch pinned npm packlist")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "npm packlist failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let files: Vec<std::path::PathBuf> =
+        serde_json::from_slice(&output.stdout).context("decode npm packlist")?;
+    for file in &files {
+        anyhow::ensure!(!file.is_absolute(), "absolute npm packlist path rejected");
+        anyhow::ensure!(
+            file.components()
+                .all(|part| matches!(part, std::path::Component::Normal(_))),
+            "unsafe npm packlist path rejected: {}",
+            file.display()
+        );
+    }
+    Ok(files)
+}
+
 fn hydrate_from_persisted_plan(project: &Path, plan: &mut PlacementPlan) {
     let path = project.join(".oath").join("placement-plan.json");
     let Ok(previous) = PlacementPlan::read(&path) else {
@@ -292,6 +344,11 @@ impl BundledRuntime {
             "npm-install-checks",
             INSTALL_CHECKS_VERSION,
         )?;
+        verify_runtime_package(
+            &package_root.join("node_modules/npm-packlist/package.json"),
+            "npm-packlist",
+            PACKLIST_VERSION,
+        )?;
         Ok(Self {
             _temp: temp,
             package_root,
@@ -304,6 +361,10 @@ impl BundledRuntime {
 
     fn install_checks_path(&self) -> std::path::PathBuf {
         self.package_root.join("node_modules/npm-install-checks")
+    }
+
+    fn packlist_path(&self) -> std::path::PathBuf {
+        self.package_root.join("node_modules/npm-packlist")
     }
 }
 
@@ -362,6 +423,23 @@ fn validate_locations(plan: &PlacementPlan) -> Result<()> {
             node.location
         );
     }
+    for removed in &plan.removed_locations {
+        let location = Path::new(removed);
+        anyhow::ensure!(
+            !location.is_absolute(),
+            "absolute removal path rejected: {removed}"
+        );
+        anyhow::ensure!(
+            location
+                .components()
+                .all(|part| !matches!(part, std::path::Component::ParentDir)),
+            "removal traversal rejected: {removed}"
+        );
+        anyhow::ensure!(
+            removed.starts_with("node_modules/"),
+            "removal outside node_modules rejected: {removed}"
+        );
+    }
     Ok(())
 }
 
@@ -371,7 +449,7 @@ mod tests {
     #[test]
     fn rejects_traversal_locations() {
         let plan = PlacementPlan {
-            schema_version: 1,
+            schema_version: PLACEMENT_PLAN_VERSION,
             planner: PlannerIdentity {
                 name: "test".into(),
                 npm: "11".into(),
@@ -387,10 +465,12 @@ mod tests {
                 dev: false,
                 optional: false,
                 has_install_script: false,
+                reuse_existing: false,
                 link: false,
                 target: None,
                 edges: vec![],
             }],
+            removed_locations: vec![],
             invalid_edges: vec![],
         };
         assert!(validate_locations(&plan).is_err());
@@ -399,7 +479,7 @@ mod tests {
     #[test]
     fn preserves_location_identity_in_dependency_graph() {
         let plan: PlacementPlan = serde_json::from_value(serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "planner": {"name": "test", "npm": "11"},
             "project": ".",
             "invalid_edges": [],
@@ -428,5 +508,58 @@ mod tests {
         assert_eq!(plan.planner.name, "@npmcli/arborist");
         assert_eq!(plan.planner.npm, NPM_REFERENCE_VERSION);
         assert!(plan.nodes.is_empty());
+    }
+
+    #[test]
+    fn bundled_packlist_obeys_npm_files_field() {
+        let project = tempfile::tempdir().unwrap();
+        std::fs::create_dir(project.path().join("lib")).unwrap();
+        std::fs::write(
+            project.path().join("package.json"),
+            r#"{"name":"packed","version":"1.0.0","files":["lib"]}"#,
+        )
+        .unwrap();
+        std::fs::write(project.path().join("lib/index.js"), "module.exports = 1").unwrap();
+        std::fs::write(project.path().join("secret.txt"), "do not publish").unwrap();
+
+        let files = npm_packlist(project.path()).unwrap();
+        assert!(files.contains(&std::path::PathBuf::from("package.json")));
+        assert!(files.contains(&std::path::PathBuf::from("lib/index.js")));
+        assert!(!files.contains(&std::path::PathBuf::from("secret.txt")));
+    }
+
+    #[test]
+    fn bundled_planner_uses_npm_default_for_local_directory_links() {
+        let project = tempfile::tempdir().unwrap();
+        let local = project.path().join("local");
+        std::fs::create_dir(&local).unwrap();
+        std::fs::write(
+            project.path().join("package.json"),
+            r#"{"name":"root","version":"1.0.0","dependencies":{"local":"file:./local"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            local.join("package.json"),
+            r#"{"name":"local","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        let plan = ArboristPlanner::plan(project.path()).unwrap();
+        let local_node = plan
+            .nodes
+            .iter()
+            .find(|node| node.location == "node_modules/local")
+            .unwrap();
+        assert!(local_node.link);
+        let planned_target = std::path::PathBuf::from(local_node.target.as_ref().unwrap());
+        assert_eq!(
+            planned_target.canonicalize().unwrap(),
+            local.canonicalize().unwrap()
+        );
+    }
+
+    #[test]
+    fn planner_uses_arborists_dependency_bundle_boundary() {
+        assert!(PLANNER.contains(".filter(node => !node.inDepBundle"));
+        assert!(!PLANNER.contains(".filter(node => !node.inBundle &&"));
     }
 }

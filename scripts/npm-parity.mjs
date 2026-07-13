@@ -11,7 +11,15 @@ const oath = resolve(process.env.OATH_BIN ?? "target/debug/oath");
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
 function run(command, args, cwd, home = process.env.HOME ?? process.env.USERPROFILE ?? tmpdir(), extraEnv = {}) {
-  const result = spawnSync(command, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, shell: process.platform === "win32" && command.toLowerCase().endsWith(".cmd"), env: { ...process.env, CI: "1", HOME: home, OATH_HOME: join(home, ".oath"), npm_config_cache: join(home, ".npm"), ...extraEnv } });
+  const result = spawnSync(command, args, {
+    cwd,
+    encoding: "utf8",
+    maxBuffer: 64 * 1024 * 1024,
+    timeout: Number(process.env.OATH_COMPAT_TIMEOUT_MS ?? 600_000),
+    killSignal: "SIGKILL",
+    shell: process.platform === "win32" && command.toLowerCase().endsWith(".cmd"),
+    env: { ...process.env, CI: "1", HOME: home, OATH_HOME: join(home, ".oath"), npm_config_cache: join(home, ".npm"), ...extraEnv }
+  });
   return {
     status: result.status,
     stdout: result.stdout ?? "",
@@ -70,7 +78,7 @@ try {
   // versions and integrities that Oath must reproduce. Force lock creation for
   // projects such as Express that disable package-lock in their checked-in npmrc.
   const lockResult = run(npmCommand, ["install", "--package-lock-only", "--ignore-scripts", "--package-lock=true"], lockDir, home);
-  const lockSha256 = lockResult.status === 0
+  let lockSha256 = lockResult.status === 0
     ? createHash("sha256").update(await readFile(join(lockDir, "package-lock.json"))).digest("hex")
     : null;
   if (lockResult.status === 0) {
@@ -84,6 +92,9 @@ try {
     await rm(join(npmDir, "node_modules"), { recursive: true, force: true });
     const offline = mode === "offline";
     npmResult = run(npmCommand, ["install", "--ignore-scripts", "--package-lock=true", ...(offline ? ["--offline"] : [])], npmDir, home);
+  }
+  if (npmResult.status === 0) {
+    lockSha256 = createHash("sha256").update(await readFile(join(npmDir, "package-lock.json"))).digest("hex");
   }
   const npmTree = npmResult.status === 0 ? await tree(join(npmDir, "node_modules")) : [];
 

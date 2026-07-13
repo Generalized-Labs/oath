@@ -1,0 +1,32 @@
+{
+  "schema_version": 3,
+  "generated_at": "2026-07-13T00:00:00Z",
+  "reference_npm": "11.12.1",
+  "generated_stress": {
+    "executed": 500,
+    "equivalent": 500,
+    "independent_templates": 3,
+    "claim": "deterministic stress evidence, not 500 independent npm behaviors"
+  },
+  "independent_behavioral": {
+    "current_reviewed_target": 3,
+    "executed": 3,
+    "equivalent": 3,
+    "ga_contract_complete": false
+  },
+  "real_projects": {
+    "target": 100,
+    "current_unique_exact_equivalents": 10,
+    "gate_complete": false
+  },
+  "native_security": {
+    "linux_pr_evidence": "strict controls passed on Ubuntu 24.04; Ubuntu 22.04 proved fail-closed degradation",
+    "windows_pr_evidence": "passed on Windows Server 2022 and 2025",
+    "release_attestations_published": false
+  },
+  "limitations": [
+    "The 100-project GA gate is incomplete.",
+    "Release capability attestations require a scheduled or manually dispatched evidence run.",
+    "Oath is slower than npm and Bun in the current installer benchmark."
+  ]
+}

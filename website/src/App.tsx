@@ -48,7 +48,7 @@ const manifestRows = [
 ];
 
 const proof = [
-  ["500 / 500", "generated compatibility fixtures"],
+  ["500 / 500", "generated stress executions"],
   ["3 / 3", "post-merge real-project proofs"],
   ["35,858", "matched tree entries"],
   ["0", "successful native escape tests"],
@@ -249,6 +249,7 @@ function App() {
           <div className="flex flex-col justify-center gap-3 border-t-2 border-paper bg-paper p-6 text-carbon lg:min-w-[360px] lg:border-l-2 lg:border-t-0">
             <Button size="lg" onClick={copyCommand}>{copied ? "Command copied" : "Copy install command"} <Copy className="h-4 w-4" /></Button>
             <Button size="lg" variant="outline" asChild><a href="https://github.com/Generalized-Labs/oath" target="_blank" rel="noreferrer">Read the evidence <ArrowUpRight className="h-4 w-4" /></a></Button>
+            <Button size="lg" variant="outline" asChild><a href="https://github.com/Generalized-Labs/oath/issues/new?template=design-partner.yml" target="_blank" rel="noreferrer">Join the private beta <ArrowUpRight className="h-4 w-4" /></a></Button>
           </div>
         </div>
         <footer className="mt-8 flex flex-col justify-between gap-4 font-mono text-[9px] font-bold uppercase tracking-[0.18em] text-evidence sm:flex-row">

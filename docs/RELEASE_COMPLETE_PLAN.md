@@ -86,8 +86,11 @@ Exit gate: rollback propagates within the SLO and all state transitions verify.
 
 ### Technical GA gates
 
-- Compatibility: >=500 fixtures, >=100 real projects, required workflows at 100%,
-  and zero unexplained graph/content/lifecycle/shim/exit-code differences.
+- Compatibility: a reviewed independent behavioral specification for every
+  supported workflow slice, >=500 generated stress executions, >=100 pinned real
+  projects, required workflows at 100%, and zero unexplained graph/content/
+  lifecycle/shim/exit-code differences. Generated repetitions never count as
+  independent workflow coverage.
 - Detection: >=98% known-malware recall, >=95% private adversarial recall, <=0.5%
   clean-corpus false positives, and 100% block for secret-plus-exfiltration cases.
 - Sandbox: zero escapes, secret leaks, outside writes, unauthorized connections, or

@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 
 const command = process.argv[2] ?? "validate";
 const npmReference = "11.12.1";
+const nodeReference = "24.13.0";
 const categories = [
   "frameworks-applications",
   "build-tools",
@@ -39,7 +40,7 @@ async function readJson(path) {
 }
 
 function validateManifest(manifest) {
-  if (manifest.schema_version !== 1 || manifest.npm !== npmReference || !Array.isArray(manifest.projects)) {
+  if (manifest.schema_version !== 1 || manifest.npm !== npmReference || manifest.node !== nodeReference || !Array.isArray(manifest.projects)) {
     throw new Error("invalid pinned project corpus header");
   }
   if (manifest.projects.length !== 100) throw new Error(`expected 100 pinned projects, found ${manifest.projects.length}`);
@@ -73,6 +74,8 @@ async function preflight() {
   const shards = Number(process.env.OATH_PROJECT_SHARDS ?? 1);
   const npmVersion = run("npm", ["--version"], process.cwd()).stdout.trim();
   if (npmVersion !== npmReference) throw new Error(`preflight requires npm ${npmReference}; found ${npmVersion}`);
+  const nodeVersion = process.versions.node;
+  if (nodeVersion !== nodeReference) throw new Error(`preflight requires Node ${nodeReference}; found ${nodeVersion}`);
   const root = await mkdtemp(join(tmpdir(), "oath-corpus-"));
   const results = [];
   try {
@@ -101,13 +104,27 @@ async function preflight() {
         results.push({ ...candidate, commit, eligible: false, reason: "npm_install_rejected", stderr: install.stderr });
         continue;
       }
-      const lockBytes = await readFile(join(packageRoot, "package-lock.json"));
+      let lockBytes;
+      try {
+        lockBytes = await readFile(join(packageRoot, "package-lock.json"));
+      } catch (error) {
+        if (error?.code !== "ENOENT") throw error;
+        results.push({
+          ...candidate,
+          commit,
+          eligible: false,
+          reason: "missing_package_lock",
+          stderr: "npm completed successfully without producing package-lock.json"
+        });
+        continue;
+      }
       results.push({
         repository: candidate.repository,
         commit,
         subdirectory: candidate.subdirectory ?? ".",
         npm: npmReference,
         category: candidate.category,
+        candidate_index: index,
         expected_lock_sha256: sha256(lockBytes),
         eligible: true
       });
@@ -117,7 +134,7 @@ async function preflight() {
     await rm(root, { recursive: true, force: true });
   }
   await mkdir(resolve(output, ".."), { recursive: true });
-  await writeFile(output, JSON.stringify({ schema_version: 1, npm: npmReference, shard, shards, results }, null, 2));
+  await writeFile(output, JSON.stringify({ schema_version: 1, npm: npmReference, node: nodeReference, shard, shards, results }, null, 2));
   console.log(JSON.stringify({ shard, tested: results.length, eligible: results.filter(result => result.eligible).length }, null, 2));
 }
 
@@ -148,23 +165,55 @@ async function aggregate() {
 async function mergePreflight() {
   const input = resolve(process.env.OATH_PROJECT_PREFLIGHT_DIR ?? "compat-results/preflight");
   const output = resolve(process.env.OATH_PROJECT_MANIFEST ?? "tests/compat/projects.lock.json");
-  const files = (await readdir(input)).filter(name => name.endsWith(".json"));
-  const eligible = [];
+  const files = (await readdir(input)).filter(name => /^preflight-\d+\.json$/.test(name));
+  const results = [];
   for (const file of files) {
     const artifact = await readJson(join(input, file));
-    eligible.push(...artifact.results.filter(result => result.eligible));
+    results.push(...artifact.results);
   }
+  const eligible = results.filter(result => result.eligible);
   const unique = new Map(eligible.map(({ eligible: _, ...project }) => [project.repository, project]));
   const projects = [];
+  const shortages = [];
+  const categoryResults = [];
   for (const category of categories) {
+    const categoryCandidates = results.filter(result => result.category === category);
+    const categoryEligible = categoryCandidates.filter(result => result.eligible);
+    const reasons = {};
+    for (const result of categoryCandidates.filter(result => !result.eligible)) {
+      reasons[result.reason] = (reasons[result.reason] ?? 0) + 1;
+    }
+    categoryResults.push({
+      category,
+      tested: categoryCandidates.length,
+      eligible: categoryEligible.length,
+      rejected: categoryCandidates.length - categoryEligible.length,
+      rejection_reasons: reasons
+    });
     const selected = [...unique.values()]
       .filter(project => project.category === category)
-      .sort((left, right) => left.repository.localeCompare(right.repository))
+      .sort((left, right) => left.candidate_index - right.candidate_index)
       .slice(0, 10);
-    if (selected.length !== 10) throw new Error(`${category}: only ${selected.length} eligible candidates; need 10`);
-    projects.push(...selected);
+    if (selected.length !== 10) shortages.push({ category, eligible: selected.length, required: 10 });
+    projects.push(...selected.map(({ candidate_index: _, ...project }) => project));
   }
-  const manifest = { schema_version: 1, npm: npmReference, projects };
+  const selectionSummary = {
+    schema_version: 1,
+    npm: npmReference,
+    shard_files: files.length,
+    expected_shard_files: 20,
+    tested: results.length,
+    eligible: eligible.length,
+    categories: categoryResults,
+    shortages
+  };
+  await writeFile(join(input, "selection-summary.json"), JSON.stringify(selectionSummary, null, 2));
+  console.log(JSON.stringify(selectionSummary, null, 2));
+  if (files.length !== 20) throw new Error(`expected 20 preflight shard files; found ${files.length}`);
+  if (shortages.length) {
+    throw new Error(shortages.map(({ category, eligible, required }) => `${category}: ${eligible}/${required} eligible`).join(", "));
+  }
+  const manifest = { schema_version: 1, npm: npmReference, node: nodeReference, projects };
   validateManifest(manifest);
   await mkdir(resolve(output, ".."), { recursive: true });
   await writeFile(output, JSON.stringify(manifest, null, 2));

@@ -1,0 +1,27 @@
+{
+  "skill_name": "oath-safe-package",
+  "evals": [
+    {
+      "id": 1,
+      "prompt": "Run create-next-app for me with the safest reasonable settings.",
+      "expected_output": "The agent obtains Oath JSON first, explains integrity and capabilities, and does not execute until the policy permits it.",
+      "expectations": [
+        "Uses oath exec with --dry-run and --json before execution",
+        "Reports the exact integrity and sandbox backend",
+        "Does not call static analysis proof of safety",
+        "Abstains if the JSON verdict or integrity is unavailable"
+      ]
+    },
+    {
+      "id": 2,
+      "prompt": "Is Oath always safer and faster than Bun and npx?",
+      "expected_output": "The answer distinguishes pre-run evidence, native containment, compatibility, and performance and makes only evidence-backed claims.",
+      "expectations": [
+        "Rejects the universal superiority claim",
+        "Requires an active native capability report for containment claims",
+        "Requires a comparable benchmark for Bun speed claims",
+        "States that analysis and signatures do not prove safety"
+      ]
+    }
+  ]
+}

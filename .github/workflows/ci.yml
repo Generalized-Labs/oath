@@ -16,6 +16,75 @@ permissions:
   contents: read
 
 jobs:
+  agent-workflows:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.13.0
+      - name: Validate agent skill contracts and evals
+        run: node scripts/validate-agent-skills.mjs
+
+  independent-behavioral:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.13.0
+      - run: npm install --global npm@11.12.1
+      - name: Install Linux sandbox linker dependency
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+      - run: cargo build --locked --bin oath
+      - name: Run independent npm behavior contract
+        run: node scripts/compat-behavioral.mjs --execute
+        env:
+          OATH_BIN: ${{ runner.os == 'Windows' && 'target/debug/oath.exe' || 'target/debug/oath' }}
+          OATH_COMPAT_RESULTS: compat-results/behavioral-${{ runner.os }}
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: compatibility-independent-behavioral-${{ runner.os }}
+          path: compat-results/behavioral-${{ runner.os }}/behavioral-summary.json
+
+  npm-reference-canary:
+    continue-on-error: true
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24
+      - name: Install npm canary
+        run: npm install --global npm@11.18.0
+      - name: Prove canary identity
+        shell: bash
+        run: test "$(npm --version)" = "11.18.0"
+      - name: Install Linux sandbox linker dependency
+        if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+      - run: cargo build --release --locked --bin oath
+      - name: Compare the independent baseline against npm 11.18
+        run: node scripts/compat-behavioral.mjs --execute
+        env:
+          OATH_BIN: ${{ runner.os == 'Windows' && 'target/release/oath.exe' || 'target/release/oath' }}
+          OATH_COMPAT_RESULTS: compat-results/npm-canary
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: npm-11.18-canary-${{ runner.os }}
+          path: compat-results/npm-canary/behavioral-summary.json
+
   postgres-registry:
     runs-on: ubuntu-latest
     services:
@@ -60,7 +129,7 @@ jobs:
       - name: Install Node npm reference
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.13.0
 
       - name: Pin npm compatibility reference
         run: npm install --global npm@11.12.1
@@ -147,8 +216,19 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
+      - name: Prove the SQLx optional MySQL RSA backend is unreachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          if cargo tree --locked --invert rsa 2>&1 | grep -q '^rsa v'; then
+            echo 'rsa unexpectedly entered the active Oath dependency graph' >&2
+            exit 1
+          fi
+
       - name: Cargo audit
-        run: cargo audit
+        # SQLx's facade locks its disabled optional MySQL backend, which still
+        # names rsa 0.9. The step above fails if that crate ever becomes active.
+        run: cargo audit --ignore RUSTSEC-2023-0071
 
   compatibility-scale:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -161,8 +241,10 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.13.0
       - run: npm install --global npm@11.12.1
+      - name: Install Linux sandbox linker dependency
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
       - run: cargo build --locked --bin oath
       - run: node scripts/compat-scale.mjs --execute
         env:
@@ -180,14 +262,28 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
-    # Organization-managed GitHub larger runner: 8 cores / 300 GB SSD.
-    # Deliberately no 14 GB ubuntu-latest fallback: insufficient disk must fail closed.
-    runs-on: oath-ubuntu-300gb
+    # Approved Blacksmith runner: 16 cores / 64 GB RAM / 750 GB SSD.
+    # Deliberately no small-disk fallback: insufficient disk must fail closed.
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Install the workspace Rust toolchain
+        run: rustup toolchain install stable --profile minimal && rustup default stable
+      - name: Install Linux sandbox linker dependency
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+      - name: Prove large-disk runner contract
+        shell: bash
+        run: |
+          total_kib=$(df -Pk . | awk 'NR==2 {print $2}')
+          free_kib=$(df -Pk . | awk 'NR==2 {print $4}')
+          test "$total_kib" -ge 293601280
+          test "$free_kib" -ge 209715200
+          jq -n --arg runner "${{ runner.name }}" --arg os "${{ runner.os }}" --arg arch "${{ runner.arch }}" --arg commit "${{ github.sha }}" \
+            --argjson shard "${{ matrix.shard }}" --argjson total_kib "$total_kib" --argjson free_kib "$free_kib" \
+            '{schema_version:1,runner:$runner,os:$os,arch:$arch,commit:$commit,shard:$shard,total_kib:$total_kib,free_kib:$free_kib}' > runner-${{ matrix.shard }}.json
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.13.0
       - run: npm install --global npm@11.12.1
       - run: cargo build --locked --bin oath
       - run: node scripts/project-parity.mjs
@@ -200,7 +296,9 @@ jobs:
         if: always()
         with:
           name: compatibility-projects-${{ matrix.shard }}
-          path: compat-results/ga/*.json
+          path: |
+            compat-results/ga/*.json
+            runner-${{ matrix.shard }}.json
 
   real-project-aggregate:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -211,7 +309,10 @@ jobs:
       - uses: actions/download-artifact@v4
         with:
           pattern: compatibility-projects-*
-          path: compat-results/ga
+          # Each shard artifact contains both compat-results/ga/*.json and a
+          # root-level runner attestation. Extract at the checkout root so the
+          # corpus aggregator sees compat-results/ga exactly once.
+          path: .
           merge-multiple: true
       - run: node scripts/project-corpus.mjs aggregate
       - uses: actions/upload-artifact@v4
@@ -260,7 +361,7 @@ jobs:
           OATH_NATIVE_TEST_BIN: ${{ github.workspace }}/target/release/oath
       - run: sha256sum sandbox-capabilities-linux.json > sandbox-capabilities-linux.sha256
       - name: Sign capability report with GitHub artifact attestation
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
           subject-path: sandbox-capabilities-linux.json
@@ -296,7 +397,7 @@ jobs:
       - shell: pwsh
         run: Get-FileHash sandbox-capabilities-windows.json -Algorithm SHA256 | Format-List | Out-File sandbox-capabilities-windows.sha256
       - name: Sign capability report with GitHub artifact attestation
-        if: github.event_name != 'pull_request'
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
           subject-path: sandbox-capabilities-windows.json
@@ -308,16 +409,18 @@ jobs:
 
   release-evidence-gate:
     if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-    needs: [compatibility-scale, real-project-aggregate, native-linux-security, native-windows-security]
+    needs: [independent-behavioral, compatibility-scale, real-project-aggregate, native-linux-security, native-windows-security]
     runs-on: ubuntu-latest
     steps:
       - name: Require every independent evidence program
         env:
           FIXTURES: ${{ needs.compatibility-scale.result }}
+          BEHAVIORS: ${{ needs.independent-behavioral.result }}
           PROJECTS: ${{ needs.real-project-aggregate.result }}
           LINUX: ${{ needs.native-linux-security.result }}
           WINDOWS: ${{ needs.native-windows-security.result }}
         run: |
+          test "$BEHAVIORS" = success
           test "$FIXTURES" = success
           test "$PROJECTS" = success
           test "$LINUX" = success

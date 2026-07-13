@@ -35,8 +35,12 @@ sha1 = "0.10"
 blake3 = "1"
 ed25519-dalek = "2"
 getrandom = "0.3"
-object_store = { version = "0.14", features = ["aws", "gcp"] }
-jsonwebtoken = { version = "10", features = ["rust_crypto"] }
+# Pin the upstream quick-xml 0.41 security update until object_store 0.14.1 is
+# published. The revision is the minimal upstream dependency-only fix.
+object_store = { git = "https://github.com/apache/arrow-rs-object-store", rev = "fd44ebb9c1158660795ec22d7b11acf31c3fe113", features = ["aws", "gcp"] }
+# AWS-LC provides the same OIDC verification algorithms without pulling the
+# unfixed RustCrypto RSA timing-side-channel dependency.
+jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
 hmac = "0.12"
 hex = "0.4"
 

@@ -15,17 +15,17 @@ if(projects.length!==projectTarget)throw new Error(`expected ${projectTarget} re
 const templates=["basic","alias","workspace"];
 const fixtures=Array.from({length:fixtureCount},(_,id)=>({id,template:templates[id%templates.length],mode:["clean","warm","offline","repeat","interrupted"][Math.floor(id/templates.length)%5],shard:id%shards}));
 await mkdir(out,{recursive:true});
-await writeFile(join(out,"manifest.json"),JSON.stringify({schema_version:1,reference_npm_major:11,fixture_target:fixtureCount,project_target:projectTarget,shards,fixtures,projects},null,2));
+await writeFile(join(out,"manifest.json"),JSON.stringify({schema_version:2,evidence_class:"generated_stress",reference_npm_major:11,generated_execution_target:fixtureCount,independent_template_count:templates.length,independent_templates:templates,project_target:projectTarget,shards,fixtures,projects},null,2));
 
 const results=[];
 if(execute){
   for(const fixture of fixtures.filter(item=>item.shard===shard)){
     const path=resolve("tests/compat/fixtures",fixture.template);
-    const run=spawnSync(process.execPath,[resolve("scripts/npm-parity.mjs"),path],{encoding:"utf8",env:{...process.env,OATH_COMPAT_MODE:fixture.mode}});
+    const run=spawnSync(process.execPath,[resolve("scripts/npm-parity.mjs"),path],{encoding:"utf8",timeout:Number(process.env.OATH_COMPAT_FIXTURE_TIMEOUT_MS??900_000),killSignal:"SIGKILL",env:{...process.env,OATH_COMPAT_MODE:fixture.mode}});
     let artifact; try{artifact=JSON.parse(run.stdout)}catch{artifact={equivalent:false,stdout:run.stdout,stderr:run.stderr}}
     results.push({fixture,...artifact});
   }
-  await writeFile(join(out,`fixture-shard-${shard}.json`),JSON.stringify({schema_version:1,shard,results},null,2));
+  await writeFile(join(out,`stress-shard-${shard}.json`),JSON.stringify({schema_version:2,evidence_class:"generated_stress",shard,results},null,2));
   if(results.some(item=>!item.equivalent))process.exitCode=1;
 }
-console.log(JSON.stringify({fixture_target:fixtures.length,project_target:projects.length,shard,shards,executed:results.length,manifest:join(out,"manifest.json")},null,2));
+console.log(JSON.stringify({evidence_class:"generated_stress",generated_execution_target:fixtures.length,independent_template_count:templates.length,project_target:projects.length,shard,shards,executed:results.length,manifest:join(out,"manifest.json")},null,2));

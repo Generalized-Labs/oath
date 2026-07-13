@@ -70,21 +70,38 @@ fn env_u64(name: &str, default: u64) -> Result<u64> {
 }
 
 pub enum IntegrityVerifier {
-    Sha512(Sha512, String),
-    Sha256(Sha256, String),
-    Sha1(Sha1, String),
+    Sha512(Sha512, Vec<String>),
+    Sha256(Sha256, Vec<String>),
+    Sha1(Sha1, Vec<String>),
 }
 
 impl IntegrityVerifier {
     pub fn new(sri: &str) -> Result<Self> {
-        let (algo, expected_b64) = sri
-            .split_once('-')
-            .with_context(|| format!("invalid SRI format: {sri}"))?;
-        match algo {
-            "sha512" => Ok(Self::Sha512(Sha512::new(), expected_b64.to_string())),
-            "sha256" => Ok(Self::Sha256(Sha256::new(), expected_b64.to_string())),
-            "sha1" => Ok(Self::Sha1(Sha1::new(), expected_b64.to_string())),
-            _ => bail!("unsupported SRI algorithm: {algo}"),
+        let mut sha512 = Vec::new();
+        let mut sha256 = Vec::new();
+        let mut sha1 = Vec::new();
+        for token in sri.split_whitespace() {
+            let (algo, expected_b64) = token
+                .split_once('-')
+                .with_context(|| format!("invalid SRI format: {token}"))?;
+            if expected_b64.is_empty() {
+                bail!("invalid SRI format: {token}");
+            }
+            match algo {
+                "sha512" => sha512.push(expected_b64.to_string()),
+                "sha256" => sha256.push(expected_b64.to_string()),
+                "sha1" => sha1.push(expected_b64.to_string()),
+                _ => {}
+            }
+        }
+        if !sha512.is_empty() {
+            Ok(Self::Sha512(Sha512::new(), sha512))
+        } else if !sha256.is_empty() {
+            Ok(Self::Sha256(Sha256::new(), sha256))
+        } else if !sha1.is_empty() {
+            Ok(Self::Sha1(Sha1::new(), sha1))
+        } else {
+            bail!("SRI metadata contains no supported digest: {sri}")
         }
     }
 
@@ -107,10 +124,13 @@ impl IntegrityVerifier {
             Self::Sha1(hasher, expected) => ("sha1", expected, base64_encode(&hasher.finalize())),
         };
 
-        if computed_b64 != expected_b64 {
-            bail!(
-                "integrity check failed: expected {algo}-{expected_b64}, got {algo}-{computed_b64}"
-            );
+        if !expected_b64.contains(&computed_b64) {
+            let expected = expected_b64
+                .iter()
+                .map(|digest| format!("{algo}-{digest}"))
+                .collect::<Vec<_>>()
+                .join(" ");
+            bail!("integrity check failed: expected one of {expected}, got {algo}-{computed_b64}");
         }
 
         Ok(())
@@ -119,7 +139,8 @@ impl IntegrityVerifier {
 
 /// Verify tarball bytes against an SRI integrity string.
 ///
-/// Format: "sha512-<base64>" or "sha256-<base64>" or "sha1-<base64>"
+/// Supports whitespace-separated SRI digests and verifies the strongest
+/// supported algorithm, matching npm's integrity semantics.
 pub fn verify_integrity(data: &[u8], sri: &str) -> Result<()> {
     let mut verifier = IntegrityVerifier::new(sri)?;
     verifier.update(data);
@@ -183,20 +204,22 @@ fn extract_archive<R: Read>(reader: R, dest: &Path, limits: &TarballLimits) -> R
         let Some(mut relative) = sanitize_tar_path(&path, limits)? else {
             continue;
         };
-        // npm/pacote normalizes a package-root .gitignore to .npmignore when
-        // extracting registry tarballs. Match that observable node_modules
-        // contract rather than exposing the raw archive filename.
-        if relative == Path::new(".gitignore") {
-            relative = PathBuf::from(".npmignore");
+        // npm/pacote normalizes every packaged .gitignore to .npmignore,
+        // including nested files. Match that observable node_modules contract
+        // while preserving the containing directory.
+        if relative
+            .file_name()
+            .is_some_and(|name| name == ".gitignore")
+        {
+            relative.set_file_name(".npmignore");
         }
 
         let full_path = dest.join(&relative);
 
         match entry.header().entry_type() {
-            tar::EntryType::Directory => {
-                std::fs::create_dir_all(&full_path)
-                    .with_context(|| format!("failed to create dir: {}", full_path.display()))?;
-            }
+            // npm/pacote does not preserve empty directory entries. Parent
+            // directories are created on demand for actual package files.
+            tar::EntryType::Directory => {}
             tar::EntryType::Regular => {
                 let entry_size = entry.size();
                 unpacked_bytes = unpacked_bytes
@@ -415,6 +438,36 @@ mod tests {
     }
 
     #[test]
+    fn extract_tarball_normalizes_nested_gitignore_files() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tar_gz_with_file("package/fixtures/example/.gitignore", b"output\n");
+        extract_tarball(&data, tmp.path()).unwrap();
+        assert!(!tmp.path().join("fixtures/example/.gitignore").exists());
+        assert_eq!(
+            std::fs::read(tmp.path().join("fixtures/example/.npmignore")).unwrap(),
+            b"output\n"
+        );
+    }
+
+    #[test]
+    fn extract_tarball_matches_npm_by_omitting_empty_directories() {
+        let gz = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = Builder::new(gz);
+        let mut header = Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        header.set_mode(0o755);
+        header.set_cksum();
+        tar.append_data(&mut header, "package/.github/", std::io::empty())
+            .unwrap();
+        let data = tar.into_inner().unwrap().finish().unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        extract_tarball(&data, tmp.path()).unwrap();
+        assert!(!tmp.path().join(".github").exists());
+    }
+
+    #[test]
     fn sha1_integrity_is_verified() {
         let data = b"package bytes";
         let hash = Sha1::digest(data);
@@ -422,5 +475,35 @@ mod tests {
 
         verify_integrity(data, &integrity).unwrap();
         assert!(verify_integrity(b"tampered package bytes", &integrity).is_err());
+    }
+
+    #[test]
+    fn multi_hash_integrity_uses_strongest_supported_algorithm() {
+        let data = b"package bytes";
+        let sha1 = base64_encode(&Sha1::digest(data));
+        let sha512 = base64_encode(&Sha512::digest(data));
+        let integrity = format!("sha1-{sha1} sha512-{sha512}");
+
+        verify_integrity(data, &integrity).unwrap();
+    }
+
+    #[test]
+    fn multi_hash_integrity_rejects_wrong_strongest_digest() {
+        let data = b"package bytes";
+        let sha1 = base64_encode(&Sha1::digest(data));
+        let wrong_sha512 = base64_encode(&Sha512::digest(b"different package bytes"));
+        let integrity = format!("sha1-{sha1} sha512-{wrong_sha512}");
+
+        assert!(verify_integrity(data, &integrity).is_err());
+    }
+
+    #[test]
+    fn multi_hash_integrity_accepts_any_digest_at_strongest_level() {
+        let data = b"package bytes";
+        let wrong_sha512 = base64_encode(&Sha512::digest(b"different package bytes"));
+        let correct_sha512 = base64_encode(&Sha512::digest(data));
+        let integrity = format!("sha512-{wrong_sha512} sha512-{correct_sha512}");
+
+        verify_integrity(data, &integrity).unwrap();
     }
 }
