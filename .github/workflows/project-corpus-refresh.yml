@@ -70,6 +70,11 @@ jobs:
           merge-multiple: true
       - name: Select ten eligible projects per category
         run: node scripts/project-corpus.mjs merge-preflight
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: project-corpus-selection
+          path: compat-results/preflight/selection-summary.json
       - name: Validate release corpus
         run: node scripts/project-corpus.mjs validate tests/compat/projects.lock.json
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4

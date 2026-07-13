@@ -5,7 +5,12 @@
       "NextJSTemplates/play-nextjs", "vercel/next.js", "nuxt/nuxt", "remix-run/remix", "withastro/astro",
       "sveltejs/kit", "gatsbyjs/gatsby", "redwoodjs/redwood", "blitz-js/blitz", "umijs/umi",
       "modern-js-dev/modern.js", "analogjs/analog", "solidjs/solid-start", "QwikDev/qwik", "emberjs/ember.js",
-      "meteor/meteor", "strapi/strapi", "payloadcms/payload", "keystonejs/keystone", "facebook/docusaurus"
+      "meteor/meteor", "strapi/strapi", "payloadcms/payload", "keystonejs/keystone", "facebook/docusaurus",
+      "sahat/hackathon-starter", "ixartz/Next-js-Boilerplate", "allaboutapps/react-starter", "Skolaczk/next-starter",
+      "vercel-labs/botid-nextjs-starter", "reddit/devvit-template-react", "CodelyTV/typescript-react_best_practices-vite_template",
+      "wbkd/react-starter", "nhanluongoe/nextjs-boilerplate", "mortezasabihi/react-vite-ts-starter",
+      "rebecamurillo/astro-blog-i18n-starter", "evervault/evervault-starter-kit", "vercel-labs/vercel-domains-chatgpt-app",
+      "kutia-software-company/express-typescript-starter", "formspree/formspree-example-next"
     ],
     "build-tools": [
       "vitejs/vite", "webpack/webpack", "rollup/rollup", "parcel-bundler/parcel", "evanw/esbuild",

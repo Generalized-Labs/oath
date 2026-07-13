@@ -121,6 +121,7 @@ async function preflight() {
         subdirectory: candidate.subdirectory ?? ".",
         npm: npmReference,
         category: candidate.category,
+        candidate_index: index,
         expected_lock_sha256: sha256(lockBytes),
         eligible: true
       });
@@ -162,20 +163,52 @@ async function mergePreflight() {
   const input = resolve(process.env.OATH_PROJECT_PREFLIGHT_DIR ?? "compat-results/preflight");
   const output = resolve(process.env.OATH_PROJECT_MANIFEST ?? "tests/compat/projects.lock.json");
   const files = (await readdir(input)).filter(name => /^preflight-\d+\.json$/.test(name));
-  const eligible = [];
+  const results = [];
   for (const file of files) {
     const artifact = await readJson(join(input, file));
-    eligible.push(...artifact.results.filter(result => result.eligible));
+    results.push(...artifact.results);
   }
+  const eligible = results.filter(result => result.eligible);
   const unique = new Map(eligible.map(({ eligible: _, ...project }) => [project.repository, project]));
   const projects = [];
+  const shortages = [];
+  const categoryResults = [];
   for (const category of categories) {
+    const categoryCandidates = results.filter(result => result.category === category);
+    const categoryEligible = categoryCandidates.filter(result => result.eligible);
+    const reasons = {};
+    for (const result of categoryCandidates.filter(result => !result.eligible)) {
+      reasons[result.reason] = (reasons[result.reason] ?? 0) + 1;
+    }
+    categoryResults.push({
+      category,
+      tested: categoryCandidates.length,
+      eligible: categoryEligible.length,
+      rejected: categoryCandidates.length - categoryEligible.length,
+      rejection_reasons: reasons
+    });
     const selected = [...unique.values()]
       .filter(project => project.category === category)
-      .sort((left, right) => left.repository.localeCompare(right.repository))
+      .sort((left, right) => left.candidate_index - right.candidate_index)
       .slice(0, 10);
-    if (selected.length !== 10) throw new Error(`${category}: only ${selected.length} eligible candidates; need 10`);
-    projects.push(...selected);
+    if (selected.length !== 10) shortages.push({ category, eligible: selected.length, required: 10 });
+    projects.push(...selected.map(({ candidate_index: _, ...project }) => project));
+  }
+  const selectionSummary = {
+    schema_version: 1,
+    npm: npmReference,
+    shard_files: files.length,
+    expected_shard_files: 20,
+    tested: results.length,
+    eligible: eligible.length,
+    categories: categoryResults,
+    shortages
+  };
+  await writeFile(join(input, "selection-summary.json"), JSON.stringify(selectionSummary, null, 2));
+  console.log(JSON.stringify(selectionSummary, null, 2));
+  if (files.length !== 20) throw new Error(`expected 20 preflight shard files; found ${files.length}`);
+  if (shortages.length) {
+    throw new Error(shortages.map(({ category, eligible, required }) => `${category}: ${eligible}/${required} eligible`).join(", "));
   }
   const manifest = { schema_version: 1, npm: npmReference, projects };
   validateManifest(manifest);
