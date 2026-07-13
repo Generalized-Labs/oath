@@ -227,19 +227,17 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
-      - name: Prove the SQLx optional MySQL RSA backend is unreachable
+      - name: Prove RSA is absent from the active dependency graph
         shell: bash
         run: |
           set -euo pipefail
-          if cargo tree --locked --invert rsa 2>&1 | grep -q '^rsa v'; then
+          if cargo tree --locked --prefix none | grep -q '^rsa v'; then
             echo 'rsa unexpectedly entered the active Oath dependency graph' >&2
             exit 1
           fi
 
       - name: Cargo audit
-        # SQLx's facade locks its disabled optional MySQL backend, which still
-        # names rsa 0.9. The step above fails if that crate ever becomes active.
-        run: cargo audit --ignore RUSTSEC-2023-0071
+        run: cargo audit
 
   compatibility-scale:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'

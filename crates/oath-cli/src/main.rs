@@ -1145,7 +1145,7 @@ async fn cmd_ci() -> Result<()> {
     }
 
     let linker = Linker::new((*store).clone());
-    let link_result = linker.link_placement_plan(&placement_plan, &cwd)?;
+    let link_result = linker.link_placement_plan_clean(&placement_plan, &cwd)?;
     placement_plan.write(&plan_path)?;
     println!("  linked {} packages", link_result.linked);
 
@@ -2085,17 +2085,14 @@ fn cmd_verify() -> Result<()> {
     entries.sort_by_key(|(k, _)| k.as_str());
 
     for (key, entry) in &entries {
-        let name = match key.rfind('@') {
-            Some(at) if at > 0 => &key[..at],
-            _ => key.as_str(),
-        };
+        let name = entry.package_name_for_key(key);
 
         if name.is_empty() || entry.version.is_empty() {
             continue;
         }
 
         match store.verify_package_variant(
-            name,
+            &name,
             &entry.version,
             Some(&entry.resolved),
             entry.integrity.as_deref(),
@@ -2374,6 +2371,10 @@ fn lockfiles_match_for_frozen(existing: &Lockfile, generated: &Lockfile) -> bool
             entry
                 .resolved_peers
                 .retain(|_, location| !platform_only.contains(location));
+            // The per-entry name is derived verification metadata for
+            // location-keyed locks. Older locks may omit it while remaining
+            // semantically equivalent.
+            entry.name = None;
             // Hook presence is derived again from the integrity-pinned package
             // manifest and may be unavailable in Arborist's virtual tree for a
             // package skipped on the current platform.
@@ -2393,14 +2394,10 @@ fn lockfiles_match_for_frozen(existing: &Lockfile, generated: &Lockfile) -> bool
 
 fn lockfile_all_cached(lockfile: &Lockfile, store: &ContentStore) -> bool {
     lockfile.packages.iter().all(|(key, entry)| {
-        let name = if let Some(at_pos) = key.rfind('@') {
-            &key[..at_pos]
-        } else {
-            key.as_str()
-        };
+        let name = entry.package_name_for_key(key);
         store
             .verify_package_variant(
-                name,
+                &name,
                 &entry.version,
                 Some(&entry.resolved),
                 entry.integrity.as_deref(),
@@ -5002,6 +4999,36 @@ mod tests {
             Lockfile::from_graph_with_manifest(&graph, "project", "1.0.0", &deps, &dev_deps);
 
         assert!(!lockfiles_match_for_frozen(&lock_a, &lock_b));
+    }
+
+    #[test]
+    fn frozen_lock_compare_treats_entry_name_as_derived_metadata() {
+        let mut graph = DepGraph::new();
+        graph.nodes.insert(
+            "node_modules/pkg".to_string(),
+            DepNode {
+                name: "pkg".to_string(),
+                alias: None,
+                version: "1.0.0".to_string(),
+                resolved: "https://registry.example/pkg/-/pkg-1.0.0.tgz".to_string(),
+                integrity: None,
+                dependencies: HashMap::new(),
+                has_install_script: false,
+                dev: false,
+                optional: false,
+                peer_dependencies: HashMap::new(),
+                optional_peers: HashSet::new(),
+                resolved_peers: HashMap::new(),
+            },
+        );
+        let deps = HashMap::new();
+        let dev_deps = HashMap::new();
+        let generated =
+            Lockfile::from_graph_with_manifest(&graph, "project", "1.0.0", &deps, &dev_deps);
+        let mut legacy = generated.clone();
+        legacy.packages.get_mut("node_modules/pkg").unwrap().name = None;
+
+        assert!(lockfiles_match_for_frozen(&legacy, &generated));
     }
 
     #[test]
