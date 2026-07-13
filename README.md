@@ -53,12 +53,21 @@ inferred permissions, findings, policy decision, and effective sandbox mode.
 `--dry-run` does not start package code.
 
 > [!IMPORTANT]
-> The latest public binary is `v0.1.7`. It supports the quick start and core
-> install/exec workflow above. The current `master` branch additionally contains
-> staged publishing, signed transfers, expanded evidence, and native capability
-> reporting that will ship in the next release. Build from source when testing
-> those newer commands. The public `v0.1.7` release does not include Windows
-> binary assets.
+> The installer follows the latest stable GitHub release. The current `master`
+> branch is the `v0.2.0` release candidate and adds staged publishing, signed
+> transfers, the PostgreSQL registry control plane, expanded evidence, native
+> capability reporting, and Windows artifacts. Until `v0.2.0` is tagged, build
+> from source to test those newer paths; `v0.1.7` remains the stable binary.
+
+## Release status
+
+`v0.2.0` is a developer-preview release candidate, not a general-availability
+claim. The tested CLI workflow slices and native Linux/Windows boundaries have
+public evidence. The hosted registry remains a business-beta control plane, and
+the broader GA gates for detection quality, performance, signed platform
+binaries, service reliability, independent review, and design-partner adoption
+are not all complete. The exact go/no-go contract is in
+[the release-complete plan](docs/RELEASE_COMPLETE_PLAN.md).
 
 ## How Oath works
 
@@ -113,8 +122,10 @@ speed claim: Oath was slower than npm and Bun on both cold and warm runs.
 
 - [Live evidence website](https://generalized-labs.github.io/oath/)
 - [Compatibility and security methodology](docs/GA_EVIDENCE.md)
+- [v0.2.0 release-readiness report](docs/RELEASE_READINESS.md)
 - [npm workflow contract](docs/NPM_COMPATIBILITY_CONTRACT.md)
 - [Scanner threat model and limitations](docs/scanner-threat-model.md)
+- [Registry deployment and operations](docs/REGISTRY_OPERATIONS.md)
 - [Raw installer benchmark](compat-results/benchmarks/installers.json)
 
 ## Installation options
@@ -128,8 +139,8 @@ installation directory:
 curl -fsSL https://raw.githubusercontent.com/Generalized-Labs/oath/master/install.sh | OATH_INSTALL="$HOME/bin" sh
 ```
 
-The Homebrew tap exists, but currently trails the GitHub release. Check its
-version before using it:
+The checked-in formula targets `v0.1.7`; the separately published tap may update
+on a different schedule. Check its version before using it:
 
 ```sh
 brew info generalized-labs/tap/oath
@@ -137,7 +148,7 @@ brew info generalized-labs/tap/oath
 
 ### Current source: macOS and Linux
 
-Rust 1.85 or newer is required. On Ubuntu/Debian, install the Linux sandbox
+Rust 1.94 or newer is required. On Ubuntu/Debian, install the Linux sandbox
 linker dependency first:
 
 ```sh
@@ -162,9 +173,9 @@ cargo build --release --locked --bin oath
 .\target\release\oath.exe --version
 ```
 
-Windows Server 2022 and 2025 native-containment checks pass in CI, but a Windows
-binary is not present in the current `v0.1.7` GitHub release. Do not use the Unix
-installer on Windows.
+Windows Server 2022 and 2025 native-containment checks pass in CI. The `v0.2.0`
+release workflow publishes x86-64 and ARM64 Windows binaries; until that tag is
+available, build from source. Do not use the Unix installer on Windows.
 
 ## Core commands
 
@@ -189,8 +200,7 @@ oath log                           # inspect the local transparency log
 oath score lodash                  # inspect package evidence
 ```
 
-These commands are currently available when building `master` and are planned
-for the next release:
+These commands are available in the `v0.2.0` release candidate on `master`:
 
 ```sh
 oath sandbox-info --json
@@ -294,8 +304,9 @@ assessment and sandbox decision are made.
 
 ```sh
 cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --locked --all-targets -- -D warnings
 cargo test --workspace --locked
+cargo audit --deny warnings
 cargo build --release --locked --bin oath
 ./scripts/readme-release-smoke.sh # exercises the public release; requires network
 ```
@@ -308,6 +319,7 @@ fixture through [GitHub Issues](https://github.com/Generalized-Labs/oath/issues)
 
 - Node.js for running installed JavaScript packages; the Oath binary itself
   does not require Node for its baseline commands.
+- Rust 1.94 or newer when building from source.
 - Linux kernel 6.12+ and bubblewrap for strict native Linux containment.
 - Windows MSVC toolchain when building the current source on Windows.
 

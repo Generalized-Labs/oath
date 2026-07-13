@@ -359,14 +359,6 @@ impl ContentStore {
         }
         Ok(())
     }
-
-    /// Garbage collect: remove packages not referenced by any project
-    /// (For now just returns the list; actual GC needs project tracking)
-    pub fn gc_candidates(&self) -> Vec<(String, String)> {
-        // TODO: Track which projects reference which packages
-        // For now, return all packages (conservative -- don't delete anything)
-        self.list_packages()
-    }
 }
 
 /// Recursively copy a directory

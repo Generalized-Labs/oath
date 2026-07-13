@@ -50,9 +50,24 @@ needs the whole stack (publishing integrations, registry, CDN, verification plat
 CLIs) — expensive before, tractable now. Socket already AI-audits releases and catches
 exploits before npm does; there's enormous room to build better on top of / instead of npm.
 
-## Where oath stands today (v0.1.2)
-The install/exec side of the security story is real: local AST scanning at install time,
-block-by-default scripts, `--min-age` cooldown, npm-lockfile import, npm/npx parity. The
-*platform* pieces above (registry, CDN, revocation, paid audit, metadata service,
-anti-squatting, rich npx prompt, private registries) are mostly greenfield. See the
-roadmap analysis for the full coverage map.
+## Where Oath stands today (v0.2.0 release candidate)
+
+The install/exec side is implemented for the documented npm 11 workflow slices:
+integrity-verified fetches, transactional linking, block-by-default dependency
+scripts, AST and capability assessment, hash-bound approvals, agent-readable
+verdicts, and explicit Linux/Windows containment reporting.
+
+The platform is no longer entirely greenfield. `master` includes publish
+assessments and signed handoffs plus a PostgreSQL registry control plane with
+staging, private-package roles, short-lived identity tokens, replicated object
+storage, signed revocation tombstones, dist-tag rollback, metrics, billing-event
+verification, and transparency checkpoints.
+
+That does not make Oath GA. The public evidence currently covers three reviewed
+independent install behaviors, 500 generated stress executions, 100 pinned
+project trees, and native capability tests. The complete detection targets,
+performance targets, platform code signing, public registry/CDN operations,
+anti-squatting governance, external security review, reliability SLOs, and
+commercial adoption gates in [RELEASE_COMPLETE_PLAN.md](RELEASE_COMPLETE_PLAN.md)
+remain open. `v0.2.0` must be described as a developer preview or private beta,
+not a production-wide npm replacement.

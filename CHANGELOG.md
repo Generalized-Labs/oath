@@ -3,6 +3,87 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.2.0] - 2026-07-13
+
+### Added
+- npm 11.12.1 placement is now produced by a bundled, SHA-256-verified Arborist
+  boundary while Oath retains fetch, integrity verification, scanning, storage,
+  and transactional linking.
+- Versioned `ExecAssessment`, approval binding, sandbox plans, capability reports,
+  and machine-readable agent verdicts with stable reason codes.
+- Native Linux containment with namespaces, Landlock, seccomp, `no_new_privs`,
+  resource limits, and fail-closed capability detection; native Windows
+  containment with restricted tokens, AppContainer profiles, ACL-scoped roots,
+  Job Objects, and process-tree termination.
+- Publish assessments based on npm's authoritative packlist, previous-release
+  diffs, SPDX SBOMs, provenance, signed evidence, staged-publishing adapters,
+  and signed package-transfer capsules.
+- PostgreSQL registry control plane with staged promotion, private-package roles,
+  short-lived tokens, OIDC, signed revocation tombstones, dist-tag rollback,
+  replicated object storage, billing webhook verification, metrics, and signed
+  transparency checkpoints.
+- Public release evidence for 500 generated stress executions, 100 pinned
+  real-project tree comparisons, three reviewed independent behaviors, Linux and
+  Windows native-capability reports, and installer benchmarks.
+- A public evidence website and design-partner issue workflow.
+
+### Changed
+- The minimum supported Rust version is now explicit at 1.94, matching the
+  locked OXC scanner dependency.
+- Release artifacts now include Windows x86-64 and ARM64 binaries, per-asset
+  SHA-256 sidecars, aggregate checksums, and GitHub build-provenance attestations.
+- Tag releases now verify version/changelog alignment, the complete Rust
+  workspace, a warning-free RustSec audit, the production website, and a
+  successful full evidence gate for the exact tagged commit before building
+  assets.
+- CI action dependencies are commit-pinned, and dependency-audit warnings are
+  release failures.
+
+### Fixed
+- `oath ci` now removes stale `node_modules` content and rematerializes the
+  frozen graph from the verified store even when a placement entry was marked
+  reusable.
+- Location-keyed lock entries preserve the registry package name, fixing store
+  verification and clean installs for nested npm-compatible placements.
+- Frozen-lock comparison treats the explicit lock-entry name as derived metadata
+  while still rejecting behavioral graph drift.
+- Platform-specific optional packages can differ without making a shared frozen
+  lock non-portable across macOS, Linux, and Windows.
+- Two reviewed real-project lock snapshots were refreshed after registry
+  resolution drift; both npm and Oath still produced identical installed trees.
+- npm-style git `#semver:` selectors now fail closed with an exact-pin message
+  instead of silently installing the repository's moving `HEAD`.
+- Registry package ownership and visibility are now immutable, public metadata
+  is anonymously readable, private metadata remains authenticated, repeated
+  stage decisions return a conflict, and revoking the final active version
+  removes stale dist-tags. Revoked and quarantined versions are omitted from npm
+  packuments so range resolution cannot select an inactive release.
+- Registry packuments are derived from the uploaded npm tarball manifest and
+  validated against the requested package identity. Scoped metadata and tarball
+  routes now work with npm clients, tarball integrity uses valid base64 SRI, and
+  emitted tarball URLs honor the configured public origin.
+- Invitation email setup now requires an explicit application accept URL and
+  revokes the pending invitation if email delivery fails.
+- Stale PostgreSQL and reliability test filters no longer allow zero-test CI
+  jobs to appear green; the manual evidence gate now requires every release
+  lane, including audit, MSRV, registry, Windows artifacts, and reliability.
+- The checked-in Homebrew formula now points to the current public v0.1.7 source
+  archive instead of v0.1.0.
+
+### Security
+- Fixed cross-organization registry authorization paths that treated an
+  organization administrator as a global administrator. Live PostgreSQL tests
+  now deny cross-tenant stage inspection, approval, publishing, role grants,
+  metadata, downloads, and revocation.
+- Registry signing-key creation is atomic under concurrent startup,
+  transparency appends are serialized into one hash chain, request metrics now
+  cover every route outcome, and Stripe webhook signatures use constant-time
+  HMAC verification with timestamp-expiry tests.
+- Removed the unused placeholder index crate and its SQLite dependency graph from
+  the registry build.
+- Locked `crc-fast` to 1.7.0, the newest compatible release before its dependency
+  on yanked `spin` 0.10.0, so `cargo audit --deny warnings` is clean.
+
 ## [0.1.7] - 2026-07-10
 
 ### Fixed

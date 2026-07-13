@@ -3622,7 +3622,9 @@ async fn cmd_score(package: &str) -> Result<()> {
     let ctx = {
         let mut weekly = 0u64;
         let mut age = 0u32;
-        if let Ok(http) = reqwest::Client::builder().user_agent("oath/0.1.3").build()
+        if let Ok(http) = reqwest::Client::builder()
+            .user_agent(concat!("oath/", env!("CARGO_PKG_VERSION")))
+            .build()
             && let Ok(meta) = oath_fetch::fetch_package_metadata(&http, &pkg_name).await
         {
             weekly = meta.weekly_downloads.unwrap_or(0);
@@ -3721,7 +3723,7 @@ async fn cmd_info(package: &str) -> Result<()> {
     println!("oath info: fetching metadata for {}...", pkg_name);
 
     let client = reqwest::Client::builder()
-        .user_agent("oath/0.1.0")
+        .user_agent(concat!("oath/", env!("CARGO_PKG_VERSION")))
         .build()?;
 
     let meta = fetch_package_metadata(&client, &pkg_name).await?;
@@ -4532,7 +4534,7 @@ async fn cmd_publish(
 
     // 5. Check if version already published
     let http_client = reqwest::Client::builder()
-        .user_agent("oath/0.1.0")
+        .user_agent(concat!("oath/", env!("CARGO_PKG_VERSION")))
         .build()?;
 
     let registry_url = "https://registry.npmjs.org";
