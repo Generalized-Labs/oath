@@ -216,8 +216,19 @@ jobs:
       - name: Install cargo-audit
         run: cargo install cargo-audit --locked
 
+      - name: Prove the SQLx optional MySQL RSA backend is unreachable
+        shell: bash
+        run: |
+          set -euo pipefail
+          if cargo tree --locked --invert rsa 2>&1 | grep -q '^rsa v'; then
+            echo 'rsa unexpectedly entered the active Oath dependency graph' >&2
+            exit 1
+          fi
+
       - name: Cargo audit
-        run: cargo audit
+        # SQLx's facade locks its disabled optional MySQL backend, which still
+        # names rsa 0.9. The step above fails if that crate ever becomes active.
+        run: cargo audit --ignore RUSTSEC-2023-0071
 
   compatibility-scale:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -232,6 +243,8 @@ jobs:
         with:
           node-version: 24
       - run: npm install --global npm@11.12.1
+      - name: Install Linux sandbox linker dependency
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
       - run: cargo build --locked --bin oath
       - run: node scripts/compat-scale.mjs --execute
         env:
