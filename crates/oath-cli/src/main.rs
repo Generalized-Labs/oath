@@ -2334,9 +2334,57 @@ fn extract_deps(pkg: &serde_json::Value, key: &str) -> HashMap<String, String> {
 }
 
 fn lockfiles_match_for_frozen(existing: &Lockfile, generated: &Lockfile) -> bool {
+    // npm lockfiles retain optional packages for every supported platform,
+    // while Arborist's reify plan contains only the optional native packages
+    // installable on the current host. Preserve frozen semantics for the
+    // shared graph, but ignore one-sided optional platform nodes and edges to
+    // them. A package present in both lockfiles is still compared exactly.
+    let all_locations: HashSet<_> = existing
+        .packages
+        .keys()
+        .chain(generated.packages.keys())
+        .cloned()
+        .collect();
+    let mut platform_only = HashSet::new();
+    for location in all_locations {
+        match (
+            existing.packages.get(&location),
+            generated.packages.get(&location),
+        ) {
+            (Some(entry), None) | (None, Some(entry)) if entry.optional => {
+                platform_only.insert(location);
+            }
+            (Some(_), None) | (None, Some(_)) => return false,
+            _ => {}
+        }
+    }
+
+    let normalize = |lockfile: &Lockfile| {
+        let mut normalized = lockfile.clone();
+        normalized
+            .roots
+            .retain(|location| !platform_only.contains(location));
+        normalized
+            .packages
+            .retain(|location, _| !platform_only.contains(location));
+        for entry in normalized.packages.values_mut() {
+            entry
+                .dependencies
+                .retain(|_, location| !platform_only.contains(location));
+            entry
+                .resolved_peers
+                .retain(|_, location| !platform_only.contains(location));
+            // Hook presence is derived again from the integrity-pinned package
+            // manifest and may be unavailable in Arborist's virtual tree for a
+            // package skipped on the current platform.
+            entry.has_install_script = false;
+        }
+        normalized
+    };
+
     match (
-        serde_json::to_value(existing),
-        serde_json::to_value(generated),
+        serde_json::to_value(normalize(existing)),
+        serde_json::to_value(normalize(generated)),
     ) {
         (Ok(existing), Ok(generated)) => existing == generated,
         _ => false,
@@ -4954,6 +5002,60 @@ mod tests {
             Lockfile::from_graph_with_manifest(&graph, "project", "1.0.0", &deps, &dev_deps);
 
         assert!(!lockfiles_match_for_frozen(&lock_a, &lock_b));
+    }
+
+    #[test]
+    fn frozen_lock_compare_allows_only_platform_optional_deltas() {
+        fn node(name: &str, optional: bool) -> DepNode {
+            DepNode {
+                name: name.to_string(),
+                alias: None,
+                version: "1.0.0".to_string(),
+                resolved: format!("https://registry.example/{name}-1.0.0.tgz"),
+                integrity: Some(format!("sha512-{name}")),
+                dependencies: HashMap::new(),
+                has_install_script: false,
+                dev: true,
+                optional,
+                peer_dependencies: HashMap::new(),
+                optional_peers: HashSet::new(),
+                resolved_peers: HashMap::new(),
+            }
+        }
+
+        let package = "node_modules/bundler".to_string();
+        let darwin = "node_modules/@bundler/darwin-arm64".to_string();
+        let linux = "node_modules/@bundler/linux-x64".to_string();
+
+        let mut darwin_graph = DepGraph::new();
+        let mut darwin_package = node("bundler", false);
+        darwin_package
+            .dependencies
+            .insert("@bundler/darwin-arm64".to_string(), darwin.clone());
+        darwin_graph.nodes.insert(package.clone(), darwin_package);
+        darwin_graph
+            .nodes
+            .insert(darwin.clone(), node("@bundler/darwin-arm64", true));
+        darwin_graph.roots = vec![package.clone(), darwin];
+
+        let mut linux_graph = DepGraph::new();
+        let mut linux_package = node("bundler", false);
+        linux_package
+            .dependencies
+            .insert("@bundler/linux-x64".to_string(), linux.clone());
+        linux_graph.nodes.insert(package.clone(), linux_package);
+        linux_graph
+            .nodes
+            .insert(linux.clone(), node("@bundler/linux-x64", true));
+        linux_graph.roots = vec![package.clone(), linux];
+
+        let darwin_lock = Lockfile::from_graph(&darwin_graph, "site", "1.0.0");
+        let linux_lock = Lockfile::from_graph(&linux_graph, "site", "1.0.0");
+        assert!(lockfiles_match_for_frozen(&darwin_lock, &linux_lock));
+
+        let mut drifted = linux_lock;
+        drifted.packages.get_mut(&package).unwrap().version = "2.0.0".to_string();
+        assert!(!lockfiles_match_for_frozen(&darwin_lock, &drifted));
     }
 
     #[test]
