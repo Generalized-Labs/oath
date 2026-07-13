@@ -42,7 +42,8 @@ fn symlink_dir(target: &Path, link: &Path) -> std::io::Result<()> {
     let target = target_text
         .strip_prefix(r"\\?\")
         .unwrap_or(&target_text)
-        .to_string();
+        .replace('/', r"\");
+    let link = link.to_string_lossy().replace('/', r"\");
     let output = std::process::Command::new("cmd.exe")
         .args(["/D", "/C", "mklink", "/J"])
         .arg(link)
