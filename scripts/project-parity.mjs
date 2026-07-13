@@ -11,7 +11,8 @@ const manifestPath=process.env.OATH_PROJECT_MANIFEST;
 let projects;
 if(manifestPath){
  const manifest=JSON.parse(await readFile(resolve(manifestPath),"utf8"));
- if(manifest.schema_version!==1||manifest.npm!=="11.12.1"||!Array.isArray(manifest.projects))throw new Error("invalid pinned project manifest");
+ if(manifest.schema_version!==1||manifest.npm!=="11.12.1"||manifest.node!=="24.13.0"||!Array.isArray(manifest.projects))throw new Error("invalid pinned project manifest");
+ if(process.versions.node!==manifest.node)throw new Error(`pinned project corpus requires Node ${manifest.node}; found ${process.versions.node}`);
  projects=manifest.projects;
 }else{
  projects=(await readFile(new URL("../tests/compat/projects.txt",import.meta.url),"utf8")).split(/\r?\n/).map(v=>v.trim()).filter(Boolean).map(repository=>({repository}));

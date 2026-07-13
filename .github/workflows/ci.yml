@@ -22,7 +22,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 24
+          node-version: 24.13.0
       - name: Validate agent skill contracts and evals
         run: node scripts/validate-agent-skills.mjs
 
@@ -36,7 +36,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
-          node-version: 24
+          node-version: 24.13.0
       - run: npm install --global npm@11.12.1
       - name: Install Linux sandbox linker dependency
         if: runner.os == 'Linux'
@@ -129,7 +129,7 @@ jobs:
       - name: Install Node npm reference
         uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.13.0
 
       - name: Pin npm compatibility reference
         run: npm install --global npm@11.12.1
@@ -241,7 +241,7 @@ jobs:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.13.0
       - run: npm install --global npm@11.12.1
       - name: Install Linux sandbox linker dependency
         run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
@@ -283,7 +283,7 @@ jobs:
             '{schema_version:1,runner:$runner,os:$os,arch:$arch,commit:$commit,shard:$shard,total_kib:$total_kib,free_kib:$free_kib}' > runner-${{ matrix.shard }}.json
       - uses: actions/setup-node@v4
         with:
-          node-version: 24
+          node-version: 24.13.0
       - run: npm install --global npm@11.12.1
       - run: cargo build --locked --bin oath
       - run: node scripts/project-parity.mjs

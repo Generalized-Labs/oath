@@ -7,6 +7,7 @@ import { join, resolve } from "node:path";
 
 const command = process.argv[2] ?? "validate";
 const npmReference = "11.12.1";
+const nodeReference = "24.13.0";
 const categories = [
   "frameworks-applications",
   "build-tools",
@@ -39,7 +40,7 @@ async function readJson(path) {
 }
 
 function validateManifest(manifest) {
-  if (manifest.schema_version !== 1 || manifest.npm !== npmReference || !Array.isArray(manifest.projects)) {
+  if (manifest.schema_version !== 1 || manifest.npm !== npmReference || manifest.node !== nodeReference || !Array.isArray(manifest.projects)) {
     throw new Error("invalid pinned project corpus header");
   }
   if (manifest.projects.length !== 100) throw new Error(`expected 100 pinned projects, found ${manifest.projects.length}`);
@@ -73,6 +74,8 @@ async function preflight() {
   const shards = Number(process.env.OATH_PROJECT_SHARDS ?? 1);
   const npmVersion = run("npm", ["--version"], process.cwd()).stdout.trim();
   if (npmVersion !== npmReference) throw new Error(`preflight requires npm ${npmReference}; found ${npmVersion}`);
+  const nodeVersion = process.versions.node;
+  if (nodeVersion !== nodeReference) throw new Error(`preflight requires Node ${nodeReference}; found ${nodeVersion}`);
   const root = await mkdtemp(join(tmpdir(), "oath-corpus-"));
   const results = [];
   try {
@@ -131,7 +134,7 @@ async function preflight() {
     await rm(root, { recursive: true, force: true });
   }
   await mkdir(resolve(output, ".."), { recursive: true });
-  await writeFile(output, JSON.stringify({ schema_version: 1, npm: npmReference, shard, shards, results }, null, 2));
+  await writeFile(output, JSON.stringify({ schema_version: 1, npm: npmReference, node: nodeReference, shard, shards, results }, null, 2));
   console.log(JSON.stringify({ shard, tested: results.length, eligible: results.filter(result => result.eligible).length }, null, 2));
 }
 
@@ -210,7 +213,7 @@ async function mergePreflight() {
   if (shortages.length) {
     throw new Error(shortages.map(({ category, eligible, required }) => `${category}: ${eligible}/${required} eligible`).join(", "));
   }
-  const manifest = { schema_version: 1, npm: npmReference, projects };
+  const manifest = { schema_version: 1, npm: npmReference, node: nodeReference, projects };
   validateManifest(manifest);
   await mkdir(resolve(output, ".."), { recursive: true });
   await writeFile(output, JSON.stringify(manifest, null, 2));

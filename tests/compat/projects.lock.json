@@ -1,6 +1,7 @@
 {
   "schema_version": 1,
   "npm": "11.12.1",
+  "node": "24.13.0",
   "projects": [
     {
       "repository": "NextJSTemplates/play-nextjs",
@@ -192,7 +193,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "77dc4c801c725cdbd3607a02a2d0a62f02a2e17682301c0b00e5d732fc62f67f"
+      "expected_lock_sha256": "ba439b63d50719d855220c017fc3835b1622883b65861686674733f20eaf8fe1"
     },
     {
       "repository": "dsherret/ts-morph",
@@ -240,7 +241,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "6bb7f527953d5c9196885c5d7ddc194e1d0bdd044acd7bcb2761479d626ad746"
+      "expected_lock_sha256": "42fe5fbaf92212fcbdc9154fc2f9de6ab2344645a60008fe3b16dbd4094ef8b1"
     },
     {
       "repository": "mochajs/mocha",
@@ -392,7 +393,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "ebcde8e94fca74764c9735ccaf8d3926bdd8c19ef121338294d14a7702d5cce8"
+      "expected_lock_sha256": "f3fabf3b266afefce7e0d6db24b5f031086a038af2dc4723ec7a1170a55ba4f6"
     },
     {
       "repository": "middyjs/middy",
@@ -416,7 +417,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "ca0760c970fb2e0dab0eaf222ebe56aae2b00c4b1edd786dbb996b2fa1bf126f"
+      "expected_lock_sha256": "0012b93a89dddca6431eb458619af6e1015a40b87de9faf705d175c253b991f5"
     },
     {
       "repository": "lit/lit",
@@ -472,7 +473,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "50867838c2a0d55f6684efb9ec7fb2548ca909abd145172a1bc926e3f7b7dd06"
+      "expected_lock_sha256": "a16207a84e4dafe2cf2a921fb8a40c1e823e7e094ba7b65cdfd4f7643ca2277a"
     },
     {
       "repository": "styled-components/styled-components",
@@ -744,7 +745,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "6bdde6c2c567298dc2c3d17ed96c3fa75a4ac58a98d2375f33aaa379cef6716d"
+      "expected_lock_sha256": "a240a74845602a284d96530c042b4c53d8d9bbdfc561d173a1d2a58156ef850c"
     },
     {
       "repository": "vadimdemedes/ink",

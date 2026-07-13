@@ -140,6 +140,26 @@ fn recover_link_transaction(live: &Path, stage: &Path, backup: &Path) -> Result<
     Ok(())
 }
 
+fn remove_existing_path(path: &Path) -> std::io::Result<()> {
+    let metadata = match std::fs::symlink_metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.file_type().is_symlink() {
+        #[cfg(windows)]
+        if std::fs::metadata(path).is_ok_and(|target| target.is_dir()) {
+            return std::fs::remove_dir(path);
+        }
+        return std::fs::remove_file(path);
+    }
+    if metadata.is_dir() {
+        std::fs::remove_dir_all(path)
+    } else {
+        std::fs::remove_file(path)
+    }
+}
+
 impl Linker {
     pub fn new(store: ContentStore) -> Self {
         Self { store }
@@ -156,7 +176,21 @@ impl Linker {
         let stage = project_dir.join(".oath-node_modules-stage");
         let backup = project_dir.join(".oath-node_modules-backup");
         recover_link_transaction(&live, &stage, &backup)?;
+        if live.exists() {
+            // npm's reifier preserves package contents it classifies as
+            // unchanged (notably checked-in root bundles). Seed the atomic
+            // stage from the live tree, then apply Arborist's explicit
+            // remove/add/change plan below.
+            hardlink_dir(&live, &stage)?;
+        }
         std::fs::create_dir_all(stage.join(".oath"))?;
+        for location in &plan.removed_locations {
+            let relative = Path::new(location)
+                .strip_prefix("node_modules")
+                .with_context(|| format!("invalid removal location {location}"))?;
+            remove_existing_path(&stage.join(relative))
+                .with_context(|| format!("remove stale placement {location}"))?;
+        }
         let mut result = LinkResult::default();
         for node in &plan.nodes {
             let relative = Path::new(&node.location)
@@ -175,6 +209,9 @@ impl Linker {
             );
             let destination = stage.join(relative);
             if node.link {
+                remove_existing_path(&destination).with_context(|| {
+                    format!("replace existing workspace link {}", node.location)
+                })?;
                 let target = node
                     .target
                     .as_ref()
@@ -192,23 +229,41 @@ impl Linker {
                 result.symlinks += 1;
                 continue;
             }
-            let source = self.store.package_dir_for(
-                &node.name,
-                &node.version,
-                node.resolved.as_deref(),
-                node.integrity.as_deref(),
-            );
-            anyhow::ensure!(
-                source.exists(),
-                "planned package missing from verified store: {}@{}",
-                node.name,
-                node.version
-            );
-            if let Some(parent) = destination.parent() {
-                std::fs::create_dir_all(parent)?;
+            if node.reuse_existing {
+                let existing = live.join(relative);
+                anyhow::ensure!(
+                    existing.is_dir(),
+                    "Arborist marked missing placement unchanged: {}",
+                    node.location
+                );
+                remove_existing_path(&destination)
+                    .with_context(|| format!("restore unchanged placement {}", node.location))?;
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                hardlink_dir(&existing, &destination)?;
+                result.linked += 1;
+            } else {
+                remove_existing_path(&destination)
+                    .with_context(|| format!("replace changed placement {}", node.location))?;
+                let source = self.store.package_dir_for(
+                    &node.name,
+                    &node.version,
+                    node.resolved.as_deref(),
+                    node.integrity.as_deref(),
+                );
+                anyhow::ensure!(
+                    source.exists(),
+                    "planned package missing from verified store: {}@{}",
+                    node.name,
+                    node.version
+                );
+                if let Some(parent) = destination.parent() {
+                    std::fs::create_dir_all(parent)?;
+                }
+                hardlink_dir(&source, &destination)?;
+                result.linked += 1;
             }
-            hardlink_dir(&source, &destination)?;
-            result.linked += 1;
 
             let install_name = node.install_name.as_str();
             let bins = read_bin_entries(&destination.join("package.json"), install_name);
@@ -1053,12 +1108,13 @@ mod tests {
             dev: false,
             optional: false,
             has_install_script: false,
+            reuse_existing: false,
             link: false,
             target: None,
             edges: vec![],
         };
         let plan = PlacementPlan {
-            schema_version: 1,
+            schema_version: 2,
             planner: PlannerIdentity {
                 name: "@npmcli/arborist".into(),
                 npm: "11.12.1".into(),
@@ -1068,6 +1124,7 @@ mod tests {
                 node("node_modules/dep", "2.0.0"),
                 node("node_modules/parent/node_modules/dep", "1.0.0"),
             ],
+            removed_locations: vec![],
             invalid_edges: vec![],
         };
         Linker::new(store)
@@ -1079,6 +1136,112 @@ mod tests {
                 .join("node_modules/parent/node_modules/dep/package.json")
                 .exists()
         );
+    }
+
+    #[test]
+    fn placement_plan_preserves_only_arborist_unchanged_content() {
+        let tmp = tempfile::tempdir().unwrap();
+        let live = tmp.path().join("node_modules");
+        std::fs::create_dir_all(live.join("kept")).unwrap();
+        std::fs::write(
+            live.join("kept/package.json"),
+            r#"{"name":"kept","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(live.join("kept/checked-in.txt"), "exact bytes").unwrap();
+        std::fs::write(live.join(".gitignore"), "tracked root file").unwrap();
+        std::fs::create_dir_all(live.join("stale")).unwrap();
+        std::fs::write(live.join("stale/package.json"), r#"{"name":"stale"}"#).unwrap();
+        std::fs::create_dir_all(live.join("parent/node_modules/child")).unwrap();
+        std::fs::write(
+            live.join("parent/node_modules/child/package.json"),
+            r#"{"name":"child","version":"1.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            live.join("parent/node_modules/child/checked-in.txt"),
+            "preserve me",
+        )
+        .unwrap();
+
+        let store = ContentStore::new(tmp.path().join("store")).unwrap();
+        let changed_parent = tmp.path().join("changed-parent");
+        std::fs::create_dir_all(changed_parent.join("node_modules/child")).unwrap();
+        std::fs::write(
+            changed_parent.join("package.json"),
+            r#"{"name":"parent","version":"2.0.0"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            changed_parent.join("node_modules/child/registry-only.txt"),
+            "must be replaced by unchanged bytes",
+        )
+        .unwrap();
+        store
+            .store_package("parent", "2.0.0", &changed_parent)
+            .unwrap();
+        let placement_node = |location: &str,
+                              install_name: &str,
+                              name: &str,
+                              version: &str,
+                              reuse_existing: bool| PlacementNode {
+            location: location.into(),
+            install_name: install_name.into(),
+            name: name.into(),
+            version: version.into(),
+            resolved: None,
+            integrity: None,
+            dev: false,
+            optional: false,
+            has_install_script: false,
+            reuse_existing,
+            link: false,
+            target: None,
+            edges: vec![],
+        };
+        let plan = PlacementPlan {
+            schema_version: 2,
+            planner: PlannerIdentity {
+                name: "@npmcli/arborist".into(),
+                npm: "11.12.1".into(),
+            },
+            project: tmp.path().display().to_string(),
+            nodes: vec![
+                placement_node("node_modules/kept", "kept", "kept", "1.0.0", true),
+                placement_node("node_modules/parent", "parent", "parent", "2.0.0", false),
+                placement_node(
+                    "node_modules/parent/node_modules/child",
+                    "child",
+                    "child",
+                    "1.0.0",
+                    true,
+                ),
+            ],
+            removed_locations: vec!["node_modules/stale".into()],
+            invalid_edges: vec![],
+        };
+
+        Linker::new(store)
+            .link_placement_plan(&plan, tmp.path())
+            .unwrap();
+        assert_eq!(
+            std::fs::read_to_string(live.join("kept/checked-in.txt")).unwrap(),
+            "exact bytes"
+        );
+        assert_eq!(
+            std::fs::read_to_string(live.join(".gitignore")).unwrap(),
+            "tracked root file"
+        );
+        assert_eq!(
+            std::fs::read_to_string(live.join("parent/node_modules/child/checked-in.txt")).unwrap(),
+            "preserve me"
+        );
+        assert!(
+            !live
+                .join("parent/node_modules/child/registry-only.txt")
+                .exists()
+        );
+        assert!(!live.join("stale").exists());
     }
 
     #[test]

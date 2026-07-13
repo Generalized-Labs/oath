@@ -47,13 +47,23 @@ async function main () {
   // Compute npm's final platform, optional, peer, and pruning decisions without
   // writing package contents. Oath remains the only materialization authority.
   const tree = await arborist.reify({ ...idealOptions, dryRun: true, ignoreScripts: true })
+  const unchangedLocations = new Set((arborist.diff && arborist.diff.unchanged ? arborist.diff.unchanged : [])
+    .map(node => node.location.replaceAll('\\', '/')))
+  const removed_locations = (arborist.diff && arborist.diff.removed ? arborist.diff.removed : [])
+    .map(node => node.location.replaceAll('\\', '/'))
+    .filter(location => location.startsWith('node_modules/'))
+    .sort((a, b) => a.localeCompare(b))
   const nodes = [...tree.inventory.values()]
     // Arborist inventory also contains workspace source nodes (for example
     // packages/tool). Oath materializes only install-tree locations; workspace
     // sources remain validated targets of their node_modules link nodes.
-    // Bundled dependencies are already present inside their parent's verified
-    // tarball and intentionally have no independent resolved URL.
-    .filter(node => !node.inBundle && node.location && node.location.replaceAll('\\', '/').startsWith('node_modules/') && node.package && node.package.name && (node.isLink || node.package.version))
+    // Dependencies bundled by an installed registry package are already
+    // present inside that package's verified tarball. Root package bundle
+    // declarations are different: npm still installs those dependencies from
+    // the registry because the project root itself is not a tarball. Arborist's
+    // inDepBundle predicate captures exactly that distinction; inBundle also
+    // includes dependencies bundled only by the project root.
+    .filter(node => !node.inDepBundle && node.location && node.location.replaceAll('\\', '/').startsWith('node_modules/') && node.package && node.package.name && (node.isLink || node.package.version))
     .map(node => ({
       location: node.location.replaceAll('\\', '/'),
       install_name: node.name,
@@ -68,6 +78,7 @@ async function main () {
         node.package.scripts.install ||
         node.package.scripts.postinstall
       )),
+      reuse_existing: unchangedLocations.has(node.location.replaceAll('\\', '/')),
       link: Boolean(node.isLink),
       target: node.isLink && node.target ? node.target.path : null,
       edges: [...node.edgesOut.values()].map(edge => ({
@@ -81,10 +92,11 @@ async function main () {
     .sort((a, b) => a.location.localeCompare(b.location))
   const invalid_edges = nodes.flatMap(node => node.edges.filter(edge => !edge.valid).map(edge => ({ location: node.location, ...edge })))
   process.stdout.write(JSON.stringify({
-    schema_version: 1,
+    schema_version: 2,
     planner: { name: '@npmcli/arborist', npm: process.env.OATH_NPM_REFERENCE_VERSION || execFileSync('npm', ['--version'], { encoding: 'utf8' }).trim() },
     project,
     nodes,
+    removed_locations,
     invalid_edges
   }))
 }

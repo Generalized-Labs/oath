@@ -7,7 +7,7 @@ use std::path::Path;
 
 use crate::graph::{DepGraph, DepNode};
 
-pub const PLACEMENT_PLAN_VERSION: u32 = 1;
+pub const PLACEMENT_PLAN_VERSION: u32 = 2;
 const PLANNER: &str = include_str!("arborist-plan.cjs");
 const NPM_REFERENCE_VERSION: &str = "11.12.1";
 const ARBORIST_VERSION: &str = "9.4.2";
@@ -22,6 +22,8 @@ pub struct PlacementPlan {
     pub planner: PlannerIdentity,
     pub project: String,
     pub nodes: Vec<PlacementNode>,
+    #[serde(default)]
+    pub removed_locations: Vec<String>,
     pub invalid_edges: Vec<PlacementEdge>,
 }
 
@@ -42,6 +44,8 @@ pub struct PlacementNode {
     pub dev: bool,
     pub optional: bool,
     pub has_install_script: bool,
+    #[serde(default)]
+    pub reuse_existing: bool,
     pub link: bool,
     pub target: Option<String>,
     pub edges: Vec<PlacementEdge>,
@@ -419,6 +423,23 @@ fn validate_locations(plan: &PlacementPlan) -> Result<()> {
             node.location
         );
     }
+    for removed in &plan.removed_locations {
+        let location = Path::new(removed);
+        anyhow::ensure!(
+            !location.is_absolute(),
+            "absolute removal path rejected: {removed}"
+        );
+        anyhow::ensure!(
+            location
+                .components()
+                .all(|part| !matches!(part, std::path::Component::ParentDir)),
+            "removal traversal rejected: {removed}"
+        );
+        anyhow::ensure!(
+            removed.starts_with("node_modules/"),
+            "removal outside node_modules rejected: {removed}"
+        );
+    }
     Ok(())
 }
 
@@ -428,7 +449,7 @@ mod tests {
     #[test]
     fn rejects_traversal_locations() {
         let plan = PlacementPlan {
-            schema_version: 1,
+            schema_version: PLACEMENT_PLAN_VERSION,
             planner: PlannerIdentity {
                 name: "test".into(),
                 npm: "11".into(),
@@ -444,10 +465,12 @@ mod tests {
                 dev: false,
                 optional: false,
                 has_install_script: false,
+                reuse_existing: false,
                 link: false,
                 target: None,
                 edges: vec![],
             }],
+            removed_locations: vec![],
             invalid_edges: vec![],
         };
         assert!(validate_locations(&plan).is_err());
@@ -456,7 +479,7 @@ mod tests {
     #[test]
     fn preserves_location_identity_in_dependency_graph() {
         let plan: PlacementPlan = serde_json::from_value(serde_json::json!({
-            "schema_version": 1,
+            "schema_version": 2,
             "planner": {"name": "test", "npm": "11"},
             "project": ".",
             "invalid_edges": [],
@@ -520,7 +543,6 @@ mod tests {
             r#"{"name":"local","version":"1.0.0"}"#,
         )
         .unwrap();
-
         let plan = ArboristPlanner::plan(project.path()).unwrap();
         let local_node = plan
             .nodes
@@ -533,5 +555,11 @@ mod tests {
             planned_target.canonicalize().unwrap(),
             local.canonicalize().unwrap()
         );
+    }
+
+    #[test]
+    fn planner_uses_arborists_dependency_bundle_boundary() {
+        assert!(PLANNER.contains(".filter(node => !node.inDepBundle"));
+        assert!(!PLANNER.contains(".filter(node => !node.inBundle &&"));
     }
 }
