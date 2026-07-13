@@ -35,7 +35,9 @@ async function main () {
     ignoreScripts: true,
     legacyPeerDeps: boolOption('legacy-peer-deps'),
     strictPeerDeps: boolOption('strict-peer-deps'),
-    installLinks: boolOption('install-links', true)
+    // npm 11 defaults install-links to false: local directory dependencies
+    // remain links unless the project explicitly opts into packed installs.
+    installLinks: boolOption('install-links', false)
   })
   const idealOptions = {}
   if (request.add && request.add.length) idealOptions.add = request.add

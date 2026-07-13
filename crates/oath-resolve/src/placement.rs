@@ -504,4 +504,34 @@ mod tests {
         assert!(files.contains(&std::path::PathBuf::from("lib/index.js")));
         assert!(!files.contains(&std::path::PathBuf::from("secret.txt")));
     }
+
+    #[test]
+    fn bundled_planner_uses_npm_default_for_local_directory_links() {
+        let project = tempfile::tempdir().unwrap();
+        let local = project.path().join("local");
+        std::fs::create_dir(&local).unwrap();
+        std::fs::write(
+            project.path().join("package.json"),
+            r#"{"name":"root","version":"1.0.0","dependencies":{"local":"file:./local"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            local.join("package.json"),
+            r#"{"name":"local","version":"1.0.0"}"#,
+        )
+        .unwrap();
+
+        let plan = ArboristPlanner::plan(project.path()).unwrap();
+        let local_node = plan
+            .nodes
+            .iter()
+            .find(|node| node.location == "node_modules/local")
+            .unwrap();
+        assert!(local_node.link);
+        let planned_target = std::path::PathBuf::from(local_node.target.as_ref().unwrap());
+        assert_eq!(
+            planned_target.canonicalize().unwrap(),
+            local.canonicalize().unwrap()
+        );
+    }
 }

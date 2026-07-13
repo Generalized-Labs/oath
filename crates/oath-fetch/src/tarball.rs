@@ -217,10 +217,9 @@ fn extract_archive<R: Read>(reader: R, dest: &Path, limits: &TarballLimits) -> R
         let full_path = dest.join(&relative);
 
         match entry.header().entry_type() {
-            tar::EntryType::Directory => {
-                std::fs::create_dir_all(&full_path)
-                    .with_context(|| format!("failed to create dir: {}", full_path.display()))?;
-            }
+            // npm/pacote does not preserve empty directory entries. Parent
+            // directories are created on demand for actual package files.
+            tar::EntryType::Directory => {}
             tar::EntryType::Regular => {
                 let entry_size = entry.size();
                 unpacked_bytes = unpacked_bytes
@@ -448,6 +447,24 @@ mod tests {
             std::fs::read(tmp.path().join("fixtures/example/.npmignore")).unwrap(),
             b"output\n"
         );
+    }
+
+    #[test]
+    fn extract_tarball_matches_npm_by_omitting_empty_directories() {
+        let gz = GzEncoder::new(Vec::new(), Compression::default());
+        let mut tar = Builder::new(gz);
+        let mut header = Header::new_gnu();
+        header.set_entry_type(tar::EntryType::Directory);
+        header.set_size(0);
+        header.set_mode(0o755);
+        header.set_cksum();
+        tar.append_data(&mut header, "package/.github/", std::io::empty())
+            .unwrap();
+        let data = tar.into_inner().unwrap().finish().unwrap();
+
+        let tmp = tempfile::tempdir().unwrap();
+        extract_tarball(&data, tmp.path()).unwrap();
+        assert!(!tmp.path().join(".github").exists());
     }
 
     #[test]
