@@ -36,3 +36,16 @@ write credentials. Lifecycle scripts remain disabled during qualification.
 The runner pool is accepted only when all 20 corpus shards start, each meets the
 capacity and free-space floors above, and the generated evidence records runner
 identity. Merely changing the YAML label does not satisfy this contract.
+
+## Transport and checkout failures
+
+The harness makes three attempts for GitHub network operations by default,
+removes partial clone destinations between clone attempts, and applies bounded
+backoff. Local checkouts have a separate five-minute timeout so repositories
+with large working trees are not mislabeled as network failures. These defaults
+can be changed with `OATH_GIT_NETWORK_ATTEMPTS`, `OATH_GIT_RETRY_DELAY_MS`,
+`OATH_GIT_NETWORK_TIMEOUT_MS`, and `OATH_GIT_CHECKOUT_TIMEOUT_MS`.
+
+Exhausted clone, fetch, or reference retries remain evidence failures. The
+artifact records the phase, attempt count, and process error; infrastructure
+loss must be rerun and may never be counted as a compatibility pass.

@@ -49,8 +49,12 @@ All notable changes to oath are documented here. Format follows
   while still rejecting behavioral graph drift.
 - Platform-specific optional packages can differ without making a shared frozen
   lock non-portable across macOS, Linux, and Windows.
-- Two reviewed real-project lock snapshots were refreshed after registry
-  resolution drift; both npm and Oath still produced identical installed trees.
+- Twenty-one reviewed real-project lock snapshots were refreshed after registry
+  resolution drift; npm and Oath both exited successfully and produced identical
+  tree counts, tree hashes, and path sets for every refresh.
+- The real-project harness now retries transient clone, fetch, and reference
+  failures with partial-clone cleanup, gives large local checkouts five minutes,
+  and preserves process errors and attempt counts in failed evidence.
 - npm-style git `#semver:` selectors now fail closed with an exact-pin message
   instead of silently installing the repository's moving `HEAD`.
 - Registry package ownership and visibility are now immutable, public metadata

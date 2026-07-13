@@ -57,7 +57,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "b6ec187a390c2ffe59f63f10ec0ee2524ea35bf2f0d4d73d9f9acf83b7b8f587"
+      "expected_lock_sha256": "0d8a7203debbd43157cfb66fbfb76343c5042249a65863239f15ae9ff913d6bc"
     },
     {
       "repository": "reddit/devvit-template-react",
@@ -137,7 +137,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "fc6647e23412fde2bd3cd2d99357b9852f4b8cbc760fd8db2d500a3f262c3e18"
+      "expected_lock_sha256": "900e30d39dae8e4012b64915a785a52ea1d5f7858d7563d3522135d46dd568cf"
     },
     {
       "repository": "egoist/tsup",
@@ -145,7 +145,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "a5855efb5d464310e54307871331474be9c0d0de68190d4fd42820904a3ba94d"
+      "expected_lock_sha256": "d911a8d9cc54a2b37f69b61a25b9e1b796e4d6ada618929a55304a2d7e62ff96"
     },
     {
       "repository": "unjs/unbuild",
@@ -153,7 +153,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "5daee73216467d2b529444deca704431db5093413841fcfbc6815f5c99fc2f94"
+      "expected_lock_sha256": "48dd8671e612c5304161b0ed317c2e4ff1fdac4709661b9d3c5b2ec2ab9fe424"
     },
     {
       "repository": "developit/microbundle",
@@ -209,7 +209,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "5d7f04912c673468c920e349cf9edac2154d559ad12cd58133ebc20125381528"
+      "expected_lock_sha256": "c537d4f89b2cc66b9d6d866aeacbe9d3bc191e1a60a7d054ca87bf8ec700bf05"
     },
     {
       "repository": "prettier/prettier",
@@ -217,7 +217,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "b49e9ef2e3b4a2341a2d8b8f37b7759be1c3c3b803bcd60c07fe9d1b65485a2a"
+      "expected_lock_sha256": "ec29c0ecf4f8725061b2c384394e307896e6cddf528536e32d8682ad903b6211"
     },
     {
       "repository": "eslint/eslint",
@@ -225,7 +225,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "7a743ff846abc55d22a7854191b85a103e1eabeefa59bf9926eaa31c98dfe58a"
+      "expected_lock_sha256": "bdb2fe4ac70c77ee230068d6af8206976569cf6fd9c8cd1e194416e468f88cf6"
     },
     {
       "repository": "unjs/jiti",
@@ -233,7 +233,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "ab31d00f2de1040eed17a596e2b71cd9875b9ba5b0e3ae5ee1f7c4ec545f96a3"
+      "expected_lock_sha256": "0b60e7bd7219b2e786caa0773f56b5fecdb229ba1f2aa4d17cbb399dc83f3162"
     },
     {
       "repository": "acornjs/acorn",
@@ -329,7 +329,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "59f24146c75577e937aa96ff8df6753302a31d0cee39c10d7855babfab94161a"
+      "expected_lock_sha256": "33ec538e997daab092acb7e67f93f86faa5e813fdec0260ecfb553b444551442"
     },
     {
       "repository": "fastify/fastify",
@@ -337,7 +337,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "0fcc37c010fe03861025e7afbe8f617fb3af69d5b1dfcdc80eb7cef05c6a0ff6"
+      "expected_lock_sha256": "4057bfc0eb20f52336480549f289618fb62ba47e39b28116144f8d83c0fed398"
     },
     {
       "repository": "koajs/koa",
@@ -353,7 +353,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "5ff8a442a39cf72ffd6f1c432bf21aaac5210fd12841fde6f10d687e70675e2f"
+      "expected_lock_sha256": "f776520318037f1ad44746ef939359ed2fdc144390a8fd77821590f04b93caf3"
     },
     {
       "repository": "adonisjs/core",
@@ -361,7 +361,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "118aa1b1753239503d0d2842d90a0fad07dc421c584befc131ebfb8a2c8959d8"
+      "expected_lock_sha256": "f6b03592f91604eb7d9ac289c56ea206261eb932dd82325f540a3e2e0d0e33ca"
     },
     {
       "repository": "feathersjs/feathers",
@@ -433,7 +433,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "7c50f79990144b61f71d4bf17e444cca2f6c256f363ace190dc21683a59b496c"
+      "expected_lock_sha256": "3d014f644cb41caae3e58acbccbafdafb95390e3c946bb0558e98c8748c9bce6"
     },
     {
       "repository": "radix-ui/primitives",
@@ -441,7 +441,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "7712df481ba15e27a9f4f8d189522135aa92b419233e64c29949d2b5d947191e"
+      "expected_lock_sha256": "845f8f58c552f3ae6cfa20932ecb883aca85d050e6436f48d1300fa98749b7be"
     },
     {
       "repository": "tailwindlabs/headlessui",
@@ -489,7 +489,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "5a35d6a44199d9e4042f2e6cb73acf2f0b8ec5f4309b8f68b802f964a1df9a8b"
+      "expected_lock_sha256": "49cd8c84e88a1cd1d4bc8c503e01c047f645c02638f5022a43b6146e097c3410"
     },
     {
       "repository": "Automattic/mongoose",
@@ -625,7 +625,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "16a1372baec4de22331cc6dea2d55ce5f41565c20a15905211bca1951d20aa39"
+      "expected_lock_sha256": "06a51652f8dfb7590b37eced95f34fc73e2e3671c7488d13884b7d432fdda4b8"
     },
     {
       "repository": "mattermost/mattermost-webapp",
@@ -649,7 +649,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "8f96435c44fd6fe26eb40b4edb114f4b0112a4ad9c95c9de73f1bea3652c3d9b"
+      "expected_lock_sha256": "c22a993d482ac8d6f28f9f95aafd947cd40acc42c4cdc46818835a623463db96"
     },
     {
       "repository": "nodejs/node-gyp",
@@ -657,7 +657,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "c661cb774105b6ceac8570ccf064436058e16dc57e65b6f91885fa88356d960b"
+      "expected_lock_sha256": "11537470794dc6c64ffa7a8756d90917950c64861fdb6a6b7af6f5e624c1b5bb"
     },
     {
       "repository": "prebuild/prebuild",
@@ -753,7 +753,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "d333e754c053bf7855a00a16c6db7b2c649c36efa610a8eae97a127eaa12cd45"
+      "expected_lock_sha256": "f014029f9a38cb7075ee8c630447eb064f06f04c2f183b9fca49febc5e36acd1"
     },
     {
       "repository": "terkelg/prompts",
@@ -777,7 +777,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "f01935cc562276fbdb98567e1d11725cc9d1e849329da77885e7558ef458eb2e"
+      "expected_lock_sha256": "a23b72eb143d8e5df02b554d03cd661dab2a05324294a08e6d4ef7fdc572f611"
     },
     {
       "repository": "sindresorhus/execa",
@@ -785,7 +785,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "f50aad4c72202d9cf1eccf30d166b222f76241f50395a600f2cb81c656fd23bd"
+      "expected_lock_sha256": "747ac3b8ae45778853a91ea0bbaa2b37bd8a4d0c1c647f9beb9c972c75212c0d"
     },
     {
       "repository": "google/zx",
