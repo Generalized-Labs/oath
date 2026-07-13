@@ -22,9 +22,12 @@ public package private.
 
 ## Reliability drills
 
-Run `scripts/reliability-drills.sh` against an isolated environment. Record the
-date, operator, versions, region, recovery-point objective, recovery-time
-objective, actual recovery time, checksums, and linked incident ticket.
+Run `scripts/reliability-drills.sh` against an isolated environment. It is an
+automated smoke for registry tenant/revocation behavior, replica read repair,
+unsigned-webhook rejection, and database liveness. It does not perform or
+certify the full operator drills below. Record the date, operator, versions,
+region, recovery-point objective, recovery-time objective, actual recovery time,
+checksums, and linked incident ticket for the complete drill.
 
 Required drills:
 

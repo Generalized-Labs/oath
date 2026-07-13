@@ -47,14 +47,14 @@ echo "==> format"
 cargo fmt --all -- --check
 
 echo "==> clippy"
-cargo clippy --workspace --all-targets -- -D warnings
+cargo clippy --workspace --locked --all-targets -- -D warnings
 
 echo "==> tests"
 cargo test --workspace --locked
 
 if command -v cargo-audit >/dev/null 2>&1; then
   echo "==> cargo audit"
-  cargo audit
+  cargo audit --deny warnings
 else
   echo "==> cargo audit skipped: install with 'cargo install cargo-audit'"
 fi

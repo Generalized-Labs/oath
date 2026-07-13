@@ -28,8 +28,9 @@ scanned, since many attacks put the entire payload in `preinstall`.
 ## Last published benchmark baseline
 
 The following corpus numbers were measured on the v0.1.6 behavioral engine.
-v0.1.7 narrows package-level correlation to same-file correlation, so do not
-present these exact percentages as v0.1.7 measurements until the corpus is rerun.
+Later releases narrowed package-level correlation to same-file correlation, so
+do not present these exact percentages as v0.2.0 measurements until the corpus
+is rerun on the exact release candidate.
 
 Benchmarked with `cargo run --release -p oath-analyze --example bench` against:
 - **benign:** 1,776 package trees from a local store of the most-depended-on npm
@@ -53,9 +54,10 @@ tool merely capturing the whole environment (vite/webpack `define`, `loadEnv`) i
 
 ## What it does NOT catch (honest limits)
 
-Roughly **46% of the malware corpus is not caught**, and that is expected for a
-JavaScript static analyzer. The misses fall into classes that are out of scope or
-inherently hard:
+The published baseline missed **42.5% of the malware corpus**. The exact current
+miss rate is unknown until the corpus is rerun, and substantial misses are
+expected for a JavaScript static analyzer. They fall into classes that are out
+of scope or inherently hard:
 
 - **Binary-payload droppers.** Packages whose malice lives in a bundled `.exe` /
   `.node` / native binary (e.g. fake `*-win32-x64` packages). A JS scanner sees
@@ -77,6 +79,11 @@ of safety. It is strongest at the dominant real-world npm attack shapes
 known sinks) and is honest about everything else. It complements — does not
 replace — registry reputation, lockfile pinning, the `--min-age` cooldown, and
 running install scripts only for trusted packages.
+
+These historical numbers do not meet Oath's GA detection contract of at least
+98% known-malware recall, at least 95% private-adversarial recall, and at most
+0.5% false positives. The CLI may ship as a developer preview with this limit;
+the scanner must not be marketed as GA-grade malware detection.
 
 ## Reproduce
 

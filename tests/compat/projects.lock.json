@@ -233,7 +233,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "4327965192c5cadc3bfa1d7f84dd8ec3784755500db1d005178956daab9a11f0"
+      "expected_lock_sha256": "ab31d00f2de1040eed17a596e2b71cd9875b9ba5b0e3ae5ee1f7c4ec545f96a3"
     },
     {
       "repository": "acornjs/acorn",
@@ -361,7 +361,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "5cf0e15b5fe6da7edaf5fd3fda6f0c3e4d5e335f945792adae3176884176f1c1"
+      "expected_lock_sha256": "118aa1b1753239503d0d2842d90a0fad07dc421c584befc131ebfb8a2c8959d8"
     },
     {
       "repository": "feathersjs/feathers",

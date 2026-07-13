@@ -10,30 +10,136 @@ env:
 
 permissions:
   contents: read
+  actions: read
 
 jobs:
+  verify:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17
+        env:
+          POSTGRES_USER: oath
+          POSTGRES_PASSWORD: oath
+          POSTGRES_DB: oath_release
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oath -d oath_release"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      OATH_TEST_DATABASE_URL: postgresql://oath:oath@localhost:5432/oath_release
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 0
+
+      - name: Verify tag and changelog version
+        shell: bash
+        run: |
+          set -euo pipefail
+          version=$(sed -n 's/^version = "\([^"]*\)"/\1/p' Cargo.toml | head -n 1)
+          test "v${version}" = "$GITHUB_REF_NAME"
+          grep -F "## [${version}] - " CHANGELOG.md
+          git fetch origin master
+          git merge-base --is-ancestor "$GITHUB_SHA" origin/master
+
+      - name: Require full release evidence for the tagged commit
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml \
+            --commit "$GITHUB_SHA" \
+            --event workflow_dispatch \
+            --status success \
+            --limit 100 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          test -n "$run_id"
+          gate=$(gh run view "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --json jobs \
+            --jq '.jobs[] | select(.name == "release-evidence-gate") | .conclusion')
+          test "$gate" = success
+          echo "Full release evidence passed in CI run $run_id"
+
+      - name: Install Rust toolchain
+        run: |
+          rustup toolchain install stable --component rustfmt --component clippy
+          rustup toolchain install 1.94.0 --profile minimal
+          rustup default stable
+
+      - name: Install Linux sandbox linker dependency
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+
+      - name: Verify Rust workspace
+        run: |
+          cargo +1.94.0 check --workspace --locked --all-targets
+          cargo fmt --all -- --check
+          cargo clippy --workspace --locked --all-targets -- -D warnings
+          cargo test --workspace --locked
+
+      - name: Install cargo-audit
+        run: cargo install cargo-audit --locked
+
+      - name: Audit locked Rust dependencies
+        run: cargo audit --deny warnings
+
+      - name: Install Node.js
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        with:
+          node-version: 24.13.0
+
+      - name: Verify evidence website
+        run: |
+          npm ci --prefix website
+          npm audit --prefix website --audit-level=moderate
+          npm run build --prefix website
+
   build:
+    needs: verify
     strategy:
-      # Don't cancel the other platforms if one fails -- ship what we can.
+      # Let every platform report its result; release creation still requires all.
       fail-fast: false
       matrix:
         include:
           - target: aarch64-apple-darwin
             os: macos-latest
             asset: oath-darwin-arm64
+            binary: oath
             use_cross: false
           - target: x86_64-apple-darwin
             os: macos-latest
             asset: oath-darwin-x64
+            binary: oath
             use_cross: false
           - target: x86_64-unknown-linux-gnu
             os: ubuntu-latest
             asset: oath-linux-x64
+            binary: oath
             use_cross: true
           - target: aarch64-unknown-linux-gnu
             os: ubuntu-latest
             asset: oath-linux-arm64
+            binary: oath
             use_cross: true
+          - target: x86_64-pc-windows-msvc
+            os: windows-latest
+            asset: oath-windows-x64.exe
+            binary: oath.exe
+            use_cross: false
+          - target: aarch64-pc-windows-msvc
+            os: windows-latest
+            asset: oath-windows-arm64.exe
+            binary: oath.exe
+            use_cross: false
 
     runs-on: ${{ matrix.os }}
 
@@ -61,9 +167,14 @@ jobs:
         run: cross build --release --locked --target ${{ matrix.target }} --bin oath
 
       - name: Rename binary and checksum
+        shell: bash
         run: |
-          cp "target/${{ matrix.target }}/release/oath" "${{ matrix.asset }}"
-          shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          cp "target/${{ matrix.target }}/release/${{ matrix.binary }}" "${{ matrix.asset }}"
+          if command -v shasum >/dev/null 2>&1; then
+            shasum -a 256 "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          else
+            sha256sum "${{ matrix.asset }}" > "${{ matrix.asset }}.sha256"
+          fi
           cat "${{ matrix.asset }}.sha256"
 
       - name: Upload artifact
@@ -79,6 +190,8 @@ jobs:
     runs-on: ubuntu-latest
     permissions:
       contents: write
+      id-token: write
+      attestations: write
 
     steps:
       - name: Checkout
@@ -97,6 +210,17 @@ jobs:
           echo "=== checksums.txt ==="
           cat checksums.txt
 
+      - name: Attest release binaries
+        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        with:
+          subject-path: |
+            oath-darwin-arm64
+            oath-darwin-x64
+            oath-linux-x64
+            oath-linux-arm64
+            oath-windows-x64.exe
+            oath-windows-arm64.exe
+
       - name: Create GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
@@ -112,4 +236,8 @@ jobs:
             oath-linux-x64.sha256 \
             oath-linux-arm64 \
             oath-linux-arm64.sha256 \
+            oath-windows-x64.exe \
+            oath-windows-x64.exe.sha256 \
+            oath-windows-arm64.exe \
+            oath-windows-arm64.exe.sha256 \
             checksums.txt

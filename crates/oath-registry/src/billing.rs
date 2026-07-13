@@ -65,15 +65,18 @@ impl StripeBilling {
             now.abs_diff(timestamp) <= 300,
             "Stripe webhook timestamp is outside tolerance"
         );
-        let mut mac = Hmac::<Sha256>::new_from_slice(self.webhook_secret.as_bytes())?;
-        mac.update(timestamp.to_string().as_bytes());
-        mac.update(b".");
-        mac.update(body);
-        let expected = mac.finalize().into_bytes();
-        let valid = signatures
-            .into_iter()
-            .filter_map(|value| hex::decode(value).ok())
-            .any(|candidate| candidate == expected.as_slice());
+        let valid = signatures.into_iter().any(|value| {
+            let Ok(candidate) = hex::decode(value) else {
+                return false;
+            };
+            let Ok(mut mac) = Hmac::<Sha256>::new_from_slice(self.webhook_secret.as_bytes()) else {
+                return false;
+            };
+            mac.update(timestamp.to_string().as_bytes());
+            mac.update(b".");
+            mac.update(body);
+            mac.verify_slice(&candidate).is_ok()
+        });
         anyhow::ensure!(valid, "invalid Stripe webhook signature");
         Ok(serde_json::from_slice(body)?)
     }
@@ -86,5 +89,21 @@ mod tests {
     fn rejects_unsigned_webhooks() {
         let billing = StripeBilling::new("sk".into(), "whsec".into());
         assert!(billing.verify_webhook("t=1,v1=00", b"{}", 1).is_err());
+    }
+
+    #[test]
+    fn accepts_valid_current_signature_and_rejects_expired_signature() {
+        let billing = StripeBilling::new("sk".into(), "whsec".into());
+        let body = br#"{"id":"evt_1","type":"test"}"#;
+        let mut mac = Hmac::<Sha256>::new_from_slice(b"whsec").unwrap();
+        mac.update(b"1000.");
+        mac.update(body);
+        let signature = hex::encode(mac.finalize().into_bytes());
+        let header = format!("t=1000,v1={signature}");
+        assert_eq!(
+            billing.verify_webhook(&header, body, 1000).unwrap()["id"],
+            "evt_1"
+        );
+        assert!(billing.verify_webhook(&header, body, 1301).is_err());
     }
 }

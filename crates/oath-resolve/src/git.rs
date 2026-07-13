@@ -52,14 +52,7 @@ pub fn parse_git_spec(spec: &str) -> Option<GitSpec> {
     if let Some(rest) = spec.strip_prefix("github:") {
         // after "github:"
         let (repo_path, git_ref) = split_ref(rest);
-        // Skip semver: prefix refs for now -- treat as HEAD
-        let git_ref = git_ref.and_then(|r| {
-            if r.starts_with("semver:") {
-                None // TODO: resolve tags for semver ranges
-            } else {
-                Some(r.to_string())
-            }
-        });
+        let git_ref = git_ref.map(str::to_owned);
         let parts: Vec<&str> = repo_path.splitn(2, '/').collect();
         if parts.len() != 2 {
             return None;
@@ -198,6 +191,15 @@ pub struct GitResolved {
 
 /// Resolve a git spec: download the tarball and read package.json
 pub async fn resolve_git_spec(spec: &GitSpec, http: &reqwest::Client) -> Result<GitResolved> {
+    if let Some(range) = spec
+        .git_ref
+        .as_deref()
+        .and_then(|value| value.strip_prefix("semver:"))
+    {
+        anyhow::bail!(
+            "git semver selector `{range}` is not supported yet; pin an exact tag or commit instead"
+        );
+    }
     let git_ref = spec.git_ref.as_deref().unwrap_or("HEAD");
 
     // For GitHub repos, use the tarball API
@@ -452,7 +454,9 @@ fn safe_cache_component(input: &str) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{git_cache_file_name, parse_git_spec, prune_git_package_metadata};
+    use super::{
+        git_cache_file_name, parse_git_spec, prune_git_package_metadata, resolve_git_spec,
+    };
 
     #[test]
     fn git_cache_file_name_encodes_path_separators() {
@@ -474,6 +478,16 @@ mod tests {
             spec.git_ref.as_deref(),
             Some("978dc1c9680ef7d79f5f5c02c3439385d7937c39")
         );
+    }
+
+    #[tokio::test]
+    async fn git_semver_selector_fails_closed_instead_of_resolving_head() {
+        let spec = parse_git_spec("github:example/tool#semver:^1.2.0").unwrap();
+        assert_eq!(spec.git_ref.as_deref(), Some("semver:^1.2.0"));
+        let error = resolve_git_spec(&spec, &reqwest::Client::new())
+            .await
+            .unwrap_err();
+        assert!(error.to_string().contains("pin an exact tag or commit"));
     }
 
     #[test]

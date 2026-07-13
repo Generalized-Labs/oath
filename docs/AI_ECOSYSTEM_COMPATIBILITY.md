@@ -27,15 +27,14 @@ The default free-space guard is `1200` MiB. Override it with
 
 ## Latest Local Result
 
-The latest local pass was recorded at
-`compat-results/ai-ecosystem/20260710T173517Z/summary.md`:
+The latest checked-in local pass was recorded at
+`compat-results/ai-ecosystem/20260713T214027Z/summary.md`:
 
-- Oath: `oath 0.1.6`
-- Oath SHA-256: `8afc02a7b4c11bbd3be0b6718fc5773763edadbb05218ea51a2a3e1c9511a4e7`
+- Oath: `oath 0.2.0`
+- Oath SHA-256: `80ba825559640d3e8725fcefb699dd405d190d5003d50ad820f1889e362e4f8e`
 - Overall: pass
-- Durations: 5s core AI SDKs, 4s Convex, 6s MCP/LangChain, 16s TS tooling
-- Disk samples: 15200 MiB before the first case and 14440 MiB after the final
-  case, with the working volume showing about 14 GiB free after the run
+- Durations: 18s core AI SDKs, 17s Convex, 20s MCP/LangChain, 10s TS tooling
+- Disk samples: 1251 MiB before the first case and 867 MiB after the final case
 
 A prior local run at `20260706T033752Z` exposed tarball body timeouts on larger
 AI ecosystem packages. Oath now gives tarball body downloads a longer timeout,

@@ -1,8 +1,8 @@
 class Oath < Formula
-  desc "Security-first npm/npx replacement with malware scanning"
+  desc "Security-first JavaScript package workflow and assessed npx alternative"
   homepage "https://github.com/Generalized-Labs/oath"
-  url "https://github.com/Generalized-Labs/oath/archive/refs/tags/v0.1.0.tar.gz"
-  sha256 "70dc445f9da3e40209ee57a9c9c8946c86e32159cd8dbca8b81eb2225fc4b71b"
+  url "https://github.com/Generalized-Labs/oath/archive/refs/tags/v0.1.7.tar.gz"
+  sha256 "283ab6b3ad8c8b9cd02c28918eb16d43104a71504c7719a1a622e3ebc2482659"
   license "MIT"
   head "https://github.com/Generalized-Labs/oath.git", branch: "master"
 

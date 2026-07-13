@@ -64,7 +64,7 @@ const evidenceRun = "https://github.com/Generalized-Labs/oath/actions/runs/29240
 
 function App() {
   const [copied, setCopied] = useState(false);
-  const command = "oath exec prettier@3.7.4";
+  const command = "oath exec --dry-run --json prettier@3.7.4";
 
   const copyCommand = async () => {
     await navigator.clipboard.writeText(command);
@@ -82,7 +82,7 @@ function App() {
             <Fingerprint className="h-7 w-7 stroke-[2.5]" aria-hidden="true" /> Oath
           </a>
           <div className="hidden items-center px-8 font-mono text-[10px] font-bold uppercase tracking-[0.22em] lg:flex">
-            Package execution / evidence protocol / v0.1.7
+            Package execution / evidence protocol / v0.2.0 candidate
           </div>
           <nav className="flex items-center" aria-label="Primary navigation">
             <a href="#proof" className="nav-link">Proof</a>
@@ -128,9 +128,9 @@ function App() {
           <div className="flex h-full min-h-[610px] flex-col border-2 border-paper">
             <div className="flex items-center justify-between border-b-2 border-paper p-4">
               <div className="flex items-center gap-3 font-mono text-xs font-bold uppercase tracking-[0.14em]">
-                <Terminal className="h-4 w-4 text-hazard" /> Exec assessment / 01
+                <Terminal className="h-4 w-4 text-hazard" /> Example exec assessment / schema 2
               </div>
-              <span className="bg-paper px-2 py-1 font-mono text-[9px] font-black text-carbon">JSON STABLE</span>
+              <span className="bg-paper px-2 py-1 font-mono text-[9px] font-black text-carbon">ILLUSTRATIVE</span>
             </div>
             <div className="border-b-2 border-paper p-4 sm:p-6">
               <div className="mb-2 font-mono text-[10px] uppercase tracking-[0.18em] text-evidence">Requested command</div>
@@ -255,7 +255,7 @@ function App() {
             <h2 className="mt-5 max-w-4xl font-display text-5xl font-black uppercase leading-[0.86] tracking-[-0.065em] sm:text-7xl">Make it show its work.</h2>
           </div>
           <div className="flex flex-col justify-center gap-3 border-t-2 border-paper bg-paper p-6 text-carbon lg:min-w-[360px] lg:border-l-2 lg:border-t-0">
-            <Button size="lg" onClick={copyCommand}>{copied ? "Command copied" : "Copy install command"} <Copy className="h-4 w-4" /></Button>
+            <Button size="lg" onClick={copyCommand}>{copied ? "Command copied" : "Copy safety check"} <Copy className="h-4 w-4" /></Button>
             <Button size="lg" variant="outline" asChild><a href={evidenceRun} target="_blank" rel="noreferrer">Read the evidence <ArrowUpRight className="h-4 w-4" /></a></Button>
             <Button size="lg" variant="outline" asChild><a href="https://github.com/Generalized-Labs/oath/issues/new?template=design-partner.yml" target="_blank" rel="noreferrer">Join the private beta <ArrowUpRight className="h-4 w-4" /></a></Button>
           </div>

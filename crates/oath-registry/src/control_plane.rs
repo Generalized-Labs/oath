@@ -20,12 +20,20 @@ pub struct VersionRecord {
 
 #[derive(Debug)]
 pub struct PackageVersionRecord {
+    pub organization: String,
     pub version: String,
     pub digest: String,
     pub status: String,
     pub private: bool,
+    pub manifest: Value,
     pub assessment: Value,
     pub published_at: i64,
+}
+
+#[derive(Debug)]
+pub struct PackageRecord {
+    pub organization: String,
+    pub private: bool,
 }
 
 #[derive(Debug)]
@@ -98,22 +106,51 @@ impl PostgresControlPlane {
         )
     }
 
+    pub async fn package(&self, name: &str) -> Result<Option<PackageRecord>> {
+        let row = query("SELECT organization,private FROM packages WHERE name=$1")
+            .bind(name)
+            .fetch_optional(&self.pool)
+            .await?;
+        Ok(row.map(|row| PackageRecord {
+            organization: row.get("organization"),
+            private: row.get("private"),
+        }))
+    }
+
     pub async fn create_stage(&self, stage: &StageRecord) -> Result<()> {
-        query("INSERT INTO stages(id,organization,name,version,tag,digest,status,private,assessment,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)")
+        let mut tx = self.pool.begin().await?;
+        query("INSERT INTO packages(name,organization,private,created_at) VALUES ($1,$2,$3,$4) ON CONFLICT (name) DO NOTHING")
+            .bind(&stage.name).bind(&stage.organization).bind(stage.private).bind(stage.created_at as i64).execute(&mut *tx).await?;
+        let package = query("SELECT organization,private FROM packages WHERE name=$1 FOR UPDATE")
+            .bind(&stage.name)
+            .fetch_one(&mut *tx)
+            .await?;
+        let owner: String = package.get("organization");
+        let private: bool = package.get("private");
+        anyhow::ensure!(
+            owner == stage.organization,
+            "package belongs to another organization"
+        );
+        anyhow::ensure!(
+            private == stage.private,
+            "package visibility cannot change between versions"
+        );
+        query("INSERT INTO stages(id,organization,name,version,tag,digest,status,private,manifest,assessment,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)")
             .bind(&stage.id).bind(&stage.organization).bind(&stage.name).bind(&stage.version)
             .bind(&stage.tag).bind(&stage.digest).bind(&stage.status).bind(stage.private)
-            .bind(&stage.assessment).bind(stage.created_at as i64).execute(&self.pool).await?;
+            .bind(&stage.manifest).bind(&stage.assessment).bind(stage.created_at as i64).execute(&mut *tx).await?;
+        tx.commit().await?;
         Ok(())
     }
 
     pub async fn read_stage(&self, id: &str) -> Result<Option<StageRecord>> {
-        let row = query("SELECT id,organization,name,version,tag,digest,status,private,assessment,created_at FROM stages WHERE id=$1")
+        let row = query("SELECT id,organization,name,version,tag,digest,status,private,manifest,assessment,created_at FROM stages WHERE id=$1")
             .bind(id).fetch_optional(&self.pool).await?;
         Ok(row.map(stage_from_row))
     }
 
     pub async fn list_stages(&self, organization: &str) -> Result<Vec<StageRecord>> {
-        Ok(query("SELECT id,organization,name,version,tag,digest,status,private,assessment,created_at FROM stages WHERE organization=$1 ORDER BY created_at DESC")
+        Ok(query("SELECT id,organization,name,version,tag,digest,status,private,manifest,assessment,created_at FROM stages WHERE stages.organization=$1 OR EXISTS (SELECT 1 FROM package_roles WHERE package_roles.name=stages.name AND package_roles.principal_org=$1) ORDER BY created_at DESC")
             .bind(organization).fetch_all(&self.pool).await?.into_iter().map(stage_from_row).collect())
     }
 
@@ -122,45 +159,42 @@ impl PostgresControlPlane {
         stage: &StageRecord,
         approve: bool,
         reason: Option<&str>,
-    ) -> Result<()> {
+    ) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
+        let status: Option<String> =
+            query_scalar("SELECT status FROM stages WHERE id=$1 FOR UPDATE")
+                .bind(&stage.id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        if status.as_deref() != Some("staged") {
+            tx.rollback().await?;
+            return Ok(false);
+        }
         if approve {
-            query("UPDATE stages SET status='approved',decision_reason=$2 WHERE id=$1 AND status='staged'").bind(&stage.id).bind(reason).execute(&mut *tx).await?;
-            query("INSERT INTO versions(name,version,organization,digest,status,private,assessment,published_at) VALUES ($1,$2,$3,$4,'active',$5,$6,$7)")
-                .bind(&stage.name).bind(&stage.version).bind(&stage.organization).bind(&stage.digest).bind(stage.private).bind(&stage.assessment).bind(crate::now() as i64).execute(&mut *tx).await?;
+            query("UPDATE stages SET status='approved',decision_reason=$2 WHERE id=$1")
+                .bind(&stage.id)
+                .bind(reason)
+                .execute(&mut *tx)
+                .await?;
+            query("INSERT INTO versions(name,version,organization,digest,status,private,manifest,assessment,published_at) VALUES ($1,$2,$3,$4,'active',$5,$6,$7,$8)")
+                .bind(&stage.name).bind(&stage.version).bind(&stage.organization).bind(&stage.digest).bind(stage.private).bind(&stage.manifest).bind(&stage.assessment).bind(crate::now() as i64).execute(&mut *tx).await?;
             query("INSERT INTO dist_tags(name,tag,version) VALUES ($1,$2,$3) ON CONFLICT (name,tag) DO UPDATE SET version=EXCLUDED.version")
                 .bind(&stage.name).bind(&stage.tag).bind(&stage.version).execute(&mut *tx).await?;
         } else {
-            query("UPDATE stages SET status='rejected',decision_reason=$2 WHERE id=$1 AND status='staged'").bind(&stage.id).bind(reason).execute(&mut *tx).await?;
+            query("UPDATE stages SET status='rejected',decision_reason=$2 WHERE id=$1")
+                .bind(&stage.id)
+                .bind(reason)
+                .execute(&mut *tx)
+                .await?;
         }
         tx.commit().await?;
-        Ok(())
-    }
-
-    pub async fn append_event(
-        &self,
-        event_json: &str,
-        previous: &str,
-        hash: &str,
-        signature: &str,
-    ) -> Result<()> {
-        query("INSERT INTO registry_events(event_json,previous_hash,event_hash,signature,created_at) VALUES ($1,$2,$3,$4,$5)")
-            .bind(event_json).bind(previous).bind(hash).bind(signature).bind(crate::now() as i64).execute(&self.pool).await?;
-        Ok(())
+        Ok(true)
     }
 
     pub async fn event_hashes(&self) -> Result<Vec<String>> {
         Ok(
             query_scalar("SELECT event_hash FROM registry_events ORDER BY sequence")
                 .fetch_all(&self.pool)
-                .await?,
-        )
-    }
-
-    pub async fn latest_event_hash(&self) -> Result<Option<String>> {
-        Ok(
-            query_scalar("SELECT event_hash FROM registry_events ORDER BY sequence DESC LIMIT 1")
-                .fetch_optional(&self.pool)
                 .await?,
         )
     }
@@ -182,15 +216,17 @@ impl PostgresControlPlane {
     }
 
     pub async fn package_versions(&self, name: &str) -> Result<Vec<PackageVersionRecord>> {
-        let rows = query("SELECT version,digest,status,private,assessment,published_at FROM versions WHERE name=$1 ORDER BY published_at")
+        let rows = query("SELECT organization,version,digest,status,private,manifest,assessment,published_at FROM versions WHERE name=$1 AND status='active' ORDER BY published_at")
             .bind(name).fetch_all(&self.pool).await?;
         Ok(rows
             .into_iter()
             .map(|row| PackageVersionRecord {
+                organization: row.get("organization"),
                 version: row.get("version"),
                 digest: row.get("digest"),
                 status: row.get("status"),
                 private: row.get("private"),
+                manifest: row.get("manifest"),
                 assessment: row.get("assessment"),
                 published_at: row.get("published_at"),
             })
@@ -255,6 +291,12 @@ impl PostgresControlPlane {
                 .bind(version)
                 .execute(&mut *tx)
                 .await?;
+        } else {
+            query("DELETE FROM dist_tags WHERE name=$1 AND version=$2")
+                .bind(name)
+                .bind(version)
+                .execute(&mut *tx)
+                .await?;
         }
         tx.commit().await?;
         Ok(true)
@@ -267,6 +309,11 @@ impl PostgresControlPlane {
         principal_org: &str,
         role: &str,
     ) -> Result<()> {
+        let package = self.package(name).await?.context("package not found")?;
+        anyhow::ensure!(
+            package.organization == owner_org,
+            "only the package-owning organization may grant roles"
+        );
         query("INSERT INTO package_roles(name,organization,principal_org,role) VALUES ($1,$2,$3,$4) ON CONFLICT (name,principal_org) DO UPDATE SET organization=EXCLUDED.organization,role=EXCLUDED.role")
             .bind(name).bind(owner_org).bind(principal_org).bind(role).execute(&self.pool).await?;
         Ok(())
@@ -355,6 +402,7 @@ fn stage_from_row(row: PgRow) -> StageRecord {
         digest: row.get("digest"),
         status: row.get("status"),
         private: row.get("private"),
+        manifest: row.get::<Value, _>("manifest"),
         assessment: row.get::<Value, _>("assessment"),
         created_at: row.get::<i64, _>("created_at") as u64,
     }

@@ -1,20 +1,23 @@
-use std::{path::Path, sync::Arc};
+use std::{io::Read, path::Path, sync::Arc};
 
-use anyhow::Result;
+use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{Path as AxumPath, State},
+    extract::{DefaultBodyLimit, Path as AxumPath, Request, State},
     http::{HeaderMap, StatusCode, header},
+    middleware::{self, Next},
     response::{Html, IntoResponse, Response},
     routing::{get, post},
 };
 use base64::Engine;
 use ed25519_dalek::{Signer, SigningKey};
+use flate2::read::GzDecoder;
 use serde::Deserialize;
 use serde_json::{Value, json};
 #[cfg(test)]
 use sqlx_core::raw_sql::raw_sql;
+use sqlx_core::{query::query, query_scalar::query_scalar};
 #[cfg(test)]
 use sqlx_postgres::PgPool;
 
@@ -40,6 +43,8 @@ pub struct PostgresRegistry {
     oidc: Option<OidcVerifier>,
     mailer: Option<InvitationMailer>,
     public_url: String,
+    invitation_accept_url: Option<String>,
+    max_stage_request_bytes: usize,
     metrics: RegistryMetrics,
     billing: Option<StripeBilling>,
 }
@@ -82,6 +87,22 @@ impl PostgresRegistry {
                 "STRIPE_SECRET_KEY and STRIPE_WEBHOOK_SECRET must be configured together"
             ),
         };
+        let invitation_accept_url = std::env::var("OATH_INVITATION_ACCEPT_URL").ok();
+        if mailer.is_some() && invitation_accept_url.is_none() {
+            anyhow::bail!(
+                "OATH_INVITATION_ACCEPT_URL is required when invitation email is configured"
+            );
+        }
+        let max_stage_request_bytes = std::env::var("OATH_REGISTRY_MAX_STAGE_REQUEST_BYTES")
+            .ok()
+            .map(|value| value.parse::<usize>())
+            .transpose()
+            .context("OATH_REGISTRY_MAX_STAGE_REQUEST_BYTES must be an integer")?
+            .unwrap_or(64 * 1024 * 1024);
+        anyhow::ensure!(
+            (1024 * 1024..=1024 * 1024 * 1024).contains(&max_stage_request_bytes),
+            "OATH_REGISTRY_MAX_STAGE_REQUEST_BYTES must be between 1 MiB and 1 GiB"
+        );
         Ok(Self {
             control: PostgresControlPlane::connect(database_url).await?,
             objects,
@@ -89,7 +110,11 @@ impl PostgresRegistry {
             oidc,
             mailer,
             public_url: std::env::var("OATH_PUBLIC_URL")
-                .unwrap_or_else(|_| "http://localhost:4873".into()),
+                .unwrap_or_else(|_| "http://localhost:4873".into())
+                .trim_end_matches('/')
+                .to_owned(),
+            invitation_accept_url,
+            max_stage_request_bytes,
             metrics: RegistryMetrics::default(),
             billing,
         })
@@ -125,21 +150,39 @@ impl PostgresRegistry {
             .ok_or_else(ApiError::unauthorized)
     }
 
+    async fn authenticate_optional(
+        &self,
+        headers: &HeaderMap,
+    ) -> Result<Option<Principal>, ApiError> {
+        let Some(token) = bearer_optional(headers)? else {
+            return Ok(None);
+        };
+        self.control
+            .authenticate(&hex_sha256(token.as_bytes()))
+            .await
+            .map_err(ApiError::internal)?
+            .map(Some)
+            .ok_or_else(ApiError::unauthorized)
+    }
+
     async fn authorize_name(
         &self,
         principal: &Principal,
         name: &str,
         write: bool,
-    ) -> Result<(), ApiError> {
-        if write && !matches!(principal.role.as_str(), "publisher" | "admin") {
-            return Err(ApiError::forbidden("publisher role required"));
-        }
-        if let Some(scope) = name
-            .strip_prefix('@')
-            .and_then(|value| value.split('/').next())
-            && scope != principal.organization
-            && principal.role != "admin"
+    ) -> Result<String, ApiError> {
+        if let Some(package) = self
+            .control
+            .package(name)
+            .await
+            .map_err(ApiError::internal)?
         {
+            if package.organization == principal.organization {
+                if write && !matches!(principal.role.as_str(), "publisher" | "admin") {
+                    return Err(ApiError::forbidden("publisher role required"));
+                }
+                return Ok(package.organization);
+            }
             let role = self
                 .control
                 .package_role(name, &principal.organization)
@@ -151,35 +194,156 @@ impl PostgresRegistry {
             );
             if !allowed {
                 return Err(ApiError::forbidden(
-                    "private scope belongs to another organization",
+                    "package belongs to another organization",
                 ));
             }
+            return Ok(package.organization);
         }
-        Ok(())
+
+        if !write {
+            return Err(ApiError::not_found("package not found"));
+        }
+        if !matches!(principal.role.as_str(), "publisher" | "admin") {
+            return Err(ApiError::forbidden("publisher role required"));
+        }
+        if let Some(scope) = name
+            .strip_prefix('@')
+            .and_then(|value| value.split('/').next())
+            && scope != principal.organization
+        {
+            return Err(ApiError::forbidden(
+                "package scope belongs to another organization",
+            ));
+        }
+        Ok(principal.organization.clone())
     }
 
     async fn append_event(&self, event: &Value) -> Result<()> {
-        let previous = self
-            .control
-            .latest_event_hash()
-            .await?
-            .unwrap_or_else(|| "GENESIS".into());
+        let mut tx = self.control.pool().begin().await?;
+        query("SELECT pg_advisory_xact_lock($1)")
+            .bind(0x4f41_5448_i64)
+            .execute(&mut *tx)
+            .await?;
+        let previous: String =
+            query_scalar("SELECT event_hash FROM registry_events ORDER BY sequence DESC LIMIT 1")
+                .fetch_optional(&mut *tx)
+                .await?
+                .unwrap_or_else(|| "GENESIS".into());
         let event_json = serde_json::to_string(event)?;
         let event_hash = hex_sha256(format!("{previous}{event_json}").as_bytes());
         let signature = base64::engine::general_purpose::STANDARD
             .encode(self.signing_key.sign(event_hash.as_bytes()).to_bytes());
-        self.control
-            .append_event(&event_json, &previous, &event_hash, &signature)
-            .await
+        query("INSERT INTO registry_events(event_json,previous_hash,event_hash,signature,created_at) VALUES ($1,$2,$3,$4,$5)")
+            .bind(event_json)
+            .bind(previous)
+            .bind(event_hash)
+            .bind(signature)
+            .bind(now() as i64)
+            .execute(&mut *tx)
+            .await?;
+        tx.commit().await?;
+        Ok(())
     }
 }
 
+async fn track_registry_metrics(
+    State(metrics): State<RegistryMetrics>,
+    request: Request,
+    next: Next,
+) -> Response {
+    metrics.request();
+    let response = next.run(request).await;
+    if matches!(
+        response.status(),
+        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN
+    ) {
+        metrics.denied();
+    }
+    if response.status().is_server_error() {
+        metrics.error();
+    }
+    response
+}
+
 fn bearer(headers: &HeaderMap) -> Result<&str, ApiError> {
-    headers
-        .get(header::AUTHORIZATION)
-        .and_then(|v| v.to_str().ok())
-        .and_then(|v| v.strip_prefix("Bearer "))
-        .ok_or_else(ApiError::unauthorized)
+    bearer_optional(headers)?.ok_or_else(ApiError::unauthorized)
+}
+
+fn bearer_optional(headers: &HeaderMap) -> Result<Option<&str>, ApiError> {
+    let Some(value) = headers.get(header::AUTHORIZATION) else {
+        return Ok(None);
+    };
+    let value = value.to_str().map_err(|_| ApiError::unauthorized())?;
+    let (scheme, token) = value.split_once(' ').ok_or_else(ApiError::unauthorized)?;
+    if !scheme.eq_ignore_ascii_case("bearer")
+        || token.is_empty()
+        || token.chars().any(char::is_whitespace)
+    {
+        return Err(ApiError::unauthorized());
+    }
+    Ok(Some(token))
+}
+
+fn manifest_from_tarball(
+    tarball: &[u8],
+    expected_name: &str,
+    expected_version: &str,
+) -> Result<Value, ApiError> {
+    const MAX_MANIFEST_BYTES: u64 = 1024 * 1024;
+    const MAX_ARCHIVE_ENTRIES: usize = 200_000;
+
+    let decoder = GzDecoder::new(tarball);
+    let mut archive = tar::Archive::new(decoder);
+    let entries = archive
+        .entries()
+        .map_err(|error| ApiError::bad(format!("invalid npm tarball: {error}")))?;
+    let mut manifest = None;
+    for (index, entry) in entries.enumerate() {
+        if index >= MAX_ARCHIVE_ENTRIES {
+            return Err(ApiError::bad("npm tarball has too many entries"));
+        }
+        let entry =
+            entry.map_err(|error| ApiError::bad(format!("invalid npm tarball entry: {error}")))?;
+        let path = entry
+            .path()
+            .map_err(|error| ApiError::bad(format!("invalid npm tarball path: {error}")))?;
+        if path.as_ref() != Path::new("package/package.json") {
+            continue;
+        }
+        if manifest.is_some() {
+            return Err(ApiError::bad(
+                "npm tarball contains multiple package manifests",
+            ));
+        }
+        let mut bytes = Vec::new();
+        entry
+            .take(MAX_MANIFEST_BYTES + 1)
+            .read_to_end(&mut bytes)
+            .map_err(|error| ApiError::bad(format!("cannot read package manifest: {error}")))?;
+        if bytes.len() as u64 > MAX_MANIFEST_BYTES {
+            return Err(ApiError::bad("package manifest exceeds 1 MiB"));
+        }
+        manifest = Some(
+            serde_json::from_slice::<Value>(&bytes)
+                .map_err(|error| ApiError::bad(format!("invalid package manifest: {error}")))?,
+        );
+    }
+
+    let manifest = manifest.ok_or_else(|| ApiError::bad("npm tarball has no package.json"))?;
+    let object = manifest
+        .as_object()
+        .ok_or_else(|| ApiError::bad("package manifest must be a JSON object"))?;
+    if object.get("name").and_then(Value::as_str) != Some(expected_name) {
+        return Err(ApiError::bad(
+            "package manifest name does not match stage request",
+        ));
+    }
+    if object.get("version").and_then(Value::as_str) != Some(expected_version) {
+        return Err(ApiError::bad(
+            "package manifest version does not match stage request",
+        ));
+    }
+    Ok(manifest)
 }
 
 async fn health() -> Json<Value> {
@@ -193,11 +357,21 @@ async fn create_stage(
     headers: HeaderMap,
     Json(request): Json<StageRequest>,
 ) -> Result<(StatusCode, Json<StageRecord>), ApiError> {
-    registry.metrics.request();
     let principal = registry.authenticate(&headers).await?;
-    registry
+    let owner = registry
         .authorize_name(&principal, &request.name, true)
         .await?;
+    if let Some(package) = registry
+        .control
+        .package(&request.name)
+        .await
+        .map_err(ApiError::internal)?
+        && package.private != request.private
+    {
+        return Err(ApiError::conflict(
+            "package visibility cannot change between versions",
+        ));
+    }
     request
         .version
         .parse::<node_semver::Version>()
@@ -205,29 +379,30 @@ async fn create_stage(
     let tarball = base64::engine::general_purpose::STANDARD
         .decode(&request.tarball_base64)
         .map_err(|_| ApiError::bad("invalid tarball base64"))?;
+    let manifest = manifest_from_tarball(&tarball, &request.name, &request.version)?;
     let digest = hex_sha256(&tarball);
     registry
         .objects
         .put_immutable(&digest, &tarball)
         .await
         .map_err(ApiError::internal)?;
-    registry.metrics.stage();
     let created_at = now();
     let stage = StageRecord {
         id: hex_sha256(
             format!(
                 "{}:{}:{}:{}:{created_at}",
-                principal.organization, request.name, request.version, digest
+                owner, request.name, request.version, digest
             )
             .as_bytes(),
         ),
-        organization: principal.organization,
+        organization: owner,
         name: request.name,
         version: request.version,
         tag: request.tag,
         digest,
         status: "staged".into(),
         private: request.private,
+        manifest,
         assessment: request.assessment,
         created_at,
     };
@@ -236,7 +411,8 @@ async fn create_stage(
         .create_stage(&stage)
         .await
         .map_err(ApiError::internal)?;
-    registry.append_event(&json!({"type":"stage.created","id":stage.id,"organization":stage.organization,"name":stage.name,"version":stage.version,"digest":stage.digest})).await.map_err(ApiError::internal)?;
+    registry.append_event(&json!({"type":"stage.created","id":stage.id,"organization":stage.organization,"actor_org":principal.organization,"name":stage.name,"version":stage.version,"digest":stage.digest})).await.map_err(ApiError::internal)?;
+    registry.metrics.stage();
     Ok((StatusCode::CREATED, Json(stage)))
 }
 
@@ -266,9 +442,9 @@ async fn view_stage(
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("stage not found"))?;
-    if stage.organization != principal.organization && principal.role != "admin" {
-        return Err(ApiError::forbidden("stage belongs to another organization"));
-    }
+    registry
+        .authorize_name(&principal, &stage.name, false)
+        .await?;
     Ok(Json(stage))
 }
 
@@ -303,11 +479,19 @@ async fn decide(
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("stage not found"))?;
-    registry
+    if stage.organization != principal.organization {
+        return Err(ApiError::forbidden(
+            "only the owning organization may approve or reject a stage",
+        ));
+    }
+    if !registry
         .control
         .decide_stage(&stage, approve, reason.as_deref())
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::internal)?
+    {
+        return Err(ApiError::conflict("stage has already been decided"));
+    }
     registry.append_event(&json!({"type":if approve {"stage.approved"} else {"stage.rejected"},"id":id,"organization":principal.organization,"name":stage.name,"version":stage.version,"reason":reason})).await.map_err(ApiError::internal)?;
     Ok(Json(
         registry
@@ -341,8 +525,21 @@ async fn package_metadata(
     headers: HeaderMap,
     AxumPath(name): AxumPath<String>,
 ) -> Result<Json<Value>, ApiError> {
-    let principal = registry.authenticate(&headers).await?;
-    registry.authorize_name(&principal, &name, false).await?;
+    let package = registry
+        .control
+        .package(&name)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("package not found"))?;
+    if package.private {
+        let principal = registry
+            .authenticate_optional(&headers)
+            .await?
+            .ok_or_else(ApiError::unauthorized)?;
+        registry.authorize_name(&principal, &name, false).await?;
+    } else {
+        registry.authenticate_optional(&headers).await?;
+    }
     let mut versions = serde_json::Map::new();
     for row in registry
         .control
@@ -350,7 +547,39 @@ async fn package_metadata(
         .await
         .map_err(ApiError::internal)?
     {
-        versions.insert(row.version, json!({"dist":{"integrity":format!("sha256-{}",row.digest)},"oath":{"status":row.status,"private":row.private,"assessment":row.assessment,"published_at":row.published_at}}));
+        let integrity_bytes = hex::decode(&row.digest).map_err(ApiError::internal)?;
+        if integrity_bytes.len() != 32 {
+            return Err(ApiError::internal(
+                "stored SHA-256 digest has invalid length",
+            ));
+        }
+        let encoded_name =
+            url::form_urlencoded::byte_serialize(name.as_bytes()).collect::<String>();
+        let version = row.version;
+        let encoded_version =
+            url::form_urlencoded::byte_serialize(version.as_bytes()).collect::<String>();
+        let tarball = format!(
+            "{}/-/oath/tarballs/{encoded_name}/{encoded_version}",
+            registry.public_url
+        );
+        let mut version_metadata = row.manifest;
+        let object = version_metadata
+            .as_object_mut()
+            .ok_or_else(|| ApiError::internal("stored package manifest is not an object"))?;
+        object.insert("name".into(), Value::String(name.clone()));
+        object.insert("version".into(), Value::String(version.clone()));
+        object.insert(
+            "dist".into(),
+            json!({"integrity":format!("sha256-{}",base64::engine::general_purpose::STANDARD.encode(integrity_bytes)),"tarball":tarball}),
+        );
+        object.insert(
+            "oath".into(),
+            json!({"status":row.status,"private":row.private,"publisher_organization":row.organization,"assessment":row.assessment,"published_at":row.published_at}),
+        );
+        versions.insert(version, version_metadata);
+    }
+    if versions.is_empty() {
+        return Err(ApiError::not_found("package has no published versions"));
     }
     let tags = registry
         .control
@@ -411,26 +640,21 @@ async fn download_version(
     headers: HeaderMap,
     AxumPath((name, version)): AxumPath<(String, String)>,
 ) -> Result<Response, ApiError> {
-    registry.metrics.request();
     let row = registry
         .control
         .version(&name, &version)
         .await
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("package version not found"))?;
+    if row.private {
+        let principal = registry.authenticate(&headers).await?;
+        registry.authorize_name(&principal, &name, false).await?;
+    }
     if row.status != "active" {
         return Err(ApiError::forbidden(format!(
             "package version is {}",
             row.status
         )));
-    }
-    if row.private {
-        let principal = registry.authenticate(&headers).await?;
-        if principal.organization != row.organization && principal.role != "admin" {
-            return Err(ApiError::forbidden(
-                "private package belongs to another organization",
-            ));
-        }
     }
     let bytes = registry
         .objects
@@ -455,7 +679,6 @@ async fn admin_summary(
 ) -> Result<Json<Value>, ApiError> {
     let principal = registry.authenticate(&headers).await?;
     if principal.role != "admin" {
-        registry.metrics.denied();
         return Err(ApiError::forbidden("admin role required"));
     }
     Ok(Json(
@@ -537,7 +760,12 @@ async fn grant_role(
     if principal.role != "admin" {
         return Err(ApiError::forbidden("admin role required"));
     }
-    registry.authorize_name(&principal, &name, true).await?;
+    let owner = registry.authorize_name(&principal, &name, true).await?;
+    if owner != principal.organization {
+        return Err(ApiError::forbidden(
+            "only the package-owning organization may grant roles",
+        ));
+    }
     if !matches!(request.role.as_str(), "reader" | "publisher" | "admin") {
         return Err(ApiError::bad("invalid package role"));
     }
@@ -594,6 +822,14 @@ async fn create_invitation(
             "invitation ttl must be between 300 and 604800 seconds",
         ));
     }
+    let mailer = registry
+        .mailer
+        .as_ref()
+        .ok_or_else(|| ApiError::internal("invitation email provider is not configured"))?;
+    let invitation_accept_url = registry
+        .invitation_accept_url
+        .as_deref()
+        .ok_or_else(|| ApiError::internal("invitation accept URL is not configured"))?;
     let mut random = [0u8; 32];
     getrandom::fill(&mut random).map_err(ApiError::internal)?;
     let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random);
@@ -610,19 +846,23 @@ async fn create_invitation(
         )
         .await
         .map_err(ApiError::internal)?;
-    let accept_url = format!(
-        "{}/invitations/accept?token={}",
-        registry.public_url.trim_end_matches('/'),
-        token
-    );
-    let mailer = registry
-        .mailer
-        .as_ref()
-        .ok_or_else(|| ApiError::internal("invitation email provider is not configured"))?;
-    mailer
+    let separator = if invitation_accept_url.contains('?') {
+        '&'
+    } else {
+        '?'
+    };
+    let accept_url = format!("{invitation_accept_url}{separator}invitation_token={token}");
+    if let Err(error) = mailer
         .send_invitation(&request.email, &principal.organization, &accept_url)
         .await
-        .map_err(ApiError::internal)?;
+    {
+        registry
+            .control
+            .revoke_invitation(&token_hash, &principal.organization)
+            .await
+            .map_err(ApiError::internal)?;
+        return Err(ApiError::internal(error));
+    }
     registry.append_event(&json!({"type":"invitation.created","organization":principal.organization,"email_hash":hex_sha256(request.email.as_bytes()),"role":request.role,"expires_at":expires_at})).await.map_err(ApiError::internal)?;
     Ok(Json(
         json!({"status":"sent","token_id":token_hash,"expires_at":expires_at}),
@@ -777,9 +1017,16 @@ async fn billing_webhook(
 }
 
 pub fn router(registry: PostgresRegistry) -> Router {
+    let metrics_state = registry.metrics.clone();
+    let max_stage_request_bytes = registry.max_stage_request_bytes;
     Router::new()
         .route("/health", get(health))
-        .route("/-/oath/stages", post(create_stage).get(list_stages))
+        .route(
+            "/-/oath/stages",
+            post(create_stage)
+                .get(list_stages)
+                .layer(DefaultBodyLimit::max(max_stage_request_bytes)),
+        )
         .route("/-/oath/stages/{id}", get(view_stage))
         .route("/-/oath/stages/{id}/download", get(download_stage))
         .route("/-/oath/stages/{id}/approve", post(approve_stage))
@@ -804,20 +1051,138 @@ pub fn router(registry: PostgresRegistry) -> Router {
         .route("/-/oath/billing/checkout", post(billing_checkout))
         .route("/-/oath/billing/webhook", post(billing_webhook))
         .route("/-/oath/packages/{name}/roles", post(grant_role))
-        .route("/{name}", get(package_metadata))
+        .route("/{*name}", get(package_metadata))
         .with_state(Arc::new(registry))
+        .layer(middleware::from_fn_with_state(
+            metrics_state,
+            track_registry_metrics,
+        ))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
-    use http_body_util::BodyExt;
+    use http_body_util::{BodyExt, Collected};
     use object_store::memory::InMemory;
+    use sha2::{Digest, Sha256};
+    use sqlx_core::row::Row;
     use tower::ServiceExt;
 
+    fn get_request(uri: &str, token: Option<&str>) -> Request<Body> {
+        let mut request = Request::get(uri);
+        if let Some(token) = token {
+            request = request.header(header::AUTHORIZATION, format!("Bearer {token}"));
+        }
+        request.body(Body::empty()).unwrap()
+    }
+
+    fn post_request(uri: &str, token: &str, body: Value) -> Request<Body> {
+        Request::post(uri)
+            .header(header::AUTHORIZATION, format!("Bearer {token}"))
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body.to_string()))
+            .unwrap()
+    }
+
+    async fn call(app: &Router, request: Request<Body>) -> Response {
+        app.clone().oneshot(request).await.unwrap()
+    }
+
+    async fn body(response: Response) -> Collected<Bytes> {
+        response.into_body().collect().await.unwrap()
+    }
+
+    fn package_tarball(name: &str, version: &str) -> Vec<u8> {
+        use flate2::{Compression, write::GzEncoder};
+
+        let manifest = serde_json::to_vec(&json!({
+            "name": name,
+            "version": version,
+            "dependencies": {},
+            "bin": {"tool": "bin.js"}
+        }))
+        .unwrap();
+        let encoder = GzEncoder::new(Vec::new(), Compression::default());
+        let mut archive = tar::Builder::new(encoder);
+        let mut header = tar::Header::new_gnu();
+        header.set_size(manifest.len() as u64);
+        header.set_mode(0o644);
+        header.set_cksum();
+        archive
+            .append_data(&mut header, "package/package.json", manifest.as_slice())
+            .unwrap();
+        archive.into_inner().unwrap().finish().unwrap()
+    }
+
+    async fn stage(
+        app: &Router,
+        token: &str,
+        name: &str,
+        version: &str,
+        private: bool,
+    ) -> StageRecord {
+        let response = call(
+            app,
+            post_request(
+                "/-/oath/stages",
+                token,
+                json!({
+                    "name": name,
+                    "version": version,
+                    "tag": "latest",
+                    "tarball_base64": base64::engine::general_purpose::STANDARD
+                        .encode(package_tarball(name, version)),
+                    "assessment": {"decision": "allow"},
+                    "private": private
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED);
+        serde_json::from_slice(&body(response).await.to_bytes()).unwrap()
+    }
+
+    async fn approve(app: &Router, token: &str, id: &str) -> Response {
+        call(
+            app,
+            post_request(
+                &format!("/-/oath/stages/{id}/approve"),
+                token,
+                json!({"reason": "verified"}),
+            ),
+        )
+        .await
+    }
+
+    #[test]
+    fn bearer_parser_is_case_insensitive_and_rejects_malformed_values() {
+        let mut headers = HeaderMap::new();
+        assert!(bearer_optional(&headers).unwrap().is_none());
+        headers.insert(header::AUTHORIZATION, "bearer token".parse().unwrap());
+        assert_eq!(bearer(&headers).unwrap(), "token");
+
+        for malformed in ["token", "Basic token", "Bearer ", "Bearer one two"] {
+            headers.insert(header::AUTHORIZATION, malformed.parse().unwrap());
+            assert_eq!(
+                bearer_optional(&headers).unwrap_err().status,
+                StatusCode::UNAUTHORIZED
+            );
+        }
+    }
+
+    #[test]
+    fn staged_tarball_manifest_is_required_and_bound_to_identity() {
+        let tarball = package_tarball("demo", "1.2.3");
+        let manifest = manifest_from_tarball(&tarball, "demo", "1.2.3").unwrap();
+        assert_eq!(manifest["name"], "demo");
+        assert!(manifest_from_tarball(&tarball, "other", "1.2.3").is_err());
+        assert!(manifest_from_tarball(&tarball, "demo", "2.0.0").is_err());
+        assert!(manifest_from_tarball(b"not-a-tarball", "demo", "1.2.3").is_err());
+    }
+
     #[tokio::test]
-    async fn live_postgres_stage_publish_download_and_revoke() {
+    async fn live_postgres_enforces_tenants_publish_download_and_revoke() {
         let Ok(database_url) = std::env::var("OATH_TEST_DATABASE_URL") else {
             return;
         };
@@ -836,61 +1201,323 @@ mod tests {
             .bootstrap_token("acme", "secret", "admin")
             .await
             .unwrap();
+        registry
+            .bootstrap_token("rival", "rival-secret", "admin")
+            .await
+            .unwrap();
+        let registry_assertions = registry.clone();
         let app = router(registry);
-        let body = json!({"name":"@acme/tool","version":"1.0.0","tag":"latest","tarball_base64":base64::engine::general_purpose::STANDARD.encode(b"tarball"),"assessment":{"decision":"allow"},"private":true});
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post("/-/oath/stages")
-                    .header(header::AUTHORIZATION, "Bearer secret")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(body.to_string()))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
-        assert_eq!(response.status(), StatusCode::CREATED);
-        let stage: StageRecord =
-            serde_json::from_slice(&response.into_body().collect().await.unwrap().to_bytes())
-                .unwrap();
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post(format!("/-/oath/stages/{}/approve", stage.id))
-                    .header(header::AUTHORIZATION, "Bearer secret")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(r#"{"reason":"verified"}"#))
-                    .unwrap(),
-            )
-            .await
-            .unwrap();
+
+        let first = stage(&app, "secret", "private-tool", "1.0.0", true).await;
+
+        let response = call(&app, get_request("/-/oath/stages", Some("rival-secret"))).await;
         assert_eq!(response.status(), StatusCode::OK);
-        let response = app
-            .clone()
-            .oneshot(
-                Request::get("/-/oath/tarballs/@acme%2Ftool/1.0.0")
-                    .header(header::AUTHORIZATION, "Bearer secret")
-                    .body(Body::empty())
-                    .unwrap(),
+        let rival_stages: Vec<StageRecord> =
+            serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        assert!(rival_stages.is_empty());
+
+        for response in [
+            call(
+                &app,
+                get_request(
+                    &format!("/-/oath/stages/{}", first.id),
+                    Some("rival-secret"),
+                ),
             )
-            .await
-            .unwrap();
+            .await,
+            approve(&app, "rival-secret", &first.id).await,
+            call(
+                &app,
+                post_request(
+                    "/-/oath/stages",
+                    "rival-secret",
+                    json!({
+                        "name": "private-tool",
+                        "version": "9.0.0",
+                        "tarball_base64": base64::engine::general_purpose::STANDARD.encode(b"bad"),
+                        "assessment": {"decision": "allow"},
+                        "private": true
+                    }),
+                ),
+            )
+            .await,
+        ] {
+            assert_eq!(response.status(), StatusCode::FORBIDDEN);
+        }
+
+        assert_eq!(
+            approve(&app, "secret", &first.id).await.status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            approve(&app, "secret", &first.id).await.status(),
+            StatusCode::CONFLICT
+        );
+
+        assert_eq!(
+            call(&app, get_request("/private-tool", None))
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(&app, get_request("/private-tool", Some("rival-secret")))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            call(&app, get_request("/private-tool", Some("secret")))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+
+        let private_tarball = "/-/oath/tarballs/private-tool/1.0.0";
+        assert_eq!(
+            call(&app, get_request(private_tarball, Some("rival-secret")))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let response = call(&app, get_request(private_tarball, Some("secret"))).await;
         assert_eq!(response.status(), StatusCode::OK);
         assert_eq!(
-            response.into_body().collect().await.unwrap().to_bytes(),
-            b"tarball".as_slice()
+            body(response).await.to_bytes(),
+            package_tarball("private-tool", "1.0.0")
         );
-        let response = app
-            .clone()
-            .oneshot(
-                Request::post("/-/oath/versions/@acme%2Ftool/1.0.0/revoke")
-                    .header(header::AUTHORIZATION, "Bearer secret")
-                    .header(header::CONTENT_TYPE, "application/json")
-                    .body(Body::from(r#"{"reason":"bad release"}"#))
-                    .unwrap(),
+
+        assert_eq!(
+            call(
+                &app,
+                post_request(
+                    "/-/oath/packages/private-tool/roles",
+                    "rival-secret",
+                    json!({"principal_org": "rival", "role": "admin"}),
+                ),
             )
             .await
-            .unwrap();
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            call(
+                &app,
+                post_request(
+                    "/-/oath/versions/private-tool/1.0.0/revoke",
+                    "rival-secret",
+                    json!({"reason": "not mine"}),
+                ),
+            )
+            .await
+            .status(),
+            StatusCode::FORBIDDEN
+        );
+
+        let second = stage(&app, "secret", "private-tool", "2.0.0", true).await;
+        assert_eq!(
+            approve(&app, "secret", &second.id).await.status(),
+            StatusCode::OK
+        );
+        let response = call(&app, get_request("/private-tool", Some("secret"))).await;
+        let metadata: Value = serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        assert_eq!(metadata["dist-tags"]["latest"], "2.0.0");
+
+        assert_eq!(
+            call(
+                &app,
+                post_request(
+                    "/-/oath/versions/private-tool/2.0.0/revoke",
+                    "secret",
+                    json!({"reason": "bad release"}),
+                ),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let response = call(&app, get_request("/private-tool", Some("secret"))).await;
+        let metadata: Value = serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        assert_eq!(metadata["dist-tags"]["latest"], "1.0.0");
+        assert!(metadata["versions"].get("2.0.0").is_none());
+        assert!(metadata["versions"].get("1.0.0").is_some());
+
+        assert_eq!(
+            call(
+                &app,
+                post_request(
+                    "/-/oath/versions/private-tool/1.0.0/revoke",
+                    "secret",
+                    json!({"reason": "retired"}),
+                ),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let response = call(&app, get_request("/private-tool", Some("secret"))).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+        assert_eq!(
+            call(&app, get_request(private_tarball, None))
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+
+        let public = stage(&app, "secret", "public-tool", "1.0.0", false).await;
+        assert_eq!(
+            approve(&app, "secret", &public.id).await.status(),
+            StatusCode::OK
+        );
+        let response = call(&app, get_request("/public-tool", None)).await;
         assert_eq!(response.status(), StatusCode::OK);
+        let metadata: Value = serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        let expected_integrity = format!(
+            "sha256-{}",
+            base64::engine::general_purpose::STANDARD
+                .encode(Sha256::digest(package_tarball("public-tool", "1.0.0")))
+        );
+        assert_eq!(
+            metadata["versions"]["1.0.0"]["dist"]["integrity"],
+            expected_integrity
+        );
+        assert_eq!(
+            metadata["versions"]["1.0.0"]["dist"]["tarball"],
+            "http://localhost:4873/-/oath/tarballs/public-tool/1.0.0"
+        );
+        let packument: oath_fetch::packument::Packument = serde_json::from_value(metadata).unwrap();
+        assert_eq!(packument.latest_version(), Some("1.0.0"));
+        assert_eq!(
+            packument
+                .version_info("1.0.0")
+                .unwrap()
+                .bin
+                .as_ref()
+                .map(|_| true),
+            Some(true)
+        );
+        assert_eq!(
+            call(
+                &app,
+                get_request("/-/oath/tarballs/public-tool/1.0.0", None)
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(&app, get_request("/public-tool", Some("invalid")))
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(
+                &app,
+                post_request(
+                    "/-/oath/stages",
+                    "secret",
+                    json!({
+                        "name": "public-tool",
+                        "version": "2.0.0",
+                        "tarball_base64": base64::engine::general_purpose::STANDARD.encode(b"private"),
+                        "assessment": {"decision": "allow"},
+                        "private": true
+                    }),
+                ),
+            )
+            .await
+            .status(),
+            StatusCode::CONFLICT
+        );
+
+        let scoped = stage(&app, "secret", "@acme/scoped", "1.0.0", false).await;
+        assert_eq!(
+            approve(&app, "secret", &scoped.id).await.status(),
+            StatusCode::OK
+        );
+        let response = call(&app, get_request("/@acme/scoped", None)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let metadata: Value = serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        assert_eq!(
+            metadata["versions"]["1.0.0"]["dist"]["tarball"],
+            "http://localhost:4873/-/oath/tarballs/%40acme%2Fscoped/1.0.0"
+        );
+        assert_eq!(
+            call(
+                &app,
+                get_request("/-/oath/tarballs/%40acme%2Fscoped/1.0.0", None)
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+
+        assert!(
+            registry_assertions
+                .control
+                .record_billing_event("evt_once", "test", &json!({"id": "evt_once"}))
+                .await
+                .unwrap()
+        );
+        assert!(
+            !registry_assertions
+                .control
+                .record_billing_event("evt_once", "test", &json!({"id": "evt_once"}))
+                .await
+                .unwrap()
+        );
+
+        let handles = (0..16)
+            .map(|index| {
+                let registry = registry_assertions.clone();
+                tokio::spawn(async move {
+                    registry
+                        .append_event(&json!({"type": "concurrency.test", "index": index}))
+                        .await
+                        .unwrap();
+                })
+            })
+            .collect::<Vec<_>>();
+        for handle in handles {
+            handle.await.unwrap();
+        }
+
+        let rows = query("SELECT previous_hash,event_hash FROM registry_events ORDER BY sequence")
+            .fetch_all(registry_assertions.control.pool())
+            .await
+            .unwrap();
+        let mut previous = "GENESIS".to_owned();
+        for row in &rows {
+            assert_eq!(row.get::<String, _>("previous_hash"), previous);
+            previous = row.get("event_hash");
+        }
+        assert_eq!(
+            query_scalar::<_, i64>("SELECT COUNT(*) FROM tombstones")
+                .fetch_one(registry_assertions.control.pool())
+                .await
+                .unwrap(),
+            2
+        );
+
+        let response = call(&app, get_request("/-/oath/transparency/checkpoint", None)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let checkpoint: Value = serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        assert_eq!(checkpoint["event_count"], rows.len());
+
+        let response = call(&app, get_request("/metrics", None)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let metrics = String::from_utf8(body(response).await.to_bytes().to_vec()).unwrap();
+        let metric = |name: &str| {
+            metrics
+                .lines()
+                .find_map(|line| line.strip_prefix(&format!("{name} ")))
+                .unwrap()
+                .parse::<u64>()
+                .unwrap()
+        };
+        assert!(metric("oath_registry_requests_total") >= 20);
+        assert!(metric("oath_registry_denied_total") >= 7);
+        assert_eq!(metric("oath_registry_errors_total"), 0);
     }
 }

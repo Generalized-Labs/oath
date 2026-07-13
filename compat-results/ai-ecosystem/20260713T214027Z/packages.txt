@@ -1,0 +1,4 @@
+core-ai-sdks: openai ai @ai-sdk/openai @ai-sdk/anthropic zod
+convex-cli-sdk: convex
+agent-protocol: @modelcontextprotocol/sdk @langchain/core
+ts-agent-tooling: typescript tsx @types/node

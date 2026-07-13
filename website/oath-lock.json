@@ -1,7 +1,7 @@
 {
   "lockfileVersion": 2,
   "name": "oath-web",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "roots": [
     "node_modules/@alloc/quick-lru",
     "node_modules/@babel/code-frame",

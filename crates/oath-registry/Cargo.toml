@@ -2,6 +2,7 @@
 name = "oath-registry"
 version.workspace = true
 edition.workspace = true
+rust-version.workspace = true
 license.workspace = true
 
 [[bin]]
@@ -9,11 +10,6 @@ name = "oath-registry"
 path = "src/main.rs"
 
 [dependencies]
-oath-core = { path = "../oath-core" }
-oath-store = { path = "../oath-store" }
-oath-index = { path = "../oath-index" }
-oath-analyze = { path = "../oath-analyze" }
-
 axum.workspace = true
 tokio.workspace = true
 serde.workspace = true
@@ -34,7 +30,11 @@ jsonwebtoken.workspace = true
 hmac.workspace = true
 hex.workspace = true
 reqwest.workspace = true
+url.workspace = true
+flate2.workspace = true
+tar.workspace = true
 
 [dev-dependencies]
 tower = { version = "0.5", features = ["util"] }
 http-body-util = "0.1"
+oath-fetch = { path = "../oath-fetch" }

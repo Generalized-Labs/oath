@@ -6,8 +6,9 @@ resolver = "2"
 # oath-workspace is included via crates/* glob
 
 [workspace.package]
-version = "0.1.7"
+version = "0.2.0"
 edition = "2024"
+rust-version = "1.94"
 license = "MIT"
 authors = ["Generalized Labs"]
 repository = "https://github.com/Generalized-Labs/oath"
@@ -38,6 +39,8 @@ getrandom = "0.3"
 # Pin the upstream quick-xml 0.41 security update until object_store 0.14.1 is
 # published. The revision is the minimal upstream dependency-only fix.
 object_store = { git = "https://github.com/apache/arrow-rs-object-store", rev = "fd44ebb9c1158660795ec22d7b11acf31c3fe113", features = ["aws", "gcp"] }
+# Keep Cargo.lock on crc-fast 1.7.0 while 1.8.0-1.10.0 depend on yanked
+# spin 0.10.0. CI's warning-fatal RustSec audit guards this lock constraint.
 # AWS-LC provides the same OIDC verification algorithms without pulling the
 # unfixed RustCrypto RSA timing-side-channel dependency.
 jsonwebtoken = { version = "10", features = ["aws_lc_rs"] }
@@ -70,7 +73,6 @@ glob = "0.3"
 libc = "0.2"
 
 # Storage
-rusqlite = { version = "0.32", features = ["bundled"] }
 sqlx-core = { version = "0.8", default-features = false, features = ["_rt-tokio", "_tls-rustls-ring-webpki", "json"] }
 sqlx-postgres = { version = "0.8", default-features = false, features = ["json"] }
 

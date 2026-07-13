@@ -9,6 +9,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sha2::{Digest, Sha256};
 use std::{
+    fs::OpenOptions,
+    io::{ErrorKind, Write},
     path::Path,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -42,6 +44,12 @@ impl ApiError {
     pub(crate) fn forbidden(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::FORBIDDEN,
+            message: message.into(),
+        }
+    }
+    pub(crate) fn conflict(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::CONFLICT,
             message: message.into(),
         }
     }
@@ -107,6 +115,7 @@ pub struct StageRecord {
     pub digest: String,
     pub status: String,
     pub private: bool,
+    pub manifest: Value,
     pub assessment: Value,
     pub created_at: u64,
 }
@@ -152,11 +161,15 @@ pub(crate) fn hex_sha256(bytes: &[u8]) -> String {
 }
 
 pub(crate) fn registry_signing_key(path: &Path) -> Result<SigningKey> {
-    if path.exists() {
+    fn read_key(path: &Path) -> Result<SigningKey> {
         let bytes: [u8; 32] = std::fs::read(path)?
             .try_into()
             .map_err(|_| anyhow::anyhow!("invalid registry signing key"))?;
-        return Ok(SigningKey::from_bytes(&bytes));
+        Ok(SigningKey::from_bytes(&bytes))
+    }
+
+    if path.exists() {
+        return read_key(path);
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -164,13 +177,26 @@ pub(crate) fn registry_signing_key(path: &Path) -> Result<SigningKey> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes)
         .map_err(|error| anyhow::anyhow!("registry key generation failed: {error}"))?;
-    std::fs::write(path, bytes)?;
     #[cfg(unix)]
-    {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600))?;
-    }
-    Ok(SigningKey::from_bytes(&bytes))
+    use std::os::unix::fs::OpenOptionsExt;
+
+    let suffix = hex_sha256(&bytes);
+    let temp_path = path.with_extension(format!("{}.tmp", &suffix[..16]));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    options.mode(0o600);
+    let mut file = options.open(&temp_path)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(file);
+    let result = match std::fs::hard_link(&temp_path, path) {
+        Ok(()) => Ok(SigningKey::from_bytes(&bytes)),
+        Err(error) if error.kind() == ErrorKind::AlreadyExists => read_key(path),
+        Err(error) => Err(error.into()),
+    };
+    let _ = std::fs::remove_file(temp_path);
+    result
 }
 
 pub(crate) fn merkle_root(mut hashes: Vec<String>) -> String {
@@ -192,6 +218,7 @@ pub(crate) fn merkle_root(mut hashes: Vec<String>) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::{Arc, Barrier};
     #[test]
     fn merkle_checkpoints_are_deterministic() {
         assert_eq!(
@@ -199,5 +226,31 @@ mod tests {
             merkle_root(vec!["a".into(), "b".into()])
         );
         assert_ne!(merkle_root(vec!["a".into()]), merkle_root(vec!["b".into()]));
+    }
+
+    #[test]
+    fn concurrent_signing_key_creation_converges_on_one_key() {
+        let dir = tempfile::tempdir().unwrap();
+        let path = Arc::new(dir.path().join("registry-signing.key"));
+        let barrier = Arc::new(Barrier::new(16));
+        let handles = (0..16)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    registry_signing_key(&path)
+                        .unwrap()
+                        .verifying_key()
+                        .to_bytes()
+                })
+            })
+            .collect::<Vec<_>>();
+        let keys = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        assert!(keys.iter().all(|key| key == &keys[0]));
+        assert_eq!(std::fs::read(&*path).unwrap().len(), 32);
     }
 }

@@ -29,6 +29,8 @@ In scope:
 - install script handling and policy bypasses
 - malicious package analysis and `oath exec` decision gates
 - release artifacts, installer checksums, and CI/CD supply chain issues
+- registry authentication/authorization, private-package isolation, revocation,
+  signing keys, object storage, billing webhooks, and transparency records
 
 Out of scope:
 

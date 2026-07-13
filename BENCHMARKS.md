@@ -15,6 +15,22 @@ cargo build --release --locked --bin oath
 scripts/launch-check.sh
 ```
 
+## v0.2.0 release-candidate snapshot
+
+The current checked-in benchmark was recorded on `darwin-arm64` with Node
+v26.0.0, npm 11.12.1, and Bun 1.2.20. All installers used the same five-package
+manifest with lifecycle scripts disabled and isolated cold caches.
+
+| Installer | Cold | Warm |
+|---|---:|---:|
+| npm | 728 ms | 428 ms |
+| Bun | 406 ms | 23 ms |
+| Oath | 2,683 ms | 1,243 ms |
+
+This sample does not support a speed claim: Oath was slower than npm and Bun.
+The raw timings, versions, methodology, exit status, and normalized tree hashes
+are in [`compat-results/benchmarks/installers.json`](compat-results/benchmarks/installers.json).
+
 ## Install (cold -- empty cache, no lockfile)
 
 | Project Size | npm | bun | oath | oath overhead |
@@ -66,5 +82,5 @@ $ oath score express
   express@5.2.1 -- 88/100 (B)
 
 $ oath score lodash
-  lodash@4.18.1 -- 80/100 (B)
+  lodash@4.17.21 -- 80/100 (B)
 ```

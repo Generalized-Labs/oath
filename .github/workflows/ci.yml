@@ -120,7 +120,19 @@ jobs:
       - name: Install Rust toolchain
         run: rustup toolchain install stable && rustup default stable
       - name: PostgreSQL registry end-to-end test
-        run: cargo test --locked -p oath-registry postgres_api::tests::live_postgres_stage_publish_download_and_revoke
+        run: cargo test --locked -p oath-registry postgres_api::tests::live_postgres_enforces_tenants_publish_download_and_revoke -- --exact
+
+  msrv:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - name: Install declared minimum Rust version
+        run: rustup toolchain install 1.94.0 --profile minimal
+      - name: Install Linux sandbox linker dependency
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+      - name: Check the complete workspace at MSRV
+        run: cargo +1.94.0 check --workspace --locked --all-targets
 
   check:
     strategy:
@@ -138,7 +150,7 @@ jobs:
           rustup default stable
 
       - name: Install Node npm reference
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.13.0
 
@@ -153,7 +165,7 @@ jobs:
         run: cargo fmt --all -- --check
 
       - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
+        run: cargo clippy --workspace --locked --all-targets -- -D warnings
 
       - name: Test
         run: cargo test --workspace --locked
@@ -171,7 +183,7 @@ jobs:
         shell: pwsh
         run: ./target/release/oath.exe sandbox-info --json | Out-File -Encoding utf8 sandbox-capabilities-${{ runner.os }}.json
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: sandbox-capabilities-${{ runner.os }}
@@ -205,7 +217,7 @@ jobs:
       - run: cargo build --release --locked --bin oath --target ${{ matrix.target }}
       - shell: pwsh
         run: Get-FileHash target/${{ matrix.target }}/release/oath.exe -Algorithm SHA256 | Format-List | Out-File oath.exe.sha256
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: oath-${{ matrix.target }}
           path: |
@@ -237,7 +249,7 @@ jobs:
           fi
 
       - name: Cargo audit
-        run: cargo audit
+        run: cargo audit --deny warnings
 
   compatibility-scale:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
@@ -248,7 +260,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.13.0
       - run: npm install --global npm@11.12.1
@@ -259,7 +271,7 @@ jobs:
         env:
           OATH_COMPAT_SHARD: ${{ matrix.shard }}
           OATH_COMPAT_SHARDS: 10
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: compatibility-fixtures-${{ matrix.shard }}
@@ -290,7 +302,7 @@ jobs:
           jq -n --arg runner "${{ runner.name }}" --arg os "${{ runner.os }}" --arg arch "${{ runner.arch }}" --arg commit "${{ github.sha }}" \
             --argjson shard "${{ matrix.shard }}" --argjson total_kib "$total_kib" --argjson free_kib "$free_kib" \
             '{schema_version:1,runner:$runner,os:$os,arch:$arch,commit:$commit,shard:$shard,total_kib:$total_kib,free_kib:$free_kib}' > runner-${{ matrix.shard }}.json
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
           node-version: 24.13.0
       - run: npm install --global npm@11.12.1
@@ -301,7 +313,7 @@ jobs:
           OATH_PROJECT_SHARDS: 20
           OATH_PROJECT_MANIFEST: tests/compat/projects.lock.json
           OATH_PROJECT_TIMEOUT_MS: 1200000
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: compatibility-projects-${{ matrix.shard }}
@@ -315,7 +327,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - uses: actions/download-artifact@v4
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: compatibility-projects-*
           # Each shard artifact contains both compat-results/ga/*.json and a
@@ -324,7 +336,7 @@ jobs:
           path: .
           merge-multiple: true
       - run: node scripts/project-corpus.mjs aggregate
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: compatibility-project-summary
@@ -374,7 +386,7 @@ jobs:
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
           subject-path: sandbox-capabilities-linux.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: native-linux-${{ matrix.os }}
@@ -410,7 +422,7 @@ jobs:
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
         with:
           subject-path: sandbox-capabilities-windows.json
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
           name: native-windows-${{ matrix.os }}
@@ -418,22 +430,51 @@ jobs:
 
   release-evidence-gate:
     if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
-    needs: [independent-behavioral, compatibility-scale, real-project-aggregate, native-linux-security, native-windows-security]
+    needs:
+      - readme-release-smoke
+      - agent-workflows
+      - independent-behavioral
+      - postgres-registry
+      - msrv
+      - check
+      - windows-artifacts
+      - audit
+      - compatibility-scale
+      - real-project-aggregate
+      - native-linux-security
+      - native-windows-security
+      - reliability-drills
     runs-on: ubuntu-latest
     steps:
       - name: Require every independent evidence program
         env:
+          README_SMOKE: ${{ needs.readme-release-smoke.result }}
+          AGENTS: ${{ needs.agent-workflows.result }}
           FIXTURES: ${{ needs.compatibility-scale.result }}
           BEHAVIORS: ${{ needs.independent-behavioral.result }}
           PROJECTS: ${{ needs.real-project-aggregate.result }}
           LINUX: ${{ needs.native-linux-security.result }}
           WINDOWS: ${{ needs.native-windows-security.result }}
+          REGISTRY: ${{ needs.postgres-registry.result }}
+          MSRV: ${{ needs.msrv.result }}
+          CHECKS: ${{ needs.check.result }}
+          WINDOWS_ARTIFACTS: ${{ needs.windows-artifacts.result }}
+          AUDIT: ${{ needs.audit.result }}
+          RELIABILITY: ${{ needs.reliability-drills.result }}
         run: |
+          test "$README_SMOKE" = success
+          test "$AGENTS" = success
           test "$BEHAVIORS" = success
           test "$FIXTURES" = success
           test "$PROJECTS" = success
           test "$LINUX" = success
           test "$WINDOWS" = success
+          test "$REGISTRY" = success
+          test "$MSRV" = success
+          test "$CHECKS" = success
+          test "$WINDOWS_ARTIFACTS" = success
+          test "$AUDIT" = success
+          test "$RELIABILITY" = success
           echo "Oath release evidence gate passed"
 
   reliability-drills:
@@ -459,7 +500,7 @@ jobs:
         env:
           OATH_TEST_DATABASE_URL: postgresql://oath:oath@localhost:5432/oath_drills
           OATH_REGISTRY_DATA: /tmp/oath-registry-drill
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: reliability-drill
           path: reliability-drill.json
