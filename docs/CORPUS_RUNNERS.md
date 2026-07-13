@@ -1,37 +1,38 @@
-# 300 GB compatibility runner contract
+# Large-disk compatibility runner contract
 
-The real-project corpus requires runners labeled `oath-ubuntu-300gb`. There is
-deliberately no small-disk fallback: a missing runner must leave the job queued
-rather than turn an infrastructure shortage into a skipped compatibility claim.
+The real-project corpus runs on the approved Blacksmith label
+`blacksmith-16vcpu-ubuntu-2404`. There is deliberately no small-disk fallback:
+a missing runner must leave the job queued rather than turn an infrastructure
+shortage into a skipped compatibility claim.
 
 ## Required runner shape
 
 - Ubuntu 24.04 x86-64
-- 8 vCPU or more
-- 32 GB RAM or more
-- 300 GB ephemeral SSD, at least 280 GiB visible capacity, and at least 200 GiB
+- 16 vCPU
+- 64 GB RAM
+- 750 GB runner disk, at least 280 GiB visible capacity, and at least 200 GiB
   free at job start (the image and tool cache consume part of the disk)
 - one job per runner; destroy or reimage after every job
 - outbound HTTPS to GitHub and configured npm registries
 - no organization or registry write credentials
 - lifecycle scripts disabled during corpus qualification
 
-## Preferred provisioning order
+## Provisioning and trust boundary
 
-1. Create a GitHub organization larger-runner group named `oath-corpus`.
-2. Add an Ubuntu runner with the custom label `oath-ubuntu-300gb`.
-3. Restrict the group to `Generalized-Labs/oath`.
-4. Enable automatic scaling to 20 runners with zero idle runners.
-5. Set a hard monthly spend limit and alert at 50%, 75%, and 90%.
-6. Run `project-corpus-refresh.yml` before the complete evidence workflow.
+1. Keep the Blacksmith GitHub App restricted to `Generalized-Labs/oath`.
+2. Use `blacksmith-16vcpu-ubuntu-2404`; do not silently select another label.
+3. Set a hard monthly spend limit and alert at 50%, 75%, and 90%.
+4. Run `project-corpus-refresh.yml` before the complete evidence workflow.
+5. Record the runner name, OS, architecture, total disk, free disk, shard, and
+   workflow commit in the retained artifacts.
 
-If the GitHub plan does not support managed larger runners, use ephemeral
-self-hosted VMs registered through a GitHub App with one-time runner tokens.
-The VM image and bootstrap digest must be written into every project result.
+Blacksmith is a third-party execution environment. Corpus jobs receive the
+checked-out repository and GitHub's job token under the declared workflow
+permissions. They receive no organization, npm-publish, or private-registry
+write credentials. Lifecycle scripts remain disabled during qualification.
 
 ## Acceptance check
 
-The runner pool is provisioned only when all 20 corpus shards start, each meets
-the capacity and free-space floors above, and the generated evidence records
-the runner image and hardware identity. Merely adding a YAML label does not
-satisfy this contract.
+The runner pool is accepted only when all 20 corpus shards start, each meets the
+capacity and free-space floors above, and the generated evidence records runner
+identity. Merely changing the YAML label does not satisfy this contract.

@@ -249,20 +249,21 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
-    # Organization-managed GitHub larger runner: 8 cores / 300 GB SSD.
-    # Deliberately no 14 GB ubuntu-latest fallback: insufficient disk must fail closed.
-    runs-on: oath-ubuntu-300gb
+    # Approved Blacksmith runner: 16 cores / 64 GB RAM / 750 GB SSD.
+    # Deliberately no small-disk fallback: insufficient disk must fail closed.
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - name: Prove 300 GB runner contract
+      - name: Prove large-disk runner contract
         shell: bash
         run: |
           total_kib=$(df -Pk . | awk 'NR==2 {print $2}')
           free_kib=$(df -Pk . | awk 'NR==2 {print $4}')
           test "$total_kib" -ge 293601280
           test "$free_kib" -ge 209715200
-          jq -n --arg runner "${{ runner.name }}" --argjson shard "${{ matrix.shard }}" --argjson total_kib "$total_kib" --argjson free_kib "$free_kib" \
-            '{schema_version:1,runner:$runner,shard:$shard,total_kib:$total_kib,free_kib:$free_kib}' > runner-${{ matrix.shard }}.json
+          jq -n --arg runner "${{ runner.name }}" --arg os "${{ runner.os }}" --arg arch "${{ runner.arch }}" --arg commit "${{ github.sha }}" \
+            --argjson shard "${{ matrix.shard }}" --argjson total_kib "$total_kib" --argjson free_kib "$free_kib" \
+            '{schema_version:1,runner:$runner,os:$os,arch:$arch,commit:$commit,shard:$shard,total_kib:$total_kib,free_kib:$free_kib}' > runner-${{ matrix.shard }}.json
       - uses: actions/setup-node@v4
         with:
           node-version: 24

@@ -12,11 +12,11 @@ jobs:
       fail-fast: false
       matrix:
         shard: [0,1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19]
-    # Organization-managed GitHub larger runner: 8 cores / 300 GB SSD.
-    runs-on: oath-ubuntu-300gb
+    # Approved Blacksmith runner: 16 cores / 64 GB RAM / 750 GB SSD.
+    runs-on: blacksmith-16vcpu-ubuntu-2404
     steps:
       - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
-      - name: Prove 300 GB runner contract
+      - name: Prove large-disk runner contract
         shell: bash
         run: |
           total_kib=$(df -Pk . | awk 'NR==2 {print $2}')
@@ -27,10 +27,11 @@ jobs:
             --arg runner "${{ runner.name }}" \
             --arg os "${{ runner.os }}" \
             --arg arch "${{ runner.arch }}" \
+            --arg commit "${{ github.sha }}" \
             --argjson shard "${{ matrix.shard }}" \
             --argjson total_kib "$total_kib" \
             --argjson free_kib "$free_kib" \
-            '{schema_version:1,runner:$runner,os:$os,arch:$arch,shard:$shard,total_kib:$total_kib,free_kib:$free_kib}' \
+            '{schema_version:1,runner:$runner,os:$os,arch:$arch,commit:$commit,shard:$shard,total_kib:$total_kib,free_kib:$free_kib}' \
             > runner-${{ matrix.shard }}.json
       - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
         with:
