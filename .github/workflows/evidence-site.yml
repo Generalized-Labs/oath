@@ -34,7 +34,13 @@ jobs:
         run: cargo build --release --locked --bin oath
       - name: Install website through Oath
         working-directory: website
-        run: ../target/release/oath ci
+        run: |
+          cp oath-lock.json /tmp/oath-lock-before.json
+          if ! ../target/release/oath ci; then
+            ../target/release/oath install
+            diff -u /tmp/oath-lock-before.json oath-lock.json
+            exit 1
+          fi
       - name: Build website through Oath
         working-directory: website
         run: ../target/release/oath run build
