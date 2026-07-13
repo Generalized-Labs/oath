@@ -56,7 +56,8 @@ oath add lodash            # add dependency and install
 oath remove lodash         # remove dependency
 oath run build            # run script with pre/post hooks
 oath exec prettier .      # run package binary (npx replacement)
-oath exec --sandbox tsx   # run with Node permission sandbox when available
+oath exec --dry-run --json tsx # inspect identity, integrity, capabilities, and policy
+oath exec --sandbox-mode native tsx # require native OS containment
 oath publish              # publish to npm registry
 oath log                  # view transparency log
 oath score <pkg>          # security score for a package
@@ -133,13 +134,20 @@ OATH_AGENT_MODE=1 oath exec <pkg>
 `node` mode uses Node's permission flags when supported, allowing reads from the
 project, temp exec tree, and temp dir, and writes to the project and temp dir.
 Subprocesses, workers, addons, and network stay denied unless Node changes its
-permission defaults. `native` mode currently fails closed; Linux Landlock/seccomp
-is reserved for the next sandbox milestone. On macOS, the public sandbox story is
-Node-permission-only for now.
+permission defaults. `native` mode fails closed unless its complete backend
+probe succeeds. Strict Linux mode requires bubblewrap namespaces, Landlock ABI
+V6 (kernel 6.12+), seccomp, `no_new_privs`, and resource limits. Windows uses a
+per-execution restricted token, unique AppContainer profile, ACL-scoped writable
+roots, and Job Object limits. macOS remains Node-permission-only; Oath does not
+present that as Linux- or Windows-equivalent containment.
+
+Approvals bind package identity, integrity, capabilities, and sandbox policy. A
+new tarball hash always requires a new assessment and decision.
 
 ## Requirements
 
-- macOS (arm64, x64) or Linux (x64)
+- macOS (arm64, x64), Linux (x64), or Windows (x64, arm64)
+- Linux kernel 6.12+ and bubblewrap for strict native containment
 - Node.js (for running installed packages — oath itself needs none)
 
 ## License

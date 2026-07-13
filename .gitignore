@@ -12,3 +12,7 @@ oath-launch-target-*/
 compat-results/ai-ecosystem/*/logs/
 compat-results/ai-ecosystem/*/projects/
 compat-results/ai-ecosystem/latest
+compat-results/ga/
+!compat-results/ga/
+compat-results/ga/*
+!compat-results/ga/summary.json

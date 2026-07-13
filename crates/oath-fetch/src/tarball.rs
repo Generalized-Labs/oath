@@ -180,9 +180,15 @@ fn extract_archive<R: Read>(reader: R, dest: &Path, limits: &TarballLimits) -> R
         let mut entry = entry.context("corrupt tar entry")?;
         let path = entry.path().context("invalid path in tar")?;
 
-        let Some(relative) = sanitize_tar_path(&path, limits)? else {
+        let Some(mut relative) = sanitize_tar_path(&path, limits)? else {
             continue;
         };
+        // npm/pacote normalizes a package-root .gitignore to .npmignore when
+        // extracting registry tarballs. Match that observable node_modules
+        // contract rather than exposing the raw archive filename.
+        if relative == Path::new(".gitignore") {
+            relative = PathBuf::from(".npmignore");
+        }
 
         let full_path = dest.join(&relative);
 
@@ -206,7 +212,8 @@ fn extract_archive<R: Read>(reader: R, dest: &Path, limits: &TarballLimits) -> R
                     std::fs::create_dir_all(parent)
                         .with_context(|| format!("failed to create dir: {}", parent.display()))?;
                 }
-                // Capture mode before consuming entry via io::copy
+                // Capture mode before consuming entry via io::copy.
+                #[cfg(unix)]
                 let mode = entry.header().mode().unwrap_or(0o644);
                 let mut file = std::fs::File::create(&full_path)
                     .with_context(|| format!("failed to create: {}", full_path.display()))?;
@@ -393,6 +400,18 @@ mod tests {
 
         let tmp = tempfile::tempdir().unwrap();
         assert!(extract_tarball(&data, tmp.path()).is_err());
+    }
+
+    #[test]
+    fn extract_tarball_matches_npm_gitignore_normalization() {
+        let tmp = tempfile::tempdir().unwrap();
+        let data = tar_gz_with_file("package/.gitignore", b"node_modules\n");
+        extract_tarball(&data, tmp.path()).unwrap();
+        assert!(!tmp.path().join(".gitignore").exists());
+        assert_eq!(
+            std::fs::read(tmp.path().join(".npmignore")).unwrap(),
+            b"node_modules\n"
+        );
     }
 
     #[test]

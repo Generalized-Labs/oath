@@ -13,15 +13,39 @@ use oath_analyze::{PackageScanner, RiskLevel};
 use oath_core::policy::OathPolicy;
 use oath_fetch::RegistryClient;
 use oath_fetch::tarball::TarballLimits;
-use oath_resolve::git::git_cache_file_name;
+use oath_resolve::git::{git_cache_file_name, parse_git_spec, resolve_git_spec};
 use oath_resolve::graph::{DepNode, PeerResolution};
+use oath_resolve::placement::{ArboristPlanner, PlacementPlan, PlacementRequest};
 use oath_resolve::resolver::{ResolveOptions, Resolver};
 use oath_resolve::{DepGraph, Lockfile};
 use oath_store::cas::{ContentStore, PackageVerification};
 use oath_store::linker::{Linker, validate_install_name};
 use oath_workspace::{WorkspaceRoot, detect_workspace_root};
 
+mod approvals;
+mod exec_assessment;
 mod prompts;
+mod publish_assessment;
+
+#[cfg(unix)]
+fn platform_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn platform_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target, link)
+}
+
+#[cfg(unix)]
+fn platform_symlink_file(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn platform_symlink_file(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_file(target, link)
+}
 
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum ExecSandboxMode {
@@ -71,6 +95,9 @@ enum Commands {
         /// Prompt before running install scripts (old behavior; default is to block)
         #[arg(long)]
         run_scripts: bool,
+        /// Do not run dependency or root lifecycle scripts (npm-compatible)
+        #[arg(long)]
+        ignore_scripts: bool,
         /// Minimum release age to warn about (e.g. '7d', '24h', '30d')
         #[arg(long)]
         min_age: Option<String>,
@@ -91,6 +118,8 @@ enum Commands {
         #[arg(short = 'y', long)]
         yes: bool,
     },
+    /// Update dependencies within package.json ranges
+    Update { packages: Vec<String> },
     /// Remove a dependency
     #[command(visible_aliases = ["uninstall", "rm"])]
     Remove { packages: Vec<String> },
@@ -126,6 +155,12 @@ enum Commands {
         /// Sandbox mode to use: off, node, native, or auto
         #[arg(long, value_enum, default_value_t = ExecSandboxMode::Off)]
         sandbox_mode: ExecSandboxMode,
+        /// Deny outbound network access in the selected sandbox.
+        #[arg(long)]
+        deny_network: bool,
+        /// Persist an approval bound to this exact integrity, capability set, and sandbox policy.
+        #[arg(long)]
+        remember: bool,
     },
     /// Scan installed packages for malicious behavior (behavioral analysis, not a CVE audit)
     #[command(visible_alias = "audit")]
@@ -167,12 +202,42 @@ enum Commands {
         /// Dry run: show what would be published without actually publishing
         #[arg(long)]
         dry_run: bool,
+        /// Emit the versioned publish assessment as JSON.
+        #[arg(long)]
+        json: bool,
+        /// Submit through npm's staged-publishing protocol after Oath preflight.
+        #[arg(long)]
+        stage: bool,
     },
     /// Show recent transparency log entries
     Log {
         /// Number of recent entries to show (default: 10)
         #[arg(long, short = 'n', default_value = "10")]
         tail: usize,
+    },
+    /// Report the native sandbox controls available on this machine.
+    SandboxInfo {
+        /// Emit the capability report as JSON.
+        #[arg(long)]
+        json: bool,
+    },
+    #[command(name = "__sandbox-launch", hide = true)]
+    SandboxLaunch {
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        program: PathBuf,
+        #[arg(last = true)]
+        args: Vec<String>,
+    },
+    #[command(name = "__sandbox-native-run", hide = true)]
+    SandboxNativeRun {
+        #[arg(long)]
+        plan: PathBuf,
+        #[arg(long)]
+        program: PathBuf,
+        #[arg(last = true)]
+        args: Vec<String>,
     },
 }
 
@@ -194,6 +259,7 @@ async fn main() -> Result<()> {
             no_audit,
             yes,
             run_scripts,
+            ignore_scripts,
             min_age,
             global,
             frozen_lockfile,
@@ -205,6 +271,7 @@ async fn main() -> Result<()> {
                 !no_audit,
                 yes,
                 run_scripts,
+                ignore_scripts,
                 global,
                 frozen_lockfile,
                 min_age,
@@ -213,6 +280,9 @@ async fn main() -> Result<()> {
         }
         Commands::Add { package, dev, yes } => {
             cmd_add(&package, dev, yes).await?;
+        }
+        Commands::Update { packages } => {
+            cmd_update(packages).await?;
         }
         Commands::Run { script, args } => {
             cmd_run(script.as_deref(), &args)?;
@@ -254,6 +324,8 @@ async fn main() -> Result<()> {
             dry_run,
             sandbox,
             sandbox_mode,
+            deny_network,
+            remember,
         } => {
             cmd_exec(
                 &package,
@@ -265,6 +337,8 @@ async fn main() -> Result<()> {
                 dry_run,
                 sandbox,
                 sandbox_mode,
+                deny_network,
+                remember,
             )
             .await?;
         }
@@ -278,14 +352,74 @@ async fn main() -> Result<()> {
             tag,
             access,
             dry_run,
+            json,
+            stage,
         } => {
-            cmd_publish(tag.as_deref(), access.as_deref(), dry_run).await?;
+            cmd_publish(tag.as_deref(), access.as_deref(), dry_run, json, stage).await?;
         }
         Commands::Log { tail } => {
             cmd_log(tail)?;
         }
         Commands::Remove { packages } => {
             cmd_remove(packages).await?;
+        }
+        Commands::SandboxInfo { json } => {
+            let capabilities = oath_sandbox::verified_native_capabilities();
+            if json {
+                println!("{}", serde_json::to_string_pretty(&capabilities)?);
+            } else {
+                println!("backend: {}", capabilities.backend);
+                println!("available: {}", capabilities.available);
+                println!(
+                    "filesystem isolation: {}",
+                    capabilities.filesystem_isolation
+                );
+                println!("network isolation: {}", capabilities.network_isolation);
+                println!("process isolation: {}", capabilities.process_isolation);
+                println!("resource limits: {}", capabilities.resource_limits);
+                if let Some(reason) = capabilities.degraded_reason {
+                    println!("degraded: {reason}");
+                }
+            }
+        }
+        Commands::SandboxLaunch {
+            plan,
+            program,
+            args,
+        } => {
+            #[cfg(target_os = "linux")]
+            {
+                let plan: oath_sandbox::SandboxPlan =
+                    serde_json::from_reader(std::fs::File::open(plan)?)?;
+                let status = oath_sandbox::linux::apply_inner(&plan, &program, &args)?;
+                std::process::exit(status.code().unwrap_or(1));
+            }
+            #[cfg(not(target_os = "linux"))]
+            {
+                let _ = (plan, program, args);
+                anyhow::bail!("internal sandbox launcher is Linux-only");
+            }
+        }
+        Commands::SandboxNativeRun {
+            plan,
+            program,
+            args,
+        } => {
+            #[cfg(any(target_os = "linux", target_os = "windows"))]
+            {
+                let plan: oath_sandbox::SandboxPlan =
+                    serde_json::from_reader(std::fs::File::open(plan)?)?;
+                #[cfg(target_os = "linux")]
+                let status = oath_sandbox::linux::run(&plan, &program, &args)?;
+                #[cfg(target_os = "windows")]
+                let status = oath_sandbox::windows::run(&plan, &program, &args)?;
+                std::process::exit(status.code().unwrap_or(1));
+            }
+            #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+            {
+                let _ = (plan, program, args);
+                anyhow::bail!("native sandbox backend is unavailable on this platform");
+            }
         }
     }
 
@@ -302,6 +436,7 @@ async fn cmd_install(
     run_audit: bool,
     yes_flag: bool,
     run_scripts: bool,
+    ignore_scripts: bool,
     global: bool,
     frozen_lockfile: bool,
     min_age: Option<String>,
@@ -392,10 +527,37 @@ async fn cmd_install(
 
     let total_direct = deps.len() + dev_deps.len();
 
+    // npm Arborist is the authoritative placement planner for ordinary
+    // package.json installs. Oath retains ownership of fetch, integrity,
+    // scanning, CAS materialization, lifecycle policy, and atomic commit.
+    // Keep the former resolver available only as an explicit diagnostic canary.
+    let use_arborist = std::env::var("OATH_RESOLVER").as_deref() != Ok("legacy");
+    let placement_plan: Option<PlacementPlan> = if use_arborist {
+        println!("oath: planning npm-compatible layout with Arborist...");
+        let request = if packages.is_empty() {
+            PlacementRequest::default()
+        } else {
+            PlacementRequest::add(packages.clone(), dev)
+        };
+        let mut plan = ArboristPlanner::plan_with(&cwd, &request)?;
+        hydrate_missing_registry_metadata(&mut plan).await?;
+        println!(
+            "  planned {} exact locations with {} (npm {})",
+            plan.nodes.len(),
+            plan.planner.name,
+            plan.planner.npm
+        );
+        Some(plan)
+    } else {
+        None
+    };
+
     // Fast path: if lockfile exists, matches package.json, and all store entries
     // are present, skip registry resolution.
     let lock_path = PathBuf::from("oath-lock.json");
-    let graph = if lock_path.exists() && packages.is_empty() {
+    let graph = if let Some(plan) = placement_plan.as_ref() {
+        plan.to_dep_graph()?
+    } else if lock_path.exists() && packages.is_empty() {
         // Try to use lockfile directly
         let lockfile = Lockfile::read(&lock_path)?;
         let store_check = ContentStore::default_store()?;
@@ -492,7 +654,7 @@ async fn cmd_install(
 
     // Root project's own preinstall (trusted, runs like npm/bun) -- only on a
     // plain `oath install` of the project, not when adding specific packages.
-    if packages.is_empty() {
+    if packages.is_empty() && !ignore_scripts {
         run_root_lifecycle("preinstall");
     }
 
@@ -605,7 +767,14 @@ async fn cmd_install(
     let store_ref = Arc::clone(&store);
     let linker = Linker::new((*store_ref).clone());
     let cwd = std::env::current_dir()?;
-    let link_result = linker.link_all(&graph, &cwd)?;
+    let link_result = if let Some(plan) = placement_plan.as_ref() {
+        linker.link_placement_plan(plan, &cwd)?
+    } else {
+        linker.link_all(&graph, &cwd)?
+    };
+    if let Some(plan) = placement_plan.as_ref() {
+        plan.write(&cwd.join(".oath").join("placement-plan.json"))?;
+    }
     let link_time = link_start.elapsed();
     println!(
         "  linked {} packages in {:.1}s",
@@ -659,7 +828,7 @@ async fn cmd_install(
 
     let mut scripts_blocked = 0;
     for node in graph.nodes.values() {
-        if !node.has_install_script {
+        if ignore_scripts || !node.has_install_script {
             continue;
         }
 
@@ -804,7 +973,7 @@ async fn cmd_install(
 
     // Root project's own post-install lifecycle (trusted, runs like npm/bun) --
     // covers the common husky `prepare` and any project postinstall.
-    if packages.is_empty() {
+    if packages.is_empty() && !ignore_scripts {
         run_root_lifecycle("install");
         run_root_lifecycle("postinstall");
         run_root_lifecycle("prepare");
@@ -846,7 +1015,25 @@ async fn cmd_ci() -> Result<()> {
         anyhow::bail!("package.json does not match oath-lock.json, run oath install first");
     }
 
-    let graph = lockfile.to_graph();
+    let cwd = std::env::current_dir()?.canonicalize()?;
+    let plan_path = cwd.join(".oath").join("placement-plan.json");
+    let mut placement_plan = if plan_path.exists() {
+        PlacementPlan::read(&plan_path)?
+    } else {
+        ArboristPlanner::plan(&cwd)?
+    };
+    hydrate_missing_registry_metadata(&mut placement_plan).await?;
+    let graph = placement_plan.to_dep_graph()?;
+    let planned_lock = Lockfile::from_graph_with_manifest(
+        &graph,
+        &lockfile.name,
+        &lockfile.version,
+        &deps,
+        &dev_deps,
+    );
+    if !lockfiles_match_for_frozen(&lockfile, &planned_lock) {
+        anyhow::bail!("placement plan does not match oath-lock.json, run oath install first");
+    }
     let store = Arc::new(ContentStore::default_store()?);
     let client = Arc::new(RegistryClient::default_client()?);
     let (to_download, cached) = missing_store_nodes(&graph, &store);
@@ -863,18 +1050,9 @@ async fn cmd_ci() -> Result<()> {
         println!("  {} already cached", cached);
     }
 
-    let nm_dir = PathBuf::from("node_modules");
-    if nm_dir.exists() || nm_dir.symlink_metadata().is_ok() {
-        if nm_dir.is_symlink() || nm_dir.is_file() {
-            std::fs::remove_file(&nm_dir).context("failed to clean node_modules")?;
-        } else {
-            std::fs::remove_dir_all(&nm_dir).context("failed to clean node_modules")?;
-        }
-    }
-
-    let cwd = std::env::current_dir()?;
     let linker = Linker::new((*store).clone());
-    let link_result = linker.link_all(&graph, &cwd)?;
+    let link_result = linker.link_placement_plan(&placement_plan, &cwd)?;
+    placement_plan.write(&plan_path)?;
     println!("  linked {} packages", link_result.linked);
 
     let total_time = start.elapsed();
@@ -939,27 +1117,17 @@ async fn cmd_install_workspace(
         return Ok(());
     }
 
-    // Resolve the unified dep graph
-    println!(
-        "  resolving {} external dependencies...",
-        external_deps.len()
-    );
-    let client = RegistryClient::default_client()?;
-    let options = ResolveOptions {
-        include_dev: true,
-        include_optional: true,
-        max_depth: 256,
-    };
-    let mut resolver = Resolver::new(client, options);
-
-    // Split external_deps into deps and dev_deps (we treat all as deps for hoisting)
+    println!("  planning npm-compatible workspace layout with Arborist...");
+    let mut placement_plan = ArboristPlanner::plan(&ws.root)?;
+    hydrate_missing_registry_metadata(&mut placement_plan).await?;
+    let graph = placement_plan.to_dep_graph()?;
     let empty_dev_deps: HashMap<String, String> = HashMap::new();
-    let graph = resolver.resolve(&external_deps, &empty_dev_deps).await?;
 
     let resolve_time = start.elapsed();
     println!(
-        "  resolved {} packages in {:.1}s",
+        "  planned {} packages at {} exact locations in {:.1}s",
         graph.package_count(),
+        placement_plan.nodes.len(),
         resolve_time.as_secs_f64()
     );
 
@@ -990,7 +1158,8 @@ async fn cmd_install_workspace(
     let link_start = Instant::now();
     let store_ref = Arc::clone(&store);
     let linker = Linker::new((*store_ref).clone());
-    let link_result = linker.link_all(&graph, &ws.root)?;
+    let link_result = linker.link_placement_plan(&placement_plan, &ws.root)?;
+    placement_plan.write(&ws.root.join(".oath").join("placement-plan.json"))?;
     let link_time = link_start.elapsed();
     println!(
         "  linked {} packages in {:.1}s",
@@ -1005,6 +1174,19 @@ async fn cmd_install_workspace(
         let install_name = &pkg.name;
         validate_install_name(install_name)?;
         let symlink_path = nm_dir.join(install_name);
+
+        let expected_target = pkg.path.canonicalize().with_context(|| {
+            format!("failed to resolve workspace package {}", pkg.path.display())
+        })?;
+        if symlink_path
+            .canonicalize()
+            .is_ok_and(|target| target == expected_target)
+        {
+            // The authoritative Arborist placement already materialized this
+            // workspace link. Keep it intact (especially a Windows junction).
+            ws_symlinks += 1;
+            continue;
+        }
 
         // Handle scoped packages: create @scope dir
         if install_name.contains('/')
@@ -1031,7 +1213,7 @@ async fn cmd_install_workspace(
             nm_dir.clone()
         };
         let relative_path = relative_path_from(&symlink_parent, &pkg.path)?;
-        std::os::unix::fs::symlink(&relative_path, &symlink_path).with_context(|| {
+        platform_symlink_dir(&relative_path, &symlink_path).with_context(|| {
             format!(
                 "failed to symlink workspace package {} -> {}",
                 symlink_path.display(),
@@ -1327,9 +1509,43 @@ async fn cmd_add(package: &str, dev: bool, yes: bool) -> Result<()> {
         false,
         false,
         false,
+        false,
         None,
     )
     .await
+}
+
+async fn cmd_update(packages: Vec<String>) -> Result<()> {
+    let cwd = std::env::current_dir()?.canonicalize()?;
+    let pkg = read_package_json()?;
+    let deps = extract_deps(&pkg, "dependencies");
+    let dev_deps = extract_deps(&pkg, "devDependencies");
+    let names = packages
+        .into_iter()
+        .map(|spec| parse_package_spec(&spec).0)
+        .collect();
+    let mut placement_plan = ArboristPlanner::plan_with(&cwd, &PlacementRequest::update(names))?;
+    hydrate_missing_registry_metadata(&mut placement_plan).await?;
+    let graph = placement_plan.to_dep_graph()?;
+
+    let store = Arc::new(ContentStore::default_store()?);
+    let client = Arc::new(RegistryClient::default_client()?);
+    let (to_download, _) = missing_store_nodes(&graph, &store);
+    download_missing_nodes(to_download, Arc::clone(&store), client).await?;
+    let linker = Linker::new((*store).clone());
+    linker.link_placement_plan(&placement_plan, &cwd)?;
+    placement_plan.write(&cwd.join(".oath").join("placement-plan.json"))?;
+
+    let lockfile = Lockfile::from_graph_with_manifest(
+        &graph,
+        pkg["name"].as_str().unwrap_or("project"),
+        pkg["version"].as_str().unwrap_or("0.0.0"),
+        &deps,
+        &dev_deps,
+    );
+    lockfile.write(&cwd.join("oath-lock.json"))?;
+    println!("oath: updated {} packages", graph.package_count());
+    Ok(())
 }
 
 // ---- RUN --------------------------------------------------------------------
@@ -2129,6 +2345,43 @@ fn missing_store_nodes(graph: &DepGraph, store: &ContentStore) -> (Vec<DepNode>,
     (to_download, cached)
 }
 
+async fn hydrate_missing_registry_metadata(plan: &mut PlacementPlan) -> Result<()> {
+    let missing: std::collections::BTreeSet<_> = plan
+        .nodes
+        .iter()
+        .filter(|node| !node.link && node.resolved.is_none())
+        .map(|node| (node.name.clone(), node.version.clone()))
+        .collect();
+    if missing.is_empty() {
+        return Ok(());
+    }
+    let client = RegistryClient::default_client()?;
+    let mut resolved = HashMap::new();
+    for (name, version) in missing {
+        let packument = client
+            .fetch_packument(&name)
+            .await
+            .with_context(|| format!("recovering registry metadata for {name}@{version}"))?;
+        let info = packument
+            .versions
+            .get(&version)
+            .with_context(|| format!("registry has no metadata for {name}@{version}"))?;
+        resolved.insert(
+            (name, version),
+            (info.dist.tarball.clone(), info.dist.integrity.clone()),
+        );
+    }
+    for node in &mut plan.nodes {
+        if let Some((url, integrity)) = resolved.get(&(node.name.clone(), node.version.clone())) {
+            node.resolved.get_or_insert_with(|| url.clone());
+            if node.integrity.is_none() {
+                node.integrity.clone_from(integrity);
+            }
+        }
+    }
+    Ok(())
+}
+
 #[derive(Debug, Default)]
 struct DownloadSummary {
     downloaded: usize,
@@ -2208,13 +2461,25 @@ async fn download_tarball_to_temp(
     let tarball_path = temp_dir.path().join("package.tgz");
 
     let bytes = if is_git_resolved(&resolved) {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        let cache_file = std::path::PathBuf::from(&home)
+        let home = oath_core::home_dir().unwrap_or_else(std::env::temp_dir);
+        let cache_file = home
             .join(".oath")
             .join("git-cache")
             .join(git_cache_file_name(&name, &version));
         if !cache_file.exists() {
-            anyhow::bail!("git dep {name}@{version} not in cache and no tarball URL available");
+            let spec = parse_git_spec(&resolved)
+                .with_context(|| format!("invalid git dependency URL {resolved}"))?;
+            let http = reqwest::Client::builder()
+                .user_agent(concat!("oath/", env!("CARGO_PKG_VERSION")))
+                .build()?;
+            let git = resolve_git_spec(&spec, &http)
+                .await
+                .with_context(|| format!("fetching git dependency {name}@{version}"))?;
+            limits.check_archive_size(git.tarball_data.len() as u64)?;
+            if let Some(parent) = cache_file.parent() {
+                std::fs::create_dir_all(parent)?;
+            }
+            std::fs::write(&cache_file, git.tarball_data)?;
         }
         let len = std::fs::metadata(&cache_file)
             .with_context(|| format!("stat git cache {}", cache_file.display()))?
@@ -2258,8 +2523,8 @@ async fn download_and_store_package(
     let temp_dir = tempfile::tempdir().context("failed to create temp tarball dir")?;
     let tarball_path = temp_dir.path().join("package.tgz");
     let bytes = if is_git_resolved(resolved) {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        let cache_file = std::path::PathBuf::from(&home)
+        let home = oath_core::home_dir().unwrap_or_else(std::env::temp_dir);
+        let cache_file = home
             .join(".oath")
             .join("git-cache")
             .join(git_cache_file_name(name, version));
@@ -2548,6 +2813,50 @@ fn dir_size(dir: &std::path::Path) -> u64 {
     total
 }
 
+fn previous_release_diff(
+    packument: &serde_json::Value,
+    current_version: &str,
+    current_publisher: Option<&str>,
+    current_has_install_script: bool,
+) -> Option<exec_assessment::VersionDiff> {
+    let current = current_version.parse::<node_semver::Version>().ok()?;
+    let versions = packument.get("versions")?.as_object()?;
+    let (previous_version, previous) = versions
+        .iter()
+        .filter_map(|(version, metadata)| {
+            let parsed = version.parse::<node_semver::Version>().ok()?;
+            (parsed < current).then_some((parsed, version, metadata))
+        })
+        .max_by(|(a, _, _), (b, _, _)| a.cmp(b))
+        .map(|(_, version, metadata)| (version, metadata))?;
+    let previous_publisher = previous
+        .get("_npmUser")
+        .and_then(|user| user.get("name"))
+        .and_then(|name| name.as_str());
+    let previous_hooks = previous
+        .get("scripts")
+        .and_then(|scripts| scripts.as_object())
+        .map(|scripts| {
+            scripts
+                .keys()
+                .any(|name| matches!(name.as_str(), "preinstall" | "install" | "postinstall"))
+        })
+        .unwrap_or(false);
+    Some(exec_assessment::VersionDiff {
+        previous_version: previous_version.clone(),
+        previous_integrity: previous
+            .get("dist")
+            .and_then(|dist| dist.get("integrity"))
+            .and_then(|value| value.as_str())
+            .map(String::from),
+        publisher_changed: match (previous_publisher, current_publisher) {
+            (Some(previous), Some(current)) => Some(previous != current),
+            _ => None,
+        },
+        lifecycle_hooks_changed: previous_hooks != current_has_install_script,
+    })
+}
+
 #[derive(Copy, Clone, Debug)]
 struct ExecSandboxDecision {
     requested_mode: ExecSandboxMode,
@@ -2586,7 +2895,15 @@ fn resolve_exec_sandbox(
             ExecSandboxMode::Node
         }
         ExecSandboxMode::Native => {
-            anyhow::bail!("native exec sandbox is not available in this release")
+            let capabilities = oath_sandbox::verified_native_capabilities();
+            if !capabilities.available {
+                anyhow::bail!(
+                    capabilities
+                        .degraded_reason
+                        .unwrap_or_else(|| "native sandbox unavailable".into())
+                )
+            }
+            ExecSandboxMode::Native
         }
         ExecSandboxMode::Auto => {
             if node_permission_flag().is_some() {
@@ -2635,7 +2952,32 @@ fn run_node_binary(
     args: &[String],
     exec_path: &std::path::Path,
     sandbox_mode: ExecSandboxMode,
+    sandbox_plan: Option<&oath_sandbox::SandboxPlan>,
 ) -> Result<std::process::ExitStatus> {
+    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    let _ = sandbox_plan;
+    #[cfg(target_os = "linux")]
+    if sandbox_mode == ExecSandboxMode::Native {
+        let plan = sandbox_plan.context("native sandbox requires a sandbox plan")?;
+        return oath_sandbox::linux::run(
+            plan,
+            std::path::Path::new("/usr/bin/node"),
+            &std::iter::once(bin_path.display().to_string())
+                .chain(args.iter().cloned())
+                .collect::<Vec<_>>(),
+        );
+    }
+    #[cfg(target_os = "windows")]
+    if sandbox_mode == ExecSandboxMode::Native {
+        let plan = sandbox_plan.context("native sandbox requires a sandbox plan")?;
+        return oath_sandbox::windows::run(
+            plan,
+            std::path::Path::new("node.exe"),
+            &std::iter::once(bin_path.display().to_string())
+                .chain(args.iter().cloned())
+                .collect::<Vec<_>>(),
+        );
+    }
     let mut cmd = std::process::Command::new("node");
     if sandbox_mode == ExecSandboxMode::Node {
         let permission_flag = ensure_node_permission_sandbox()?;
@@ -2669,6 +3011,8 @@ async fn cmd_exec(
     dry_run: bool,
     sandbox: bool,
     sandbox_mode: ExecSandboxMode,
+    deny_network: bool,
+    remember: bool,
 ) -> Result<()> {
     use oath_analyze::{
         FindingKind, PackageScanner, RiskLevel, ScoreContext, compute_safety_score_contextual,
@@ -2766,22 +3110,8 @@ async fn cmd_exec(
         }
     }
 
-    // Download + resolve the full tree + link, so requires work and we can scan.
-    let store = ContentStore::default_store()?;
-    if !store
-        .verify_package(&pkg_name, &version, info.dist.integrity.as_deref())
-        .is_verified()
-    {
-        download_and_store_package(
-            &client,
-            &store,
-            &pkg_name,
-            &version,
-            &info.dist.tarball,
-            info.dist.integrity.as_deref(),
-        )
-        .await?;
-    }
+    // Plan the full temporary install with the same placement authority used by
+    // `install`; Oath still owns download, integrity, scanning, and execution.
     let exec_dir = tempfile::tempdir()?;
     let exec_path = exec_dir.path().to_path_buf();
     let exec_pkg = serde_json::json!({
@@ -2793,34 +3123,15 @@ async fn cmd_exec(
         exec_path.join("package.json"),
         serde_json::to_string(&exec_pkg)?,
     )?;
-    let mut deps_map = HashMap::new();
-    deps_map.insert(pkg_name.clone(), version.clone());
-    let options = ResolveOptions {
-        include_dev: false,
-        include_optional: true,
-        max_depth: 256,
-    };
-    let mut resolver = Resolver::new(RegistryClient::default_client()?, options);
-    let graph = resolver.resolve(&deps_map, &HashMap::new()).await?;
-    let store2 = ContentStore::default_store()?;
-    for node in graph.nodes.values() {
-        if !store2
-            .verify_package(&node.name, &node.version, node.integrity.as_deref())
-            .is_verified()
-        {
-            download_and_store_package(
-                &client,
-                &store2,
-                &node.name,
-                &node.version,
-                &node.resolved,
-                node.integrity.as_deref(),
-            )
-            .await?;
-        }
-    }
-    let linker = oath_store::Linker::new(store2);
-    linker.link_all(&graph, &exec_path)?;
+    let mut placement_plan = ArboristPlanner::plan(&exec_path)?;
+    hydrate_missing_registry_metadata(&mut placement_plan).await?;
+    let graph = placement_plan.to_dep_graph()?;
+    let store2 = Arc::new(ContentStore::default_store()?);
+    let registry = Arc::new(RegistryClient::default_client()?);
+    let (to_download, _) = missing_store_nodes(&graph, &store2);
+    download_missing_nodes(to_download, Arc::clone(&store2), registry).await?;
+    let linker = oath_store::Linker::new((*store2).clone());
+    linker.link_placement_plan(&placement_plan, &exec_path)?;
     let pkg_dir = exec_path.join("node_modules").join(&pkg_name);
 
     // Scan + score before deciding to run.
@@ -2881,8 +3192,113 @@ async fn cmd_exec(
         .map(|g| grade_rank(score.grade) < grade_rank(g.chars().next().unwrap_or('A')))
         .unwrap_or(false);
 
+    let pkg_json_path = pkg_dir.join("package.json");
+    let preferred_binary = if pkg_json_path.exists() {
+        let pkg_json: serde_json::Value =
+            serde_json::from_str(&std::fs::read_to_string(&pkg_json_path)?)?;
+        preferred_bin_path(&pkg_json, &pkg_name)
+    } else {
+        None
+    };
+
+    let mut sandbox_plan = (sandbox_decision.effective_mode != ExecSandboxMode::Off)
+        .then(|| oath_sandbox::SandboxPlan::strict(pkg_name.clone(), exec_path.clone()));
+    if !deny_network
+        && caps.network
+        && let Some(plan) = &mut sandbox_plan
+    {
+        plan.network = oath_sandbox::NetworkMode::Inherit;
+    }
+
+    let native_code = ["binding.gyp", "prebuilds"]
+        .iter()
+        .any(|p| pkg_dir.join(p).exists());
+    let version_diff = full.as_ref().and_then(|packument| {
+        previous_release_diff(
+            packument,
+            &version,
+            last_publisher.as_deref(),
+            caps.has_install_scripts,
+        )
+    });
+    let assessment = exec_assessment::ExecAssessment {
+        schema_version: exec_assessment::EXEC_ASSESSMENT_VERSION,
+        identity: exec_assessment::PackageIdentity {
+            name: pkg_name.clone(),
+            version: version.clone(),
+            binary: preferred_binary
+                .as_ref()
+                .map(|path| path.display().to_string()),
+            registry: "https://registry.npmjs.org".into(),
+            integrity: info.dist.integrity.clone(),
+            publisher: last_publisher.clone(),
+            publish_age_days: age_days,
+            repository: repository.clone(),
+        },
+        evidence: exec_assessment::PackageEvidence {
+            unpacked_bytes: dir_size(&pkg_dir),
+            dependency_count: graph.nodes.len(),
+            readable_source: !obfuscated,
+            obfuscated,
+            native_code,
+            lifecycle_hooks: caps.has_install_scripts,
+            capabilities: perms.iter().map(|p| (*p).to_string()).collect(),
+            findings: serious.clone(),
+            limitations: vec![
+                "Static analysis cannot prove safety",
+                "Remote second-stage payloads and opaque binaries may evade inspection",
+            ],
+            version_diff,
+        },
+        policy: exec_assessment::PolicyDecision {
+            decision: if grade_blocked { "block" } else { "allow" },
+            reason_code: if grade_blocked {
+                "OATH_EXEC_GRADE_BELOW_REQUIRED"
+            } else {
+                "OATH_EXEC_ALLOWED"
+            },
+            grade: score.grade.to_string(),
+            score: score.score,
+        },
+        sandbox: match sandbox_decision.effective_mode {
+            ExecSandboxMode::Native => oath_sandbox::verified_native_capabilities(),
+            ExecSandboxMode::Node => oath_sandbox::BackendCapabilities {
+                backend: "node-permissions".into(),
+                available: true,
+                filesystem_isolation: true,
+                network_isolation: true,
+                process_isolation: false,
+                resource_limits: false,
+                degraded_reason: Some("Node permissions are not an OS process sandbox".into()),
+            },
+            _ => oath_sandbox::BackendCapabilities {
+                backend: "off".into(),
+                available: true,
+                filesystem_isolation: false,
+                network_isolation: false,
+                process_isolation: false,
+                resource_limits: false,
+                degraded_reason: Some("sandbox disabled".into()),
+            },
+        },
+        sandbox_plan: sandbox_plan.clone(),
+    };
+    let approval = approvals::ExecApproval {
+        package: pkg_name.clone(),
+        version: version.clone(),
+        integrity: info.dist.integrity.clone().unwrap_or_default(),
+        capabilities: perms.iter().map(|p| (*p).to_string()).collect(),
+        sandbox_backend: assessment.sandbox.backend.clone(),
+        deny_network,
+    };
+    let approval_store = approvals::ApprovalStore::default_store()?;
+    let previously_approved =
+        !approval.integrity.is_empty() && approval_store.contains(&approval)?;
+
     if json {
         let verdict = serde_json::json!({
+            "assessment": assessment,
+            "approval": { "integrity_bound": true, "previously_approved": previously_approved },
             "name": pkg_name,
             "version": version,
             "integrity": info.dist.integrity,
@@ -2959,7 +3375,10 @@ async fn cmd_exec(
         if dry_run {
             return Ok(());
         }
-        let needs_prompt = !serious.is_empty() && !yes && std::env::var("OATH_ALLOW_ALL").is_err();
+        let needs_prompt = !serious.is_empty()
+            && !yes
+            && !previously_approved
+            && std::env::var("OATH_ALLOW_ALL").is_err();
         if needs_prompt {
             print!("\n  run anyway? [y/N] ");
             std::io::stdout().flush()?;
@@ -2972,16 +3391,16 @@ async fn cmd_exec(
         }
     }
 
+    if remember {
+        anyhow::ensure!(
+            !approval.integrity.is_empty(),
+            "cannot remember an approval without registry integrity"
+        );
+        approval_store.remember(approval)?;
+    }
+
     // Find the binary.
-    let pkg_json_path = pkg_dir.join("package.json");
-    let bin_name = if pkg_json_path.exists() {
-        let pkg_json: serde_json::Value =
-            serde_json::from_str(&std::fs::read_to_string(&pkg_json_path)?)?;
-        preferred_bin_path(&pkg_json, &pkg_name)
-    } else {
-        None
-    };
-    let bin_path = match bin_name {
+    let bin_path = match preferred_binary {
         Some(rel) => pkg_dir.join(rel),
         None => {
             let candidates = ["cli.js", "bin/index.js", "index.js", "bin.js"];
@@ -3001,8 +3420,14 @@ async fn cmd_exec(
         eprintln!("  fetched + scanned in {:.1}s", elapsed.as_secs_f64());
     }
 
-    let status = run_node_binary(&bin_path, args, &exec_path, sandbox_decision.effective_mode)
-        .with_context(|| format!("failed to execute node {}", bin_path.display()))?;
+    let status = run_node_binary(
+        &bin_path,
+        args,
+        &exec_path,
+        sandbox_decision.effective_mode,
+        sandbox_plan.as_ref(),
+    )
+    .with_context(|| format!("failed to execute node {}", bin_path.display()))?;
     std::process::exit(status.code().unwrap_or(1));
 }
 
@@ -3290,6 +3715,7 @@ async fn cmd_remove(packages: Vec<String>) -> Result<()> {
     };
 
     let mut removed_any = false;
+    let mut removed_names = Vec::new();
     for package in &packages {
         let (name, _) = parse_package_spec(package);
 
@@ -3309,6 +3735,7 @@ async fn cmd_remove(packages: Vec<String>) -> Result<()> {
         }
 
         println!("removed {}", name);
+        removed_names.push(name);
         removed_any = true;
     }
 
@@ -3341,22 +3768,23 @@ async fn cmd_remove(packages: Vec<String>) -> Result<()> {
             &dev_deps,
         );
         lockfile.write(&PathBuf::from("oath-lock.json"))?;
+        let plan_path = PathBuf::from(".oath").join("placement-plan.json");
+        if plan_path.exists() {
+            std::fs::remove_file(plan_path)?;
+        }
     } else {
-        let client = RegistryClient::default_client()?;
-        let options = ResolveOptions {
-            include_dev: true,
-            include_optional: true,
-            max_depth: 256,
-        };
-        let mut resolver = Resolver::new(client, options);
-        let graph = resolver.resolve(&deps, &dev_deps).await?;
+        let cwd = std::env::current_dir()?.canonicalize()?;
+        let mut placement_plan =
+            ArboristPlanner::plan_with(&cwd, &PlacementRequest::remove(removed_names))?;
+        hydrate_missing_registry_metadata(&mut placement_plan).await?;
+        let graph = placement_plan.to_dep_graph()?;
         let store = Arc::new(ContentStore::default_store()?);
         let client = Arc::new(RegistryClient::default_client()?);
         let (to_download, _) = missing_store_nodes(&graph, &store);
         download_missing_nodes(to_download, Arc::clone(&store), Arc::clone(&client)).await?;
-        let cwd = std::env::current_dir()?;
         let linker = Linker::new((*store).clone());
-        linker.link_all(&graph, &cwd)?;
+        linker.link_placement_plan(&placement_plan, &cwd)?;
+        placement_plan.write(&cwd.join(".oath").join("placement-plan.json"))?;
         std::fs::write("package.json", serde_json::to_string_pretty(&pkg)?)?;
         let lockfile = Lockfile::from_graph_with_manifest(
             &graph,
@@ -3387,6 +3815,61 @@ fn collect_publish_files(
     files.sort();
     files.dedup();
     Ok(files)
+}
+
+fn npm_authoritative_packlist(root: &std::path::Path) -> Result<Vec<PathBuf>> {
+    let cache = tempfile::tempdir().context("failed to create isolated npm pack cache")?;
+    let output = npm_command()
+        .args(["pack", "--dry-run", "--json", "--ignore-scripts"])
+        .current_dir(root)
+        .env("npm_config_cache", cache.path())
+        .output()
+        .context("npm 11 is required to compute the authoritative publish packlist")?;
+    anyhow::ensure!(
+        output.status.success(),
+        "npm packlist failed: {}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let report: serde_json::Value =
+        serde_json::from_slice(&output.stdout).context("invalid npm pack --json output")?;
+    let files = report
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| item.get("files"))
+        .and_then(|files| files.as_array())
+        .context("npm pack output did not contain files")?;
+    let canonical_root = root.canonicalize()?;
+    let mut paths = Vec::new();
+    for file in files {
+        let relative = file
+            .get("path")
+            .and_then(|value| value.as_str())
+            .context("npm pack file missing path")?;
+        let path = canonical_root
+            .join(relative)
+            .canonicalize()
+            .with_context(|| format!("npm pack selected unreadable file {relative}"))?;
+        anyhow::ensure!(
+            path.starts_with(&canonical_root),
+            "npm pack selected out-of-root file {relative}"
+        );
+        anyhow::ensure!(path.is_file(), "npm pack selected non-file {relative}");
+        paths.push(path);
+    }
+    paths.sort();
+    paths.dedup();
+    Ok(paths)
+}
+
+fn npm_command() -> std::process::Command {
+    #[cfg(target_os = "windows")]
+    {
+        std::process::Command::new("npm.cmd")
+    }
+    #[cfg(not(target_os = "windows"))]
+    {
+        std::process::Command::new("npm")
+    }
 }
 
 fn collect_publish_files_inner(
@@ -3500,7 +3983,13 @@ fn should_publish_exclude(rel: &str, excludes: &[&str], npmignore: &[String]) ->
         || rel.ends_with(".spec.ts")
 }
 
-async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> Result<()> {
+async fn cmd_publish(
+    tag: Option<&str>,
+    access: Option<&str>,
+    dry_run: bool,
+    json: bool,
+    stage: bool,
+) -> Result<()> {
     use base64::Engine;
     use flate2::Compression;
     use flate2::write::GzEncoder;
@@ -3554,26 +4043,44 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
                 .collect()
         });
 
-    let mut files_to_pack = collect_publish_files(
+    let oath_files = collect_publish_files(
         &cwd,
         &default_excludes,
         &npmignore_patterns,
         &files_whitelist,
     )?;
-
-    // Always ensure package.json is first
-    let pkg_json_path = cwd.join("package.json");
-    if !files_to_pack.contains(&pkg_json_path) {
-        files_to_pack.insert(0, pkg_json_path);
+    let files_to_pack = npm_authoritative_packlist(&cwd)?;
+    let oath_set: std::collections::BTreeSet<_> = oath_files
+        .iter()
+        .filter_map(|path| path.strip_prefix(&cwd).ok())
+        .collect();
+    let npm_set: std::collections::BTreeSet<_> = files_to_pack
+        .iter()
+        .filter_map(|path| path.strip_prefix(&cwd).ok())
+        .collect();
+    if oath_set != npm_set && !json {
+        eprintln!(
+            "oath publish: npm packlist selected {} files; Oath's independent collector selected {}. The npm packlist is authoritative.",
+            npm_set.len(),
+            oath_set.len()
+        );
     }
 
-    // Sort for determinism
-    files_to_pack.sort();
-
-    // Deduplicate
-    files_to_pack.dedup();
+    let mut assessment = publish_assessment::assess(&cwd, &files_to_pack, &pkg, dist_tag, access)?;
+    publish_assessment::attach_previous_release(&cwd, &mut assessment)?;
+    if json {
+        println!("{}", serde_json::to_string_pretty(&assessment)?);
+    }
+    anyhow::ensure!(
+        assessment.decision == "allow",
+        "oath publish: blocked by {}",
+        assessment.reason_code
+    );
 
     if dry_run {
+        if json {
+            return Ok(());
+        }
         println!("oath publish: dry run - would publish {}@{}", name, version);
         println!("  dist-tag: {}", dist_tag);
         if let Some(acc) = access {
@@ -3588,6 +4095,25 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
             println!("    {} ({} B)", rel, size);
         }
         println!("  total uncompressed: {} bytes", total_size);
+        return Ok(());
+    }
+
+    let evidence = publish_assessment::persist_signed(&cwd, &assessment, &pkg)?;
+    if !json {
+        println!("  signed evidence: {}", evidence.directory);
+    }
+
+    if stage {
+        let mut command = npm_command();
+        command.args(["stage", "publish", "--tag", dist_tag]);
+        command.env("NPM_CONFIG_PROVENANCE", "true");
+        let status = command
+            .status()
+            .context("failed to invoke npm staged publishing")?;
+        anyhow::ensure!(
+            status.success(),
+            "npm stage publish failed with status {status}"
+        );
         return Ok(());
     }
 
@@ -3663,8 +4189,7 @@ async fn cmd_publish(tag: Option<&str>, access: Option<&str>, dry_run: bool) -> 
 
     // 6. Read auth token
     let token = std::env::var("NPM_TOKEN").ok().or_else(|| {
-        let npmrc_path =
-            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into())).join(".npmrc");
+        let npmrc_path = oath_core::home_dir()?.join(".npmrc");
         let content = std::fs::read_to_string(&npmrc_path).ok()?;
         for line in content.lines() {
             let line = line.trim();
@@ -3754,8 +4279,8 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
         anyhow::bail!("oath install -g: please specify at least one package to install globally");
     }
 
-    let home = std::env::var("HOME").context("HOME not set")?;
-    let global_dir = PathBuf::from(&home).join(".oath").join("global");
+    let home = oath_core::home_dir().context("HOME or USERPROFILE not set")?;
+    let global_dir = home.join(".oath").join("global");
     let nm_dir = global_dir.join("node_modules");
     let bin_dir = global_dir.join("bin");
 
@@ -3778,15 +4303,19 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
 
     println!("oath install -g: resolving {} package(s)...", deps.len());
     let start = Instant::now();
-
-    let client = RegistryClient::default_client()?;
-    let options = ResolveOptions {
-        include_dev: false,
-        include_optional: true,
-        max_depth: 256,
-    };
-    let mut resolver = Resolver::new(client, options);
-    let graph = resolver.resolve(&deps, &HashMap::new()).await?;
+    let global_manifest = serde_json::json!({
+        "name": "oath-global",
+        "version": "0.0.0",
+        "private": true,
+        "dependencies": &deps,
+    });
+    std::fs::write(
+        global_dir.join("package.json"),
+        serde_json::to_vec_pretty(&global_manifest)?,
+    )?;
+    let mut placement_plan = ArboristPlanner::plan(&global_dir)?;
+    hydrate_missing_registry_metadata(&mut placement_plan).await?;
+    let graph = placement_plan.to_dep_graph()?;
 
     println!(
         "  resolved {} packages in {:.1}s",
@@ -3808,7 +4337,8 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
 
     // Link into global node_modules
     let linker = Linker::new((*store).clone());
-    let link_result = linker.link_all(&graph, &global_dir)?;
+    let link_result = linker.link_placement_plan(&placement_plan, &global_dir)?;
+    placement_plan.write(&global_dir.join(".oath").join("placement-plan.json"))?;
     println!("  linked {} packages", link_result.linked);
 
     // Create bin symlinks for the top-level (directly requested) packages
@@ -3863,7 +4393,7 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
                 .join("node_modules")
                 .join(pkg_name)
                 .join(rel_path);
-            std::os::unix::fs::symlink(&target, &link_path)
+            platform_symlink_file(&target, &link_path)
                 .with_context(|| format!("failed to create symlink for {bin_name}"))?;
             bins_created += 1;
             println!("  created: {}", link_path.display());
@@ -3944,6 +4474,42 @@ fn cmd_log(tail: usize) -> Result<()> {
 mod tests {
     use super::*;
     use oath_resolve::DepNode;
+
+    #[test]
+    fn previous_release_diff_detects_publisher_and_hook_changes() {
+        let packument = serde_json::json!({
+            "versions": {
+                "1.0.0": { "_npmUser": { "name": "alice" }, "dist": { "integrity": "sha512-old" } },
+                "1.1.0": { "_npmUser": { "name": "alice" }, "scripts": { "postinstall": "node setup.js" }, "dist": { "integrity": "sha512-middle" } },
+                "2.0.0": { "_npmUser": { "name": "mallory" }, "dist": { "integrity": "sha512-current" } }
+            }
+        });
+        let diff = previous_release_diff(&packument, "2.0.0", Some("mallory"), false).unwrap();
+        assert_eq!(diff.previous_version, "1.1.0");
+        assert_eq!(diff.previous_integrity.as_deref(), Some("sha512-middle"));
+        assert_eq!(diff.publisher_changed, Some(true));
+        assert!(diff.lifecycle_hooks_changed);
+    }
+
+    #[test]
+    fn npm_packlist_is_the_authoritative_assessment_input() {
+        let dir = tempfile::tempdir().unwrap();
+        std::fs::write(
+            dir.path().join("package.json"),
+            r#"{"name":"packlist-test","version":"1.0.0","files":["index.js"]}"#,
+        )
+        .unwrap();
+        std::fs::write(dir.path().join("index.js"), "module.exports = 1").unwrap();
+        std::fs::write(dir.path().join("ignored.txt"), "not published").unwrap();
+        let files = npm_authoritative_packlist(dir.path()).unwrap();
+        let names: Vec<_> = files
+            .iter()
+            .filter_map(|path| path.file_name().and_then(|name| name.to_str()))
+            .collect();
+        assert!(names.contains(&"package.json"));
+        assert!(names.contains(&"index.js"));
+        assert!(!names.contains(&"ignored.txt"));
+    }
 
     #[test]
     fn npm_package_env_flattens_scalars_and_skips_objects() {
@@ -4141,6 +4707,7 @@ mod tests {
         assert_eq!(cached, 0);
     }
 
+    #[cfg(unix)]
     #[test]
     fn publish_file_collection_rejects_symlink_escape() {
         let tmp = tempfile::tempdir().unwrap();
