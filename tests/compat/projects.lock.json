@@ -65,7 +65,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "98d81a608ba2752acb55a7ee178a7efc27d53bc707920c7610fbe4804231239e"
+      "expected_lock_sha256": "ea80867cf583fd2a6685907886f9df8c14e39c69a0f5a01c6873515902327583"
     },
     {
       "repository": "CodelyTV/typescript-react_best_practices-vite_template",
