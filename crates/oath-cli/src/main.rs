@@ -1175,6 +1175,19 @@ async fn cmd_install_workspace(
         validate_install_name(install_name)?;
         let symlink_path = nm_dir.join(install_name);
 
+        let expected_target = pkg.path.canonicalize().with_context(|| {
+            format!("failed to resolve workspace package {}", pkg.path.display())
+        })?;
+        if symlink_path
+            .canonicalize()
+            .is_ok_and(|target| target == expected_target)
+        {
+            // The authoritative Arborist placement already materialized this
+            // workspace link. Keep it intact (especially a Windows junction).
+            ws_symlinks += 1;
+            continue;
+        }
+
         // Handle scoped packages: create @scope dir
         if install_name.contains('/')
             && let Some(scope) = install_name.split('/').next()
