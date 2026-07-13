@@ -63,7 +63,10 @@ jobs:
       - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
         with:
           pattern: project-preflight-*
-          path: compat-results/preflight
+          # Each artifact retains its repo-relative compat-results/preflight path.
+          # Extract at the checkout root so merge-preflight reads that path once,
+          # rather than compat-results/preflight/compat-results/preflight.
+          path: .
           merge-multiple: true
       - name: Select ten eligible projects per category
         run: node scripts/project-corpus.mjs merge-preflight
