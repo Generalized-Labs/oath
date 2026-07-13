@@ -8,8 +8,9 @@ import { createHash } from "node:crypto";
 const referenceNpmMajor = 11;
 const fixture = resolve(process.argv[2] ?? "tests/compat/fixtures/basic");
 const oath = resolve(process.env.OATH_BIN ?? "target/debug/oath");
+const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 
-function run(command, args, cwd, home = process.env.HOME, extraEnv = {}) {
+function run(command, args, cwd, home = process.env.HOME ?? process.env.USERPROFILE ?? tmpdir(), extraEnv = {}) {
   const result = spawnSync(command, args, { cwd, encoding: "utf8", maxBuffer: 64 * 1024 * 1024, env: { ...process.env, CI: "1", HOME: home, OATH_HOME: join(home, ".oath"), npm_config_cache: join(home, ".npm"), ...extraEnv } });
   return {
     status: result.status,
@@ -41,14 +42,14 @@ async function tree(root) {
         directory = (await stat(child)).isDirectory();
       }
       entries.push(`${directory ? "d" : "f"}:${relative}`);
-      if (directory && prefix.split("/").length < 4) await walk(child, relative);
+      if (directory && prefix.split(/[\\/]/).length < 4) await walk(child, relative);
     }
   }
   await walk(root);
   return entries;
 }
 
-const npmVersion = run("npm", ["--version"], process.cwd()).stdout.trim();
+const npmVersion = run(npmCommand, ["--version"], process.cwd()).stdout.trim();
 if (Number(npmVersion.split(".")[0]) !== referenceNpmMajor) {
   throw new Error(`npm ${referenceNpmMajor}.x is the parity reference; found ${npmVersion}`);
 }
@@ -68,7 +69,7 @@ try {
   // drift, not a placement difference. npm's generated lock pins the exact
   // versions and integrities that Oath must reproduce. Force lock creation for
   // projects such as Express that disable package-lock in their checked-in npmrc.
-  const lockResult = run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--package-lock=true"], lockDir, home);
+  const lockResult = run(npmCommand, ["install", "--package-lock-only", "--ignore-scripts", "--package-lock=true"], lockDir, home);
   const lockSha256 = lockResult.status === 0
     ? createHash("sha256").update(await readFile(join(lockDir, "package-lock.json"))).digest("hex")
     : null;
@@ -77,12 +78,12 @@ try {
     await cp(join(lockDir, "package-lock.json"), join(oathDir, "package-lock.json"));
   }
   let npmResult = lockResult.status === 0
-    ? run("npm", ["install", "--ignore-scripts", "--package-lock=true"], npmDir, home)
+    ? run(npmCommand, ["install", "--ignore-scripts", "--package-lock=true"], npmDir, home)
     : lockResult;
   if (npmResult.status === 0 && mode !== "clean") {
     await rm(join(npmDir, "node_modules"), { recursive: true, force: true });
     const offline = mode === "offline";
-    npmResult = run("npm", ["install", "--ignore-scripts", "--package-lock=true", ...(offline ? ["--offline"] : [])], npmDir, home);
+    npmResult = run(npmCommand, ["install", "--ignore-scripts", "--package-lock=true", ...(offline ? ["--offline"] : [])], npmDir, home);
   }
   const npmTree = npmResult.status === 0 ? await tree(join(npmDir, "node_modules")) : [];
 
