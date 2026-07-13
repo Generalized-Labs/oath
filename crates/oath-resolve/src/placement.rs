@@ -182,6 +182,22 @@ impl PlacementRequest {
 
 pub struct ArboristPlanner;
 
+#[cfg(target_os = "windows")]
+fn node_process_path(path: &Path) -> std::path::PathBuf {
+    let text = path.to_string_lossy();
+    if let Some(unc) = text.strip_prefix(r"\\?\UNC\") {
+        return std::path::PathBuf::from(format!(r"\\{unc}"));
+    }
+    text.strip_prefix(r"\\?\")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| path.to_path_buf())
+}
+
+#[cfg(not(target_os = "windows"))]
+fn node_process_path(path: &Path) -> std::path::PathBuf {
+    path.to_path_buf()
+}
+
 impl ArboristPlanner {
     pub fn plan(project: &Path) -> Result<PlacementPlan> {
         Self::plan_with(project, &PlacementRequest::default())
@@ -191,9 +207,10 @@ impl ArboristPlanner {
         let runtime = BundledRuntime::extract()?;
         let script = tempfile::NamedTempFile::new().context("create Arborist planner script")?;
         std::fs::write(script.path(), PLANNER)?;
+        let project_argument = node_process_path(project);
         let output = std::process::Command::new("node")
             .arg(script.path())
-            .arg(project)
+            .arg(project_argument)
             .arg(serde_json::to_string(request)?)
             .env("OATH_ARBORIST_PATH", runtime.arborist_path())
             .env("OATH_INSTALL_CHECKS_PATH", runtime.install_checks_path())
