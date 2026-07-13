@@ -91,9 +91,48 @@ impl ContentStore {
         lock_integrity: Option<&str>,
         extracted_dir: &Path,
     ) -> Result<PathBuf> {
-        let pkg_store_dir = self.package_dir(name, version);
+        self.store_package_at(
+            name,
+            version,
+            resolved_url,
+            lock_integrity,
+            extracted_dir,
+            self.package_dir(name, version),
+        )
+    }
 
-        match self.verify_package(name, version, lock_integrity) {
+    /// Store an immutable source variant. Package name and version are not a
+    /// sufficient content identity: registry aliases and git dependencies can
+    /// legitimately resolve the same tuple to different bytes.
+    pub fn store_package_variant_with_manifest(
+        &self,
+        name: &str,
+        version: &str,
+        resolved_url: Option<&str>,
+        lock_integrity: Option<&str>,
+        extracted_dir: &Path,
+    ) -> Result<PathBuf> {
+        let pkg_store_dir = self.package_dir_for(name, version, resolved_url, lock_integrity);
+        self.store_package_at(
+            name,
+            version,
+            resolved_url,
+            lock_integrity,
+            extracted_dir,
+            pkg_store_dir,
+        )
+    }
+
+    fn store_package_at(
+        &self,
+        name: &str,
+        version: &str,
+        resolved_url: Option<&str>,
+        lock_integrity: Option<&str>,
+        extracted_dir: &Path,
+        pkg_store_dir: PathBuf,
+    ) -> Result<PathBuf> {
+        match verify_package_at(name, version, resolved_url, lock_integrity, &pkg_store_dir) {
             PackageVerification::Verified(_) => {
                 tracing::debug!("already verified in store: {name}@{version}");
                 return Ok(pkg_store_dir);
@@ -152,7 +191,7 @@ impl ContentStore {
                 .context("failed to serialize store manifest")?;
             std::fs::write(temp_dir.join(STORE_MANIFEST_FILE), manifest_json)
                 .context("failed to write store manifest")?;
-            match validate_manifest(name, version, lock_integrity, &temp_dir) {
+            match validate_manifest(name, version, resolved_url, lock_integrity, &temp_dir) {
                 Ok(_) => {}
                 Err(StoreValidationError::Missing) => {
                     bail!("newly written store entry is missing")
@@ -169,21 +208,26 @@ impl ContentStore {
             return Err(err);
         }
 
-        if pkg_store_dir.exists() {
-            std::fs::remove_dir_all(&pkg_store_dir).with_context(|| {
+        if let Err(error) = std::fs::rename(&temp_dir, &pkg_store_dir) {
+            // Another installer may have committed the same immutable variant
+            // while this process was extracting it. Accept only a fully
+            // verified winner; never delete or replace it behind another
+            // process's back.
+            if verify_package_at(name, version, resolved_url, lock_integrity, &pkg_store_dir)
+                .is_verified()
+            {
+                let _ = std::fs::remove_dir_all(&temp_dir);
+                return Ok(pkg_store_dir);
+            }
+            let _ = std::fs::remove_dir_all(&temp_dir);
+            return Err(error).with_context(|| {
                 format!(
-                    "failed to remove old store dir: {}",
+                    "failed to atomically install store dir {} -> {}",
+                    temp_dir.display(),
                     pkg_store_dir.display()
                 )
-            })?;
+            });
         }
-        std::fs::rename(&temp_dir, &pkg_store_dir).with_context(|| {
-            format!(
-                "failed to atomically install store dir {} -> {}",
-                temp_dir.display(),
-                pkg_store_dir.display()
-            )
-        })?;
 
         tracing::debug!("stored {name}@{version} at {}", pkg_store_dir.display());
         Ok(pkg_store_dir)
@@ -201,16 +245,29 @@ impl ContentStore {
         version: &str,
         lock_integrity: Option<&str>,
     ) -> PackageVerification {
-        match validate_manifest(
+        verify_package_at(
             name,
             version,
+            None,
             lock_integrity,
             &self.package_dir(name, version),
-        ) {
-            Ok(manifest) => PackageVerification::Verified(manifest),
-            Err(StoreValidationError::Missing) => PackageVerification::Missing,
-            Err(StoreValidationError::Corrupt(reason)) => PackageVerification::Corrupt(reason),
-        }
+        )
+    }
+
+    pub fn verify_package_variant(
+        &self,
+        name: &str,
+        version: &str,
+        resolved_url: Option<&str>,
+        lock_integrity: Option<&str>,
+    ) -> PackageVerification {
+        verify_package_at(
+            name,
+            version,
+            resolved_url,
+            lock_integrity,
+            &self.package_dir_for(name, version, resolved_url, lock_integrity),
+        )
     }
 
     /// Root path of the store (for scanning)
@@ -223,6 +280,32 @@ impl ContentStore {
         // Scoped packages: @scope/name -> @scope+name
         self.package_name_dir(name)
             .join(safe_path_component(version))
+    }
+
+    /// Get the immutable directory for a particular resolution source. Both
+    /// URL and integrity participate in identity so provenance cannot be
+    /// silently swapped even when two sources claim the same package tuple.
+    pub fn package_dir_for(
+        &self,
+        name: &str,
+        version: &str,
+        resolved_url: Option<&str>,
+        lock_integrity: Option<&str>,
+    ) -> PathBuf {
+        if resolved_url.is_none() && lock_integrity.is_none() {
+            return self.package_dir(name, version);
+        }
+        let identity = format!(
+            "resolved={}\nintegrity={}",
+            resolved_url.unwrap_or_default(),
+            lock_integrity.unwrap_or_default()
+        );
+        let variant = blake3::hash(identity.as_bytes()).to_hex().to_string();
+        self.root
+            .join(".variants")
+            .join(safe_path_component(&name.replace('/', "+")))
+            .join(safe_path_component(version))
+            .join(variant)
     }
 
     /// Get the store path for all versions of a package.
@@ -265,6 +348,15 @@ impl ContentStore {
             std::fs::remove_dir_all(&dir)
                 .with_context(|| format!("failed to remove {name}@{version}"))?;
         }
+        let variants = self
+            .root
+            .join(".variants")
+            .join(safe_path_component(&name.replace('/', "+")))
+            .join(safe_path_component(version));
+        if variants.exists() {
+            std::fs::remove_dir_all(&variants)
+                .with_context(|| format!("failed to remove variants for {name}@{version}"))?;
+        }
         Ok(())
     }
 
@@ -305,9 +397,24 @@ enum StoreValidationError {
     Corrupt(String),
 }
 
+fn verify_package_at(
+    name: &str,
+    version: &str,
+    resolved_url: Option<&str>,
+    lock_integrity: Option<&str>,
+    dir: &Path,
+) -> PackageVerification {
+    match validate_manifest(name, version, resolved_url, lock_integrity, dir) {
+        Ok(manifest) => PackageVerification::Verified(manifest),
+        Err(StoreValidationError::Missing) => PackageVerification::Missing,
+        Err(StoreValidationError::Corrupt(reason)) => PackageVerification::Corrupt(reason),
+    }
+}
+
 fn validate_manifest(
     name: &str,
     version: &str,
+    resolved_url: Option<&str>,
     lock_integrity: Option<&str>,
     dir: &Path,
 ) -> std::result::Result<StoreManifest, StoreValidationError> {
@@ -346,6 +453,13 @@ fn validate_manifest(
     {
         return Err(StoreValidationError::Corrupt(
             "manifest lock integrity mismatch".to_string(),
+        ));
+    }
+    if let Some(expected) = resolved_url
+        && manifest.resolved_url.as_deref() != Some(expected)
+    {
+        return Err(StoreValidationError::Corrupt(
+            "manifest resolved URL mismatch".to_string(),
         ));
     }
 
@@ -403,7 +517,11 @@ fn build_manifest(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    if package_json_name != name || package_json_version != version {
+    let version_matches = package_json_version == version
+        || package_json_version
+            .strip_prefix(version)
+            .is_some_and(|suffix| suffix.starts_with('+') && suffix.len() > 1);
+    if package_json_name != name || !version_matches {
         bail!(
             "package.json mismatch: expected {name}@{version}, got {package_json_name}@{package_json_version}"
         );
@@ -633,5 +751,85 @@ mod tests {
             PackageVerification::Corrupt(reason) if reason.contains("missing store manifest")
         ));
         assert!(!store.has_package("pkg", "1.0.0"));
+    }
+
+    #[test]
+    fn source_variants_do_not_overwrite_the_same_name_and_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let store = ContentStore::new(tmp.path().join("store")).unwrap();
+        let source_a = tmp.path().join("source-a");
+        let source_b = tmp.path().join("source-b");
+        for (source, marker) in [(&source_a, "registry"), (&source_b, "git")] {
+            std::fs::create_dir_all(source).unwrap();
+            std::fs::write(
+                source.join("package.json"),
+                r#"{"name":"pkg","version":"1.0.0"}"#,
+            )
+            .unwrap();
+            std::fs::write(source.join("source.txt"), marker).unwrap();
+        }
+
+        let registry_url = "https://registry.example/pkg.tgz";
+        let git_url = "git+https://example.test/pkg.git#abc";
+        let registry_dir = store
+            .store_package_variant_with_manifest(
+                "pkg",
+                "1.0.0",
+                Some(registry_url),
+                Some("sha512-registry"),
+                &source_a,
+            )
+            .unwrap();
+        let git_dir = store
+            .store_package_variant_with_manifest("pkg", "1.0.0", Some(git_url), None, &source_b)
+            .unwrap();
+
+        assert_ne!(registry_dir, git_dir);
+        assert_eq!(
+            std::fs::read_to_string(registry_dir.join("source.txt")).unwrap(),
+            "registry"
+        );
+        assert_eq!(
+            std::fs::read_to_string(git_dir.join("source.txt")).unwrap(),
+            "git"
+        );
+        assert!(
+            store
+                .verify_package_variant("pkg", "1.0.0", Some(registry_url), Some("sha512-registry"))
+                .is_verified()
+        );
+        assert!(
+            store
+                .verify_package_variant("pkg", "1.0.0", Some(git_url), None)
+                .is_verified()
+        );
+    }
+
+    #[test]
+    fn accepts_npm_package_build_metadata_for_the_resolved_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("package.json"),
+            r#"{"name":"@hot-loader/react-dom","version":"17.0.2+4.13.0"}"#,
+        )
+        .unwrap();
+        let store = ContentStore::new(tmp.path().join("store")).unwrap();
+        let stored = store
+            .store_package_variant_with_manifest(
+                "@hot-loader/react-dom",
+                "17.0.2",
+                Some("https://registry.example/react-dom.tgz"),
+                Some("sha512-example"),
+                &source,
+            )
+            .unwrap();
+
+        let manifest: StoreManifest =
+            serde_json::from_slice(&std::fs::read(stored.join(STORE_MANIFEST_FILE)).unwrap())
+                .unwrap();
+        assert_eq!(manifest.version, "17.0.2");
+        assert_eq!(manifest.package_json_version, "17.0.2+4.13.0");
     }
 }

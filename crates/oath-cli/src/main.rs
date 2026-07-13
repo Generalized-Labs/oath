@@ -13,13 +13,15 @@ use oath_analyze::{PackageScanner, RiskLevel};
 use oath_core::policy::OathPolicy;
 use oath_fetch::RegistryClient;
 use oath_fetch::tarball::TarballLimits;
-use oath_resolve::git::{git_cache_file_name, parse_git_spec, resolve_git_spec};
+use oath_resolve::git::{
+    git_cache_file_name, is_git_spec, pack_local_package, parse_git_spec, resolve_git_spec,
+};
 use oath_resolve::graph::{DepNode, PeerResolution};
 use oath_resolve::placement::{ArboristPlanner, PlacementPlan, PlacementRequest};
 use oath_resolve::resolver::{ResolveOptions, Resolver};
 use oath_resolve::{DepGraph, Lockfile};
 use oath_store::cas::{ContentStore, PackageVerification};
-use oath_store::linker::{Linker, validate_install_name};
+use oath_store::linker::Linker;
 use oath_workspace::{WorkspaceRoot, detect_workspace_root};
 
 mod approvals;
@@ -929,7 +931,12 @@ async fn cmd_install(
         // Fall back to the store dir if the linked path doesn't exist.
         let install_name = node.alias.as_deref().unwrap_or(&node.name);
         let linked_pkg_dir = cwd.join("node_modules").join(install_name);
-        let store_pkg_dir = store.package_dir(&node.name, &node.version);
+        let store_pkg_dir = store.package_dir_for(
+            &node.name,
+            &node.version,
+            Some(&node.resolved),
+            node.integrity.as_deref(),
+        );
         let pkg_dir = if linked_pkg_dir.exists() {
             linked_pkg_dir
         } else {
@@ -992,8 +999,12 @@ async fn cmd_install(
         let scanned: Vec<_> = nodes
             .par_iter()
             .filter_map(|node| {
-                // Canonical store layout (name/version).
-                let pkg_dir = store.package_dir(&node.name, &node.version);
+                let pkg_dir = store.package_dir_for(
+                    &node.name,
+                    &node.version,
+                    Some(&node.resolved),
+                    node.integrity.as_deref(),
+                );
                 if !pkg_dir.exists() {
                     return None;
                 }
@@ -1876,7 +1887,12 @@ fn cmd_why(package: &str) -> Result<()> {
 
         // Scan from store for capabilities/risk
         let store = ContentStore::default_store()?;
-        let pkg_dir = store.package_dir(name, version);
+        let pkg_dir = store.package_dir_for(
+            name,
+            version,
+            node.get("resolved").and_then(|value| value.as_str()),
+            node.get("integrity").and_then(|value| value.as_str()),
+        );
 
         if pkg_dir.exists() {
             match PackageScanner::scan(name, version, &pkg_dir) {
@@ -2078,7 +2094,12 @@ fn cmd_verify() -> Result<()> {
             continue;
         }
 
-        match store.verify_package(name, &entry.version, entry.integrity.as_deref()) {
+        match store.verify_package_variant(
+            name,
+            &entry.version,
+            Some(&entry.resolved),
+            entry.integrity.as_deref(),
+        ) {
             PackageVerification::Verified(_) => {
                 println!("  {key:<40} ok");
                 ok += 1;
@@ -2330,19 +2351,38 @@ fn lockfile_all_cached(lockfile: &Lockfile, store: &ContentStore) -> bool {
             key.as_str()
         };
         store
-            .verify_package(name, &entry.version, entry.integrity.as_deref())
+            .verify_package_variant(
+                name,
+                &entry.version,
+                Some(&entry.resolved),
+                entry.integrity.as_deref(),
+            )
             .is_verified()
     })
 }
 
 fn missing_store_nodes(graph: &DepGraph, store: &ContentStore) -> (Vec<DepNode>, usize) {
     let mut to_download = Vec::new();
+    let mut scheduled = HashSet::new();
     let mut cached = 0usize;
     for node in graph.nodes.values() {
-        match store.verify_package(&node.name, &node.version, node.integrity.as_deref()) {
+        match store.verify_package_variant(
+            &node.name,
+            &node.version,
+            Some(&node.resolved),
+            node.integrity.as_deref(),
+        ) {
             PackageVerification::Verified(_) => cached += 1,
             PackageVerification::Missing | PackageVerification::Corrupt(_) => {
-                to_download.push(node.clone());
+                let identity = (
+                    node.name.clone(),
+                    node.version.clone(),
+                    node.resolved.clone(),
+                    node.integrity.clone(),
+                );
+                if scheduled.insert(identity) {
+                    to_download.push(node.clone());
+                }
             }
         }
     }
@@ -2439,7 +2479,7 @@ async fn download_missing_nodes(
             tmp.path(),
             &limits,
         )?;
-        store.store_package_with_manifest(
+        store.store_package_variant_with_manifest(
             &downloaded.name,
             &downloaded.version,
             Some(&downloaded.resolved),
@@ -2464,12 +2504,15 @@ async fn download_tarball_to_temp(
     let temp_dir = tempfile::tempdir().context("failed to create temp tarball dir")?;
     let tarball_path = temp_dir.path().join("package.tgz");
 
-    let bytes = if is_git_resolved(&resolved) {
+    let bytes = if let Some(local_path) = file_dependency_path(&resolved)? {
+        materialize_file_dependency(&local_path, &tarball_path, &limits)
+            .with_context(|| format!("packing local dependency {name}@{version}"))?
+    } else if is_git_resolved(&resolved) {
         let home = oath_core::home_dir().unwrap_or_else(std::env::temp_dir);
         let cache_file = home
             .join(".oath")
             .join("git-cache")
-            .join(git_cache_file_name(&name, &version));
+            .join(git_cache_file_name(&name, &version, &resolved));
         if !cache_file.exists() {
             let spec = parse_git_spec(&resolved)
                 .with_context(|| format!("invalid git dependency URL {resolved}"))?;
@@ -2526,12 +2569,15 @@ async fn download_and_store_package(
     let limits = TarballLimits::from_env()?;
     let temp_dir = tempfile::tempdir().context("failed to create temp tarball dir")?;
     let tarball_path = temp_dir.path().join("package.tgz");
-    let bytes = if is_git_resolved(resolved) {
+    let bytes = if let Some(local_path) = file_dependency_path(resolved)? {
+        materialize_file_dependency(&local_path, &tarball_path, &limits)
+            .with_context(|| format!("packing local dependency {name}@{version}"))?
+    } else if is_git_resolved(resolved) {
         let home = oath_core::home_dir().unwrap_or_else(std::env::temp_dir);
         let cache_file = home
             .join(".oath")
             .join("git-cache")
-            .join(git_cache_file_name(name, version));
+            .join(git_cache_file_name(name, version, resolved));
         if !cache_file.exists() {
             anyhow::bail!("git dep {name}@{version} not in cache and no tarball URL available");
         }
@@ -2556,7 +2602,7 @@ async fn download_and_store_package(
 
     let extracted = tempfile::tempdir().context("failed to create temp extract dir")?;
     oath_fetch::tarball::extract_tarball_file_limited(&tarball_path, extracted.path(), &limits)?;
-    store.store_package_with_manifest(
+    store.store_package_variant_with_manifest(
         name,
         version,
         Some(resolved),
@@ -2567,10 +2613,47 @@ async fn download_and_store_package(
 }
 
 fn is_git_resolved(resolved: &str) -> bool {
-    resolved.starts_with("git+")
-        || resolved.starts_with("github:")
-        || resolved.starts_with("gitlab:")
-        || resolved.starts_with("bitbucket:")
+    is_git_spec(resolved)
+}
+
+fn file_dependency_path(resolved: &str) -> Result<Option<PathBuf>> {
+    if !resolved.starts_with("file:") {
+        return Ok(None);
+    }
+    let url = reqwest::Url::parse(resolved)
+        .with_context(|| format!("invalid local dependency URL {resolved}"))?;
+    anyhow::ensure!(url.scheme() == "file", "unsupported local dependency URL");
+    let path = url
+        .to_file_path()
+        .map_err(|_| anyhow::anyhow!("local dependency URL is not a file path: {resolved}"))?;
+    anyhow::ensure!(
+        path.exists(),
+        "local dependency does not exist: {}",
+        path.display()
+    );
+    Ok(Some(path))
+}
+
+fn materialize_file_dependency(
+    source: &std::path::Path,
+    tarball_path: &std::path::Path,
+    limits: &TarballLimits,
+) -> Result<u64> {
+    if source.is_dir() {
+        let tarball = pack_local_package(source)?;
+        limits.check_archive_size(tarball.len() as u64)?;
+        std::fs::write(tarball_path, &tarball)?;
+        return Ok(tarball.len() as u64);
+    }
+    anyhow::ensure!(
+        source.is_file(),
+        "unsupported local dependency: {}",
+        source.display()
+    );
+    let bytes = std::fs::metadata(source)?.len();
+    limits.check_archive_size(bytes)?;
+    std::fs::copy(source, tarball_path)?;
+    Ok(bytes)
 }
 
 fn parse_package_spec(spec: &str) -> (String, String) {
@@ -3454,10 +3537,20 @@ async fn cmd_score(package: &str) -> Result<()> {
     // Ensure in store
     let store = ContentStore::default_store()?;
     let pkg_dir = if store
-        .verify_package(&pkg_name, &version, info.dist.integrity.as_deref())
+        .verify_package_variant(
+            &pkg_name,
+            &version,
+            Some(&info.dist.tarball),
+            info.dist.integrity.as_deref(),
+        )
         .is_verified()
     {
-        store.package_dir(&pkg_name, &version)
+        store.package_dir_for(
+            &pkg_name,
+            &version,
+            Some(&info.dist.tarball),
+            info.dist.integrity.as_deref(),
+        )
     } else {
         download_and_store_package(
             &client,
@@ -3468,7 +3561,12 @@ async fn cmd_score(package: &str) -> Result<()> {
             info.dist.integrity.as_deref(),
         )
         .await?;
-        store.package_dir(&pkg_name, &version)
+        store.package_dir_for(
+            &pkg_name,
+            &version,
+            Some(&info.dist.tarball),
+            info.dist.integrity.as_deref(),
+        )
     };
 
     // Scan
@@ -4893,7 +4991,7 @@ mod tests {
         )
         .unwrap();
         store
-            .store_package_with_manifest(
+            .store_package_variant_with_manifest(
                 "pkg",
                 "1.0.0",
                 Some("https://registry.example/pkg.tgz"),

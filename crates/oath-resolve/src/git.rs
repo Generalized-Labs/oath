@@ -9,6 +9,7 @@
 //!   gitlab:user/repo
 
 use anyhow::{Context, Result};
+use sha2::{Digest, Sha256};
 use std::collections::HashMap;
 
 /// A parsed git dependency specification
@@ -29,13 +30,18 @@ pub fn is_git_spec(spec: &str) -> bool {
         || spec.starts_with("bitbucket:")
         || spec.starts_with("git+https://")
         || spec.starts_with("git+ssh://")
+        || spec.starts_with("ssh://")
         || spec.starts_with("git://")
 }
 
 /// Stable, path-safe filename for cached git dependency tarballs.
-pub fn git_cache_file_name(name: &str, version: &str) -> String {
+pub fn git_cache_file_name(name: &str, version: &str, resolved_url: &str) -> String {
+    let source = Sha256::digest(resolved_url.as_bytes())
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
     format!(
-        "{}-{}.tgz",
+        "{}-{}-{source}.tgz",
         safe_cache_component(&name.replace('/', "+")),
         safe_cache_component(version)
     )
@@ -115,7 +121,10 @@ pub fn parse_git_spec(spec: &str) -> Option<GitSpec> {
         });
     }
 
-    if let Some(url_part) = spec.strip_prefix("git+ssh://") {
+    if let Some(url_part) = spec
+        .strip_prefix("git+ssh://")
+        .or_else(|| spec.strip_prefix("ssh://"))
+    {
         // git+ssh://git@github.com/user/repo.git
         // strip "git+ssh://"
         let (url_no_ref, git_ref) = split_ref(url_part);
@@ -357,6 +366,18 @@ fn repack_git_package(root: &std::path::Path, files: &[std::path::PathBuf]) -> R
     Ok(tar_data)
 }
 
+/// Pack a local `file:` directory with npm's pinned packlist contract. npm
+/// treats directory dependencies as packages, not arbitrary recursive copies.
+pub fn pack_local_package(root: &std::path::Path) -> Result<Vec<u8>> {
+    anyhow::ensure!(
+        root.join("package.json").is_file(),
+        "local dependency has no package.json: {}",
+        root.display()
+    );
+    let files = crate::placement::npm_packlist(root)?;
+    repack_git_package(root, &files)
+}
+
 fn parse_git_tarball_from_json(
     tarball_data: Vec<u8>,
     pkg_json_data: &[u8],
@@ -436,8 +457,8 @@ mod tests {
     #[test]
     fn git_cache_file_name_encodes_path_separators() {
         assert_eq!(
-            git_cache_file_name("../evil", "../../outside"),
-            "..+evil-..%2F..%2Foutside.tgz"
+            git_cache_file_name("../evil", "../../outside", "git+https://example.test/repo"),
+            "..+evil-..%2F..%2Foutside-25c821b83477fbe91a49a7136290f4d062c46e017bc91cc0daf18ee34c212f31.tgz"
         );
     }
 

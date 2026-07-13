@@ -192,7 +192,12 @@ impl Linker {
                 result.symlinks += 1;
                 continue;
             }
-            let source = self.store.package_dir(&node.name, &node.version);
+            let source = self.store.package_dir_for(
+                &node.name,
+                &node.version,
+                node.resolved.as_deref(),
+                node.integrity.as_deref(),
+            );
             anyhow::ensure!(
                 source.exists(),
                 "planned package missing from verified store: {}@{}",
@@ -370,7 +375,12 @@ impl Linker {
 
         // Phase 1: Link each package into .oath/{key}/node_modules/{install_name}
         for (key, node) in &graph.nodes {
-            let pkg_store_dir = self.store.package_dir(&node.name, &node.version);
+            let pkg_store_dir = self.store.package_dir_for(
+                &node.name,
+                &node.version,
+                Some(&node.resolved),
+                node.integrity.as_deref(),
+            );
             if !pkg_store_dir.exists() {
                 tracing::warn!("package not in store: {key}");
                 result.missing += 1;
@@ -1143,7 +1153,8 @@ mod tests {
         let tmp = tempfile::tempdir().unwrap();
         let store = ContentStore::new(tmp.path().join("store")).unwrap();
         for (name, version) in [("@scope/parent", "1.0.0"), ("@scope/child", "1.0.0")] {
-            let dir = store.package_dir(name, version);
+            let resolved = format!("https://registry.example/{name}-{version}.tgz");
+            let dir = store.package_dir_for(name, version, Some(&resolved), None);
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(dir.join("package.json"), "{}").unwrap();
         }
@@ -1190,7 +1201,8 @@ mod tests {
             ("dep", "1.0.0"),
             ("dep", "2.0.0"),
         ] {
-            let dir = store.package_dir(name, version);
+            let resolved = format!("https://registry.example/{name}-{version}.tgz");
+            let dir = store.package_dir_for(name, version, Some(&resolved), None);
             std::fs::create_dir_all(&dir).unwrap();
             std::fs::write(
                 dir.join("package.json"),

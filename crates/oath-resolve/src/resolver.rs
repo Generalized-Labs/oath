@@ -638,6 +638,7 @@ impl Resolver {
         let cache_file = cache_dir.join(git_cache_file_name(
             &git_resolved.name,
             &git_resolved.version,
+            &git_resolved.resolved_url,
         ));
         if !cache_file.exists() {
             std::fs::write(&cache_file, &git_resolved.tarball_data).with_context(|| {
