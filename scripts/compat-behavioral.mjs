@@ -6,7 +6,15 @@ import { join, resolve } from "node:path";
 const contract = JSON.parse(await readFile(new URL("../tests/compat/behavioral-contract.json", import.meta.url), "utf8"));
 const output = resolve(process.env.OATH_COMPAT_RESULTS ?? "compat-results/ga");
 const execute = process.argv.includes("--execute");
-const npmVersion = spawnSync("npm", ["--version"], { encoding: "utf8" }).stdout.trim();
+const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const npmVersionRun = spawnSync(npmCommand, ["--version"], {
+  encoding: "utf8",
+  shell: process.platform === "win32",
+});
+if (npmVersionRun.status !== 0 || !npmVersionRun.stdout) {
+  throw new Error(`unable to execute npm reference: ${npmVersionRun.error?.message ?? npmVersionRun.stderr ?? "unknown error"}`);
+}
+const npmVersion = npmVersionRun.stdout.trim();
 const results = [];
 
 await mkdir(output, { recursive: true });
