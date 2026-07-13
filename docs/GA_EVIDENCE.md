@@ -21,9 +21,10 @@ logs/checksums.
   release artifacts and public metrics. The current independent behavioral
   baseline is 3/3; GA requires the workflow contract in this document, not a
   generated-case count by itself.
-- Ten unique real projects currently have exact npm/Oath tree equivalence. The
-  100-project gate is not complete. Repositories rejected by reference npm or
-  requiring another package manager are reported but never counted as passes.
+- The pinned corpus now has 100/100 exact npm/Oath tree equivalents. The
+  aggregate contains zero failures. Repositories rejected by reference npm or
+  requiring another package manager are not eligible for the locked corpus and
+  never count as passes.
 - Next.js HEAD was replaced by the npm-eligible
   `NextJSTemplates/play-nextjs` commit
   `f0a5c55ef1d6198c41ac6354595adadc4c41b924`, which passed exact comparison.
@@ -35,9 +36,13 @@ logs/checksums.
   ABI is unavailable. Native Windows AppContainer, restricted-token, ACL, Job
   Object, environment, filesystem, and network-denial checks passed on Windows
   Server 2022 and 2025 in PRs 16 and 17.
-- Pull-request capability reports are checksummed but deliberately not attested.
-  A scheduled or manually dispatched release-evidence run must still publish
-  GitHub OIDC attestations for Linux and Windows before a release is promoted.
+- Manual release-evidence run
+  [`29240267897`](https://github.com/Generalized-Labs/oath/actions/runs/29240267897)
+  passed at commit `ad9071e10ae6c02412e8a7d3263793c9b60a7915`. It published
+  GitHub OIDC attestations for the Linux and Windows capability reports. Ubuntu
+  24.04 reported the strict Landlock/seccomp backend active; Ubuntu 22.04
+  reported an explicit fail-closed degradation; Windows Server 2022 and 2025
+  reported the AppContainer/Job Object backend active.
 
 Scheduled and manually dispatched CI produce release evidence. Pull-request CI
 runs the independent behavioral baseline and native enforcement checks. Public

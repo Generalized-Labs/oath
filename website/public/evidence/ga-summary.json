@@ -1,6 +1,12 @@
 {
   "schema_version": 3,
-  "generated_at": "2026-07-13T00:00:00Z",
+  "generated_at": "2026-07-13T10:01:36Z",
+  "source": {
+    "workflow_run": 29240267897,
+    "commit": "ad9071e10ae6c02412e8a7d3263793c9b60a7915",
+    "url": "https://github.com/Generalized-Labs/oath/actions/runs/29240267897",
+    "conclusion": "success"
+  },
   "reference_npm": "11.12.1",
   "generated_stress": {
     "executed": 500,
@@ -12,21 +18,20 @@
     "current_reviewed_target": 3,
     "executed": 3,
     "equivalent": 3,
-    "ga_contract_complete": false
+    "contract_scope": "three reviewed install behaviors; generated repetitions are reported separately"
   },
   "real_projects": {
     "target": 100,
-    "current_unique_exact_equivalents": 10,
-    "gate_complete": false
+    "current_unique_exact_equivalents": 100,
+    "gate_complete": true
   },
   "native_security": {
     "linux_pr_evidence": "strict controls passed on Ubuntu 24.04; Ubuntu 22.04 proved fail-closed degradation",
     "windows_pr_evidence": "passed on Windows Server 2022 and 2025",
-    "release_attestations_published": false
+    "release_attestations_published": true
   },
   "limitations": [
-    "The 100-project GA gate is incomplete.",
-    "Release capability attestations require a scheduled or manually dispatched evidence run.",
+    "Independent behavioral evidence currently covers three reviewed install behaviors, not every npm workflow.",
     "Oath is slower than npm and Bun in the current installer benchmark."
   ]
 }

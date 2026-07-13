@@ -20,6 +20,10 @@ the compatibility reference, Bun leads with speed, and Oath is positioned around
 pre-execution evidence and enforced capability boundaries. The page does not
 claim that static analysis proves safety.
 
-The release figures shown on the page come from the merged compatibility and
-native-containment evidence plus post-merge exact-tree runs against Express,
-Koa, and Redux. The 100-project GA corpus remains a separate release gate.
+The release figures shown on the page come from successful manual evidence run
+[`29240267897`](https://github.com/Generalized-Labs/oath/actions/runs/29240267897)
+plus post-merge exact-tree runs against Rspack, Karma, and Mattermost Webapp.
+Generated stress executions, independent behavioral coverage, real-project
+parity, and native capability reports are displayed as separate evidence
+classes. The page does not turn three reviewed install behaviors into a claim
+of complete npm workflow compatibility.
