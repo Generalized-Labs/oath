@@ -15,9 +15,9 @@ pub struct CacheConfig {
 
 impl Default for CacheConfig {
     fn default() -> Self {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
+        let home = oath_core::home_dir().unwrap_or_else(std::env::temp_dir);
         Self {
-            root: PathBuf::from(home).join(".oath").join("cache"),
+            root: home.join(".oath").join("cache"),
         }
     }
 }

@@ -95,10 +95,9 @@ fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
 }
 
 fn signing_key() -> Result<SigningKey> {
-    let home = std::env::var("HOME").context("HOME is required for publish signing")?;
-    let path = PathBuf::from(home)
-        .join(".oath")
-        .join("publish-signing.key");
+    let home =
+        oath_core::home_dir().context("HOME or USERPROFILE is required for publish signing")?;
+    let path = home.join(".oath").join("publish-signing.key");
     if path.exists() {
         let bytes: [u8; 32] = std::fs::read(&path)?
             .try_into()

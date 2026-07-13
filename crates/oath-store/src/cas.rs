@@ -65,8 +65,8 @@ impl ContentStore {
 
     /// Default store location: ~/.oath/store
     pub fn default_store() -> Result<Self> {
-        let home = std::env::var("HOME").context("HOME not set")?;
-        Self::new(PathBuf::from(home).join(".oath").join("store"))
+        let home = oath_core::home_dir().context("HOME or USERPROFILE not set")?;
+        Self::new(home.join(".oath").join("store"))
     }
 
     /// Store a package's extracted files. Returns the package directory in the store.

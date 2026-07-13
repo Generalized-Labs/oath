@@ -42,9 +42,9 @@ fn default_log() -> String {
     "https://log.oath.dev".into()
 }
 fn default_store() -> String {
-    std::env::var("HOME")
-        .map(|h| format!("{h}/.oath/store"))
-        .unwrap_or_else(|_| "~/.oath/store".into())
+    crate::home_dir()
+        .map(|home| home.join(".oath/store").to_string_lossy().into_owned())
+        .unwrap_or_else(|| "~/.oath/store".into())
 }
 
 impl Default for OathConfig {

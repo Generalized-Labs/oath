@@ -86,8 +86,8 @@ impl OathPolicy {
         let mut policy = Self::default();
 
         // Global policy
-        if let Some(home) = std::env::var_os("HOME") {
-            let global_path = PathBuf::from(home).join(".oath").join("policy.toml");
+        if let Some(home) = crate::home_dir() {
+            let global_path = home.join(".oath").join("policy.toml");
             if let Ok(text) = std::fs::read_to_string(&global_path)
                 && let Ok(raw) = toml::from_str::<RawPolicy>(&text)
             {

@@ -632,10 +632,8 @@ impl Resolver {
         // Save the tarball bytes to a local git cache so the CLI download loop can use them
         // without re-fetching from the network.
         // Path: ~/.oath/git-cache/{safe_name}-{version}.tgz
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        let cache_dir = std::path::PathBuf::from(&home)
-            .join(".oath")
-            .join("git-cache");
+        let home = oath_core::home_dir().unwrap_or_else(std::env::temp_dir);
+        let cache_dir = home.join(".oath").join("git-cache");
         std::fs::create_dir_all(&cache_dir).ok();
         let cache_file = cache_dir.join(git_cache_file_name(
             &git_resolved.name,

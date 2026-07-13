@@ -30,8 +30,8 @@ impl NpmrcConfig {
     /// Load and merge `.npmrc` files plus the registry env override.
     pub fn load(project_dir: &Path) -> Self {
         let mut cfg = NpmrcConfig::default();
-        if let Some(home) = std::env::var_os("HOME") {
-            cfg.merge_file(&Path::new(&home).join(".npmrc"));
+        if let Some(home) = oath_core::home_dir() {
+            cfg.merge_file(&home.join(".npmrc"));
         }
         cfg.merge_file(&project_dir.join(".npmrc"));
 

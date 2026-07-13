@@ -6,6 +6,13 @@ pub mod manifest;
 pub mod permissions;
 pub mod policy;
 
+/// Resolve the current user's home directory on Unix and native Windows.
+pub fn home_dir() -> Option<std::path::PathBuf> {
+    std::env::var_os("HOME")
+        .or_else(|| std::env::var_os("USERPROFILE"))
+        .map(std::path::PathBuf::from)
+}
+
 use thiserror::Error;
 
 #[derive(Error, Debug)]

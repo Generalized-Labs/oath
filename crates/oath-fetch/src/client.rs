@@ -83,7 +83,7 @@ impl RegistryConfig {
 }
 
 fn dirs_home() -> PathBuf {
-    PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/tmp".into()))
+    oath_core::home_dir().unwrap_or_else(std::env::temp_dir)
 }
 
 /// Extract the host from a URL (for per-host auth lookup).

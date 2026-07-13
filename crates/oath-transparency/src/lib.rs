@@ -93,7 +93,9 @@ pub struct TransparencyLogger {
 impl TransparencyLogger {
     /// Create a logger that writes to ~/.oath/transparency.log
     pub fn default_logger() -> Result<Self> {
-        let home = std::env::var("HOME").map_err(|_| anyhow::anyhow!("HOME not set"))?;
+        let home = std::env::var("HOME")
+            .or_else(|_| std::env::var("USERPROFILE"))
+            .map_err(|_| anyhow::anyhow!("HOME or USERPROFILE not set"))?;
         let dir = PathBuf::from(home).join(".oath");
         std::fs::create_dir_all(&dir)?;
         Ok(Self {

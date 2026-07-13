@@ -2461,8 +2461,8 @@ async fn download_tarball_to_temp(
     let tarball_path = temp_dir.path().join("package.tgz");
 
     let bytes = if is_git_resolved(&resolved) {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        let cache_file = std::path::PathBuf::from(&home)
+        let home = oath_core::home_dir().unwrap_or_else(std::env::temp_dir);
+        let cache_file = home
             .join(".oath")
             .join("git-cache")
             .join(git_cache_file_name(&name, &version));
@@ -2523,8 +2523,8 @@ async fn download_and_store_package(
     let temp_dir = tempfile::tempdir().context("failed to create temp tarball dir")?;
     let tarball_path = temp_dir.path().join("package.tgz");
     let bytes = if is_git_resolved(resolved) {
-        let home = std::env::var("HOME").unwrap_or_else(|_| "/tmp".into());
-        let cache_file = std::path::PathBuf::from(&home)
+        let home = oath_core::home_dir().unwrap_or_else(std::env::temp_dir);
+        let cache_file = home
             .join(".oath")
             .join("git-cache")
             .join(git_cache_file_name(name, version));
@@ -4189,8 +4189,7 @@ async fn cmd_publish(
 
     // 6. Read auth token
     let token = std::env::var("NPM_TOKEN").ok().or_else(|| {
-        let npmrc_path =
-            PathBuf::from(std::env::var("HOME").unwrap_or_else(|_| "/".into())).join(".npmrc");
+        let npmrc_path = oath_core::home_dir()?.join(".npmrc");
         let content = std::fs::read_to_string(&npmrc_path).ok()?;
         for line in content.lines() {
             let line = line.trim();
@@ -4280,8 +4279,8 @@ async fn cmd_install_global(packages: Vec<String>, dry_run: bool) -> Result<()> 
         anyhow::bail!("oath install -g: please specify at least one package to install globally");
     }
 
-    let home = std::env::var("HOME").context("HOME not set")?;
-    let global_dir = PathBuf::from(&home).join(".oath").join("global");
+    let home = oath_core::home_dir().context("HOME or USERPROFILE not set")?;
+    let global_dir = home.join(".oath").join("global");
     let nm_dir = global_dir.join("node_modules");
     let bin_dir = global_dir.join("bin");
 

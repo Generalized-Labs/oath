@@ -24,11 +24,10 @@ pub struct ApprovalStore {
 
 impl ApprovalStore {
     pub fn default_store() -> Result<Self> {
-        let home = std::env::var("HOME").context("HOME is required for approval storage")?;
+        let home = oath_core::home_dir()
+            .context("HOME or USERPROFILE is required for approval storage")?;
         Ok(Self {
-            path: PathBuf::from(home)
-                .join(".oath")
-                .join("exec-approvals.json"),
+            path: home.join(".oath").join("exec-approvals.json"),
         })
     }
 
