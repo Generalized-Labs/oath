@@ -3,11 +3,39 @@ import { copyFile,mkdtemp,readFile,rm,writeFile,mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join,resolve } from "node:path";
 import { spawnSync } from "node:child_process";
+import { setTimeout as sleep } from "node:timers/promises";
 const shard=Number(process.env.OATH_PROJECT_SHARD??0),shards=Number(process.env.OATH_PROJECT_SHARDS??1);
 const limit=Number(process.env.OATH_PROJECT_LIMIT??Number.POSITIVE_INFINITY);
 const start=Number(process.env.OATH_PROJECT_START??0);
 const failFast=process.env.OATH_PROJECT_FAIL_FAST==="1";
 const manifestPath=process.env.OATH_PROJECT_MANIFEST;
+function integerEnv(name,fallback,min=1){
+ const value=Number(process.env[name]??fallback);
+ if(!Number.isSafeInteger(value)||value<min)throw new Error(`${name} must be an integer >= ${min}`);
+ return value;
+}
+const gitNetworkAttempts=integerEnv("OATH_GIT_NETWORK_ATTEMPTS",3);
+const gitRetryDelayMs=integerEnv("OATH_GIT_RETRY_DELAY_MS",5_000,0);
+const gitNetworkTimeoutMs=integerEnv("OATH_GIT_NETWORK_TIMEOUT_MS",300_000);
+const gitCheckoutTimeoutMs=integerEnv("OATH_GIT_CHECKOUT_TIMEOUT_MS",300_000);
+async function runGitNetwork(args,options,cleanupPath){
+ let result;
+ for(let attempt=1;attempt<=gitNetworkAttempts;attempt++){
+  if(cleanupPath)await rm(cleanupPath,{recursive:true,force:true});
+  result=spawnSync("git",args,{...options,timeout:gitNetworkTimeoutMs});
+  if(result.status===0)return {result,attempts:attempt};
+  if(attempt<gitNetworkAttempts){
+   console.error(`git ${args[0]} failed (attempt ${attempt}/${gitNetworkAttempts}); retrying`);
+   await sleep(gitRetryDelayMs*attempt);
+  }
+ }
+ return {result,attempts:gitNetworkAttempts};
+}
+function gitFailure(command){
+ const {result,attempts}=command;
+ const detail=result?.error?.message||result?.stderr||result?.stdout||`exit status ${result?.status??"unknown"}`;
+ return `git failed after ${attempts} attempt(s): ${detail}`;
+}
 let projects;
 if(manifestPath){
  const manifest=JSON.parse(await readFile(resolve(manifestPath),"utf8"));
@@ -35,20 +63,46 @@ try{
   const cloneArgs=projectSpec.commit
    ? ["clone","--filter=blob:none","--no-checkout",`https://github.com/${project}.git`,cwd]
    : ["clone","--depth=1",`https://github.com/${project}.git`,cwd];
-  const clone=spawnSync("git",cloneArgs,{encoding:"utf8",timeout:300_000});
-  if(clone.status!==0){
-   results.push({project,equivalent:false,phase:"clone",stderr:clone.stderr});
+  const clone=await runGitNetwork(cloneArgs,{encoding:"utf8"},cwd);
+  if(clone.result.status!==0){
+   results.push({project,equivalent:false,phase:"clone",attempts:clone.attempts,stderr:gitFailure(clone)});
    await checkpoint();
+   await rm(cwd,{recursive:true,force:true});
    if(failFast)break;
    continue;
   }
   if(projectSpec.commit){
-   const fetch=spawnSync("git",["fetch","--depth=1","origin",projectSpec.commit],{cwd,encoding:"utf8",timeout:300_000});
-   const checkout=fetch.status===0?spawnSync("git",["checkout","--detach",projectSpec.commit],{cwd,encoding:"utf8",timeout:60_000}):fetch;
-   if(checkout.status!==0){results.push({project,commit:projectSpec.commit,equivalent:false,phase:"checkout",stderr:checkout.stderr});await checkpoint();continue;}
+   const fetch=await runGitNetwork(["fetch","--depth=1","origin",projectSpec.commit],{cwd,encoding:"utf8"});
+   if(fetch.result.status!==0){
+    results.push({project,commit:projectSpec.commit,equivalent:false,phase:"fetch",attempts:fetch.attempts,stderr:gitFailure(fetch)});
+    await checkpoint();
+    await rm(cwd,{recursive:true,force:true});
+    if(failFast)break;
+    continue;
+   }
+   const checkout=spawnSync("git",["checkout","--detach",projectSpec.commit],{cwd,encoding:"utf8",timeout:gitCheckoutTimeoutMs});
+   if(checkout.status!==0){
+    const detail=checkout.error?.message||checkout.stderr||checkout.stdout||`exit status ${checkout.status??"unknown"}`;
+    results.push({project,commit:projectSpec.commit,equivalent:false,phase:"checkout",stderr:detail});
+    await checkpoint();
+    await rm(cwd,{recursive:true,force:true});
+    if(failFast)break;
+    continue;
+   }
+  }
+  let sha=projectSpec.commit;
+  if(!sha){
+   const reference=await runGitNetwork(["ls-remote",`https://github.com/${project}.git`,"HEAD"],{encoding:"utf8"});
+   if(reference.result.status!==0){
+    results.push({project,equivalent:false,phase:"reference",attempts:reference.attempts,stderr:gitFailure(reference)});
+    await checkpoint();
+    await rm(cwd,{recursive:true,force:true});
+    if(failFast)break;
+    continue;
+   }
+   sha=reference.result.stdout.split(/\s/)[0];
   }
   await rm(join(cwd,".git"),{recursive:true,force:true});
-  const sha=projectSpec.commit??spawnSync("git",["ls-remote",`https://github.com/${project}.git`,"HEAD"],{encoding:"utf8",timeout:60_000}).stdout.split(/\s/)[0];
   const projectRoot=resolve(cwd,projectSpec.subdirectory??".");
   const run=spawnSync(process.execPath,[parityScript,projectRoot],{encoding:"utf8",maxBuffer:64*1024*1024,timeout:Number(process.env.OATH_PROJECT_TIMEOUT_MS??300_000),env:{...process.env}});
   let evidence;
@@ -57,7 +111,7 @@ try{
   }else{
    try{evidence=JSON.parse(run.stdout)}catch{evidence={equivalent:false,classification:"invalid_harness_output",stdout:run.stdout,stderr:run.stderr}}
   }
-  if(projectSpec.expected_lock_sha256&&evidence.reference?.lock_sha256!==projectSpec.expected_lock_sha256){
+  if(projectSpec.expected_lock_sha256&&evidence.reference?.lock_sha256&&evidence.reference.lock_sha256!==projectSpec.expected_lock_sha256){
    evidence={...evidence,equivalent:false,classification:"lock_hash_drift",expected_lock_sha256:projectSpec.expected_lock_sha256};
   }
   results.push({project,commit:sha,category:projectSpec.category,...evidence});
