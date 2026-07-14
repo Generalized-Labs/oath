@@ -22,7 +22,7 @@
     "source_available": { "type": "boolean" },
     "secret_findings": { "type": "array", "items": { "type": "string" } },
     "decision": { "enum": ["allow", "deny", "review", "unknown"] },
-    "reason_code": { "type": "string", "pattern": "^OATH_[A-Z0-9_]+$" },
+    "reason_code": { "enum": ["OATH_PUBLISH_ALLOWED", "OATH_PUBLISH_SECRET_DETECTED"] },
     "previous_release": { "oneOf": [{ "$ref": "#/$defs/publishDiff" }, { "type": "null" }] },
     "policy_digest": { "$ref": "#/$defs/digest" },
     "evidence_digest": { "$ref": "#/$defs/digest" },

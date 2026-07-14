@@ -19,14 +19,14 @@ The installed package names and package contents must still be identical.
 The required fixture corpus grows monotonically. Each fixed compatibility bug
 must add a fixture before release.
 
-The source matrix covers ten named behaviors: production and development
-dependencies, optional dependencies, a peer pair, root overrides, nested
-version placement, scoped packages, dist-tags, npm aliases, and a local
-workspace. CI executes every case independently on Linux, macOS, and Windows.
-The last signed baseline covers the original three; the expanded denominator is
-not public release evidence until the exact-commit cross-platform run passes.
-Ten reviewed behaviors are not proof of complete npm workflow coverage;
-generated stress repetitions are reported separately.
+The source matrix expands ten reviewed behavior fixtures across `npm install`
+and `npm ci`, and clean, warm, offline, repeat, and interrupted states. This
+creates 100 explicit named cases with stable IDs. CI executes every case on
+Linux, macOS, and Windows. The matrix generator is deterministic and CI rejects
+drift. These cases are not public release evidence until the exact-commit
+cross-platform run passes, and maintainer review is not mislabeled as the
+independent external review required for GA. Generated stress repetitions are
+reported separately and default to 10,000 executions.
 
 The real-project corpus is a frozen-input `npm install` materialization
 contract. It verifies the exact lock digest before both runs. If npm rewrites
@@ -35,6 +35,14 @@ classification normalization may differ, and every changed JSON path is
 retained in the evidence. All other lock changes fail. `npm ci` remains a
 separate workflow contract and is not inferred from the real-project install
 corpus.
+
+The pinned project target is 250 projects, 25 in each category. Refreshes retain
+the 100 previously verified exact commits and select 15 additional eligible
+projects per category from a 465-repository reviewed pool. Every addition must
+clone, produce a lock with Node 24.13.0 and npm 11.12.1, install successfully,
+and pass compressed-lock checksum validation. The 250-project claim remains
+open until the refresh artifact is reviewed, committed, and its parity run
+passes.
 
 Known intentional fail-closed boundary: git dependencies must use an exact branch,
 tag, or commit. npm-style `#semver:` git selectors are rejected with a stable

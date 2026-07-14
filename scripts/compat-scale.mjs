@@ -3,8 +3,8 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 
-const fixtureCount=Number(process.env.OATH_GENERATED_EXECUTION_TARGET??500);
-const projectTarget=Number(process.env.OATH_PROJECT_TARGET??100);
+const fixtureCount=Number(process.env.OATH_GENERATED_EXECUTION_TARGET??10000);
+const projectTarget=Number(process.env.OATH_PROJECT_TARGET??250);
 if(!Number.isSafeInteger(fixtureCount)||fixtureCount<1)throw new Error("OATH_GENERATED_EXECUTION_TARGET must be a positive integer");
 if(!Number.isSafeInteger(projectTarget)||projectTarget<1)throw new Error("OATH_PROJECT_TARGET must be a positive integer");
 const out=resolve(process.env.OATH_COMPAT_RESULTS??"compat-results/ga");
@@ -15,17 +15,17 @@ const projects=(await readFile(new URL("../tests/compat/projects.txt",import.met
 if(projects.length!==projectTarget)throw new Error(`expected ${projectTarget} real projects, found ${projects.length}`);
 
 const behaviorContract=JSON.parse(await readFile(new URL("../tests/compat/behavioral-contract.json",import.meta.url),"utf8"));
-if(behaviorContract.schema_version!==1||!Array.isArray(behaviorContract.behaviors)||behaviorContract.behaviors.length===0)throw new Error("invalid independent behavior contract");
-const templates=behaviorContract.behaviors.map(behavior=>behavior.fixture);
-const fixtures=Array.from({length:fixtureCount},(_,id)=>({id,template:templates[id%templates.length],mode:["clean","warm","offline","repeat","interrupted"][Math.floor(id/templates.length)%5],shard:id%shards}));
+if(behaviorContract.schema_version!==2||!Array.isArray(behaviorContract.behaviors)||behaviorContract.behaviors.length!==100)throw new Error("independent behavior contract must contain 100 workflows");
+const templates=behaviorContract.behaviors.map(({id,fixture,command,mode})=>({id,fixture,command,mode}));
+const fixtures=Array.from({length:fixtureCount},(_,id)=>{const template=templates[id%templates.length];return{id,template:template.id,fixture:template.fixture,command:template.command,mode:template.mode,shard:id%shards}});
 await mkdir(out,{recursive:true});
 await writeFile(join(out,"manifest.json"),JSON.stringify({schema_version:2,evidence_class:"generated_stress",reference_npm_major:11,generated_execution_target:fixtureCount,independent_template_count:templates.length,independent_templates:templates,project_target:projectTarget,shards,fixtures,projects},null,2));
 
 const results=[];
 if(execute){
   for(const fixture of fixtures.filter(item=>item.shard===shard)){
-    const path=resolve("tests/compat/fixtures",fixture.template);
-    const run=spawnSync(process.execPath,[resolve("scripts/npm-parity.mjs"),path],{encoding:"utf8",timeout:Number(process.env.OATH_COMPAT_FIXTURE_TIMEOUT_MS??900_000),killSignal:"SIGKILL",env:{...process.env,OATH_COMPAT_MODE:fixture.mode}});
+    const path=resolve("tests/compat/fixtures",fixture.fixture);
+    const run=spawnSync(process.execPath,[resolve("scripts/npm-parity.mjs"),path],{encoding:"utf8",timeout:Number(process.env.OATH_COMPAT_FIXTURE_TIMEOUT_MS??900_000),killSignal:"SIGKILL",env:{...process.env,OATH_COMPAT_MODE:fixture.mode,OATH_COMPAT_COMMAND:fixture.command}});
     let artifact; try{artifact=JSON.parse(run.stdout)}catch{artifact={equivalent:false,stdout:run.stdout,stderr:run.stderr}}
     results.push({fixture,...artifact});
   }

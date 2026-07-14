@@ -1,7 +1,7 @@
 use crate::{hex_sha256, now};
 use anyhow::{Context, Result};
 use oath_analyze::{PackageScanner, RiskLevel};
-use oath_contracts::{Decision, PackageIdentity, RegistryVerdictV1};
+use oath_contracts::{Decision, PackageIdentity, ReasonCode, RegistryVerdictV1};
 use serde_json::{Value, json};
 use std::{io::Read, path::Path};
 
@@ -87,11 +87,11 @@ pub fn assess_tarball(
         Decision::Allow
     };
     let reason_code = match decision {
-        Decision::Deny if !secret_findings.is_empty() => "OATH_REGISTRY_SECRET_DETECTED",
-        Decision::Deny => "OATH_REGISTRY_CRITICAL_BEHAVIOR",
-        Decision::Review => "OATH_REGISTRY_REVIEW_REQUIRED",
-        Decision::Allow => "OATH_REGISTRY_ALLOWED",
-        Decision::Unknown => "OATH_REGISTRY_UNKNOWN",
+        Decision::Deny if !secret_findings.is_empty() => ReasonCode::RegistrySecretDetected,
+        Decision::Deny => ReasonCode::RegistryCriticalBehavior,
+        Decision::Review => ReasonCode::RegistryReviewRequired,
+        Decision::Allow => ReasonCode::RegistryAllowed,
+        Decision::Unknown => ReasonCode::RegistryUnknown,
     };
     let risk_score = if !secret_findings.is_empty() {
         100
@@ -157,7 +157,7 @@ pub fn assess_tarball(
                 .map(String::from),
         },
         decision,
-        reason_code: reason_code.into(),
+        reason_code,
         risk_score,
         package_digest,
         assessment_digest: oath_contracts::digest_json(&evidence)?,
@@ -301,7 +301,10 @@ mod tests {
         .unwrap();
         assert_eq!(bundle.verdict.decision, Decision::Deny);
         assert_eq!(bundle.verdict.risk_score, 100);
-        assert_eq!(bundle.verdict.reason_code, "OATH_REGISTRY_SECRET_DETECTED");
+        assert_eq!(
+            bundle.verdict.reason_code,
+            ReasonCode::RegistrySecretDetected
+        );
         assert_eq!(bundle.sbom["spdxVersion"], "SPDX-2.3");
         assert!(
             chrono::DateTime::parse_from_rfc3339(

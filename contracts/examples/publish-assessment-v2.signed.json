@@ -1,0 +1,54 @@
+{
+  "schema_version": 2,
+  "generated_at": 1800000000,
+  "expires_at": 1800003600,
+  "name": "@oath/example",
+  "version": "1.2.3",
+  "tag": "latest",
+  "access": "public",
+  "package_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "unpacked_bytes": 128,
+  "files": [
+    {
+      "path": "index.js",
+      "bytes": 32,
+      "sha256": "1111111111111111111111111111111111111111111111111111111111111111"
+    },
+    {
+      "path": "package.json",
+      "bytes": 96,
+      "sha256": "2222222222222222222222222222222222222222222222222222222222222222"
+    }
+  ],
+  "dependency_count": 2,
+  "lifecycle_hooks": [],
+  "capabilities": [
+    "filesystem"
+  ],
+  "source_available": true,
+  "secret_findings": [],
+  "decision": "allow",
+  "reason_code": "OATH_PUBLISH_ALLOWED",
+  "previous_release": {
+    "previous_version": "1.2.2",
+    "added_files": [],
+    "removed_files": [],
+    "changed_files": [
+      "index.js"
+    ],
+    "capabilities_added": [],
+    "capabilities_removed": []
+  },
+  "policy_digest": "sha256:df0305e968aca59c9b50347a943bff6c869d8ef82c3ba72fa223b8c6eec4c4c6",
+  "evidence_digest": "sha256:d8b9c250a66c85df4ef9bc14d83916d854d06028b7a8ca2cc8afa664b677c29c",
+  "rule_bundle_version": "oath-rules/1",
+  "limitations": [
+    "Static analysis cannot prove package safety"
+  ],
+  "signature": {
+    "algorithm": "ed25519",
+    "canonicalization": "oath-json-v1",
+    "public_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+    "signature": "Cbb/p1Iwtyz3OB4zOtCNFN24ujDOGtVQ4Z+OFs5P0J873OqbKr3WehAElw2DFPoGFOSnqVrsZjPhszDYHiGVCQ=="
+  }
+}

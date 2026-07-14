@@ -1,0 +1,54 @@
+{
+  "schema_version": 3,
+  "generated_at": 1800000000,
+  "expires_at": 1800003600,
+  "identity": {
+    "name": "@oath/example",
+    "version": "1.2.3",
+    "registry": "https://registry.npmjs.org",
+    "integrity": "sha512-example-integrity",
+    "publisher": "oath-example-publisher",
+    "publish_age_days": 30,
+    "repository": "https://github.com/Generalized-Labs/oath"
+  },
+  "evidence": {
+    "unpacked_bytes": 4096,
+    "dependency_count": 2,
+    "readable_source": true,
+    "obfuscated": false,
+    "native_code": false,
+    "lifecycle_hooks": false,
+    "capabilities": [
+      "filesystem-read"
+    ],
+    "findings": [],
+    "limitations": [
+      "Static analysis cannot prove package safety"
+    ],
+    "version_diff": null
+  },
+  "policy": {
+    "decision": "allow",
+    "reason_code": "OATH_EXEC_ALLOWED",
+    "grade": "A",
+    "score": 96
+  },
+  "sandbox": {
+    "backend": "linux-bwrap-v1",
+    "available": true,
+    "filesystem_isolation": true,
+    "network_isolation": true,
+    "process_isolation": true,
+    "resource_limits": true,
+    "degraded_reason": null
+  },
+  "policy_digest": "sha256:8c3d7badf959c55c58db55295d0ce64ec8fe7034880f87d78c7eefcab0bb9818",
+  "evidence_digest": "sha256:e4d5dac15cd8e9970b8b0d9ca00ee3d4e68bee66b4f0a6801065b8f270da440f",
+  "rule_bundle_version": "oath-rules/1",
+  "signature": {
+    "algorithm": "ed25519",
+    "canonicalization": "oath-json-v1",
+    "public_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+    "signature": "YnKmjrbcYWWkrzGMMnSljLFYIdArRkn3QQLe8fc+3Dx1QERkTnccyD7Za/g33BiwfNTX7ZWinIko4S2/ho0aCw=="
+  }
+}

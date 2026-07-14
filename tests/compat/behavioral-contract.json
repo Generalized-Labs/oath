@@ -1,66 +1,818 @@
 {
-  "schema_version": 1,
-  "description": "Independent npm workflow behaviors. Generated stress repetitions are tracked separately.",
+  "schema_version": 2,
+  "description": "Named npm/Oath differential workflows. Generated stress repetitions are tracked separately.",
+  "review_policy": "Each fixture, command, and execution-state combination is explicit and maintainer reviewed; external review remains a separate GA gate.",
+  "commands": [
+    "install",
+    "ci"
+  ],
+  "modes": [
+    "clean",
+    "warm",
+    "offline",
+    "repeat",
+    "interrupted"
+  ],
   "behaviors": [
     {
-      "id": "install-basic-production-dependency",
+      "id": "install-basic-production-dependency-clean",
       "workflow_slice": "install",
       "fixture": "basic",
-      "mode": "clean"
+      "command": "install",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
     },
     {
-      "id": "install-npm-alias",
+      "id": "install-basic-production-dependency-warm",
+      "workflow_slice": "install",
+      "fixture": "basic",
+      "command": "install",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-basic-production-dependency-offline",
+      "workflow_slice": "install",
+      "fixture": "basic",
+      "command": "install",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-basic-production-dependency-repeat",
+      "workflow_slice": "install",
+      "fixture": "basic",
+      "command": "install",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-basic-production-dependency-interrupted",
+      "workflow_slice": "install",
+      "fixture": "basic",
+      "command": "install",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-basic-production-dependency-clean",
+      "workflow_slice": "install",
+      "fixture": "basic",
+      "command": "ci",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-basic-production-dependency-warm",
+      "workflow_slice": "install",
+      "fixture": "basic",
+      "command": "ci",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-basic-production-dependency-offline",
+      "workflow_slice": "install",
+      "fixture": "basic",
+      "command": "ci",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-basic-production-dependency-repeat",
+      "workflow_slice": "install",
+      "fixture": "basic",
+      "command": "ci",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-basic-production-dependency-interrupted",
+      "workflow_slice": "install",
+      "fixture": "basic",
+      "command": "ci",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-npm-alias-clean",
       "workflow_slice": "aliases",
       "fixture": "alias",
-      "mode": "clean"
+      "command": "install",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
     },
     {
-      "id": "install-workspace-link",
+      "id": "install-npm-alias-warm",
+      "workflow_slice": "aliases",
+      "fixture": "alias",
+      "command": "install",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-npm-alias-offline",
+      "workflow_slice": "aliases",
+      "fixture": "alias",
+      "command": "install",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-npm-alias-repeat",
+      "workflow_slice": "aliases",
+      "fixture": "alias",
+      "command": "install",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-npm-alias-interrupted",
+      "workflow_slice": "aliases",
+      "fixture": "alias",
+      "command": "install",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-npm-alias-clean",
+      "workflow_slice": "aliases",
+      "fixture": "alias",
+      "command": "ci",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-npm-alias-warm",
+      "workflow_slice": "aliases",
+      "fixture": "alias",
+      "command": "ci",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-npm-alias-offline",
+      "workflow_slice": "aliases",
+      "fixture": "alias",
+      "command": "ci",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-npm-alias-repeat",
+      "workflow_slice": "aliases",
+      "fixture": "alias",
+      "command": "ci",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-npm-alias-interrupted",
+      "workflow_slice": "aliases",
+      "fixture": "alias",
+      "command": "ci",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-workspace-link-clean",
       "workflow_slice": "workspaces",
       "fixture": "workspace",
-      "mode": "clean"
+      "command": "install",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
     },
     {
-      "id": "install-development-dependency",
+      "id": "install-workspace-link-warm",
+      "workflow_slice": "workspaces",
+      "fixture": "workspace",
+      "command": "install",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-workspace-link-offline",
+      "workflow_slice": "workspaces",
+      "fixture": "workspace",
+      "command": "install",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-workspace-link-repeat",
+      "workflow_slice": "workspaces",
+      "fixture": "workspace",
+      "command": "install",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-workspace-link-interrupted",
+      "workflow_slice": "workspaces",
+      "fixture": "workspace",
+      "command": "install",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-workspace-link-clean",
+      "workflow_slice": "workspaces",
+      "fixture": "workspace",
+      "command": "ci",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-workspace-link-warm",
+      "workflow_slice": "workspaces",
+      "fixture": "workspace",
+      "command": "ci",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-workspace-link-offline",
+      "workflow_slice": "workspaces",
+      "fixture": "workspace",
+      "command": "ci",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-workspace-link-repeat",
+      "workflow_slice": "workspaces",
+      "fixture": "workspace",
+      "command": "ci",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-workspace-link-interrupted",
+      "workflow_slice": "workspaces",
+      "fixture": "workspace",
+      "command": "ci",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-development-dependency-clean",
       "workflow_slice": "dependency-groups",
       "fixture": "dev-dependency",
-      "mode": "clean"
+      "command": "install",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
     },
     {
-      "id": "install-optional-dependency",
+      "id": "install-development-dependency-warm",
+      "workflow_slice": "dependency-groups",
+      "fixture": "dev-dependency",
+      "command": "install",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-development-dependency-offline",
+      "workflow_slice": "dependency-groups",
+      "fixture": "dev-dependency",
+      "command": "install",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-development-dependency-repeat",
+      "workflow_slice": "dependency-groups",
+      "fixture": "dev-dependency",
+      "command": "install",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-development-dependency-interrupted",
+      "workflow_slice": "dependency-groups",
+      "fixture": "dev-dependency",
+      "command": "install",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-development-dependency-clean",
+      "workflow_slice": "dependency-groups",
+      "fixture": "dev-dependency",
+      "command": "ci",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-development-dependency-warm",
+      "workflow_slice": "dependency-groups",
+      "fixture": "dev-dependency",
+      "command": "ci",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-development-dependency-offline",
+      "workflow_slice": "dependency-groups",
+      "fixture": "dev-dependency",
+      "command": "ci",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-development-dependency-repeat",
+      "workflow_slice": "dependency-groups",
+      "fixture": "dev-dependency",
+      "command": "ci",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-development-dependency-interrupted",
+      "workflow_slice": "dependency-groups",
+      "fixture": "dev-dependency",
+      "command": "ci",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-optional-dependency-clean",
       "workflow_slice": "optional-dependencies",
       "fixture": "optional-dependency",
-      "mode": "clean"
+      "command": "install",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
     },
     {
-      "id": "install-peer-dependency-pair",
+      "id": "install-optional-dependency-warm",
+      "workflow_slice": "optional-dependencies",
+      "fixture": "optional-dependency",
+      "command": "install",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-optional-dependency-offline",
+      "workflow_slice": "optional-dependencies",
+      "fixture": "optional-dependency",
+      "command": "install",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-optional-dependency-repeat",
+      "workflow_slice": "optional-dependencies",
+      "fixture": "optional-dependency",
+      "command": "install",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-optional-dependency-interrupted",
+      "workflow_slice": "optional-dependencies",
+      "fixture": "optional-dependency",
+      "command": "install",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-optional-dependency-clean",
+      "workflow_slice": "optional-dependencies",
+      "fixture": "optional-dependency",
+      "command": "ci",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-optional-dependency-warm",
+      "workflow_slice": "optional-dependencies",
+      "fixture": "optional-dependency",
+      "command": "ci",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-optional-dependency-offline",
+      "workflow_slice": "optional-dependencies",
+      "fixture": "optional-dependency",
+      "command": "ci",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-optional-dependency-repeat",
+      "workflow_slice": "optional-dependencies",
+      "fixture": "optional-dependency",
+      "command": "ci",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-optional-dependency-interrupted",
+      "workflow_slice": "optional-dependencies",
+      "fixture": "optional-dependency",
+      "command": "ci",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-peer-dependency-pair-clean",
       "workflow_slice": "peer-dependencies",
       "fixture": "peer-dependency",
-      "mode": "clean"
+      "command": "install",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
     },
     {
-      "id": "install-root-override",
+      "id": "install-peer-dependency-pair-warm",
+      "workflow_slice": "peer-dependencies",
+      "fixture": "peer-dependency",
+      "command": "install",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-peer-dependency-pair-offline",
+      "workflow_slice": "peer-dependencies",
+      "fixture": "peer-dependency",
+      "command": "install",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-peer-dependency-pair-repeat",
+      "workflow_slice": "peer-dependencies",
+      "fixture": "peer-dependency",
+      "command": "install",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-peer-dependency-pair-interrupted",
+      "workflow_slice": "peer-dependencies",
+      "fixture": "peer-dependency",
+      "command": "install",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-peer-dependency-pair-clean",
+      "workflow_slice": "peer-dependencies",
+      "fixture": "peer-dependency",
+      "command": "ci",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-peer-dependency-pair-warm",
+      "workflow_slice": "peer-dependencies",
+      "fixture": "peer-dependency",
+      "command": "ci",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-peer-dependency-pair-offline",
+      "workflow_slice": "peer-dependencies",
+      "fixture": "peer-dependency",
+      "command": "ci",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-peer-dependency-pair-repeat",
+      "workflow_slice": "peer-dependencies",
+      "fixture": "peer-dependency",
+      "command": "ci",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-peer-dependency-pair-interrupted",
+      "workflow_slice": "peer-dependencies",
+      "fixture": "peer-dependency",
+      "command": "ci",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-root-override-clean",
       "workflow_slice": "overrides",
       "fixture": "override",
-      "mode": "clean"
+      "command": "install",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
     },
     {
-      "id": "install-nested-version-conflict",
+      "id": "install-root-override-warm",
+      "workflow_slice": "overrides",
+      "fixture": "override",
+      "command": "install",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-root-override-offline",
+      "workflow_slice": "overrides",
+      "fixture": "override",
+      "command": "install",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-root-override-repeat",
+      "workflow_slice": "overrides",
+      "fixture": "override",
+      "command": "install",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-root-override-interrupted",
+      "workflow_slice": "overrides",
+      "fixture": "override",
+      "command": "install",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-root-override-clean",
+      "workflow_slice": "overrides",
+      "fixture": "override",
+      "command": "ci",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-root-override-warm",
+      "workflow_slice": "overrides",
+      "fixture": "override",
+      "command": "ci",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-root-override-offline",
+      "workflow_slice": "overrides",
+      "fixture": "override",
+      "command": "ci",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-root-override-repeat",
+      "workflow_slice": "overrides",
+      "fixture": "override",
+      "command": "ci",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-root-override-interrupted",
+      "workflow_slice": "overrides",
+      "fixture": "override",
+      "command": "ci",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-nested-version-conflict-clean",
       "workflow_slice": "nested-placement",
       "fixture": "nested-conflict",
-      "mode": "clean"
+      "command": "install",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
     },
     {
-      "id": "install-scoped-package",
+      "id": "install-nested-version-conflict-warm",
+      "workflow_slice": "nested-placement",
+      "fixture": "nested-conflict",
+      "command": "install",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-nested-version-conflict-offline",
+      "workflow_slice": "nested-placement",
+      "fixture": "nested-conflict",
+      "command": "install",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-nested-version-conflict-repeat",
+      "workflow_slice": "nested-placement",
+      "fixture": "nested-conflict",
+      "command": "install",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-nested-version-conflict-interrupted",
+      "workflow_slice": "nested-placement",
+      "fixture": "nested-conflict",
+      "command": "install",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-nested-version-conflict-clean",
+      "workflow_slice": "nested-placement",
+      "fixture": "nested-conflict",
+      "command": "ci",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-nested-version-conflict-warm",
+      "workflow_slice": "nested-placement",
+      "fixture": "nested-conflict",
+      "command": "ci",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-nested-version-conflict-offline",
+      "workflow_slice": "nested-placement",
+      "fixture": "nested-conflict",
+      "command": "ci",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-nested-version-conflict-repeat",
+      "workflow_slice": "nested-placement",
+      "fixture": "nested-conflict",
+      "command": "ci",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-nested-version-conflict-interrupted",
+      "workflow_slice": "nested-placement",
+      "fixture": "nested-conflict",
+      "command": "ci",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-scoped-package-clean",
       "workflow_slice": "scoped-packages",
       "fixture": "scoped-package",
-      "mode": "clean"
+      "command": "install",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
     },
     {
-      "id": "install-dist-tag-latest",
+      "id": "install-scoped-package-warm",
+      "workflow_slice": "scoped-packages",
+      "fixture": "scoped-package",
+      "command": "install",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-scoped-package-offline",
+      "workflow_slice": "scoped-packages",
+      "fixture": "scoped-package",
+      "command": "install",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-scoped-package-repeat",
+      "workflow_slice": "scoped-packages",
+      "fixture": "scoped-package",
+      "command": "install",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-scoped-package-interrupted",
+      "workflow_slice": "scoped-packages",
+      "fixture": "scoped-package",
+      "command": "install",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-scoped-package-clean",
+      "workflow_slice": "scoped-packages",
+      "fixture": "scoped-package",
+      "command": "ci",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-scoped-package-warm",
+      "workflow_slice": "scoped-packages",
+      "fixture": "scoped-package",
+      "command": "ci",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-scoped-package-offline",
+      "workflow_slice": "scoped-packages",
+      "fixture": "scoped-package",
+      "command": "ci",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-scoped-package-repeat",
+      "workflow_slice": "scoped-packages",
+      "fixture": "scoped-package",
+      "command": "ci",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-scoped-package-interrupted",
+      "workflow_slice": "scoped-packages",
+      "fixture": "scoped-package",
+      "command": "ci",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-dist-tag-latest-clean",
       "workflow_slice": "dist-tags",
       "fixture": "dist-tag",
-      "mode": "clean"
+      "command": "install",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-dist-tag-latest-warm",
+      "workflow_slice": "dist-tags",
+      "fixture": "dist-tag",
+      "command": "install",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-dist-tag-latest-offline",
+      "workflow_slice": "dist-tags",
+      "fixture": "dist-tag",
+      "command": "install",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-dist-tag-latest-repeat",
+      "workflow_slice": "dist-tags",
+      "fixture": "dist-tag",
+      "command": "install",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "install-dist-tag-latest-interrupted",
+      "workflow_slice": "dist-tags",
+      "fixture": "dist-tag",
+      "command": "install",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-dist-tag-latest-clean",
+      "workflow_slice": "dist-tags",
+      "fixture": "dist-tag",
+      "command": "ci",
+      "mode": "clean",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-dist-tag-latest-warm",
+      "workflow_slice": "dist-tags",
+      "fixture": "dist-tag",
+      "command": "ci",
+      "mode": "warm",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-dist-tag-latest-offline",
+      "workflow_slice": "dist-tags",
+      "fixture": "dist-tag",
+      "command": "ci",
+      "mode": "offline",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-dist-tag-latest-repeat",
+      "workflow_slice": "dist-tags",
+      "fixture": "dist-tag",
+      "command": "ci",
+      "mode": "repeat",
+      "review_status": "maintainer-reviewed"
+    },
+    {
+      "id": "ci-dist-tag-latest-interrupted",
+      "workflow_slice": "dist-tags",
+      "fixture": "dist-tag",
+      "command": "ci",
+      "mode": "interrupted",
+      "review_status": "maintainer-reviewed"
     }
   ]
 }

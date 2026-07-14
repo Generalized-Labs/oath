@@ -25,13 +25,24 @@ if (execute) {
       encoding: "utf8",
       timeout: Number(process.env.OATH_COMPAT_FIXTURE_TIMEOUT_MS ?? 900_000),
       killSignal: "SIGKILL",
-      env: { ...process.env, OATH_COMPAT_MODE: behavior.mode ?? "clean" },
+      env: {
+        ...process.env,
+        OATH_COMPAT_MODE: behavior.mode ?? "clean",
+        OATH_COMPAT_COMMAND: behavior.command ?? "install",
+      },
       maxBuffer: 64 * 1024 * 1024,
     });
     let comparison;
     try { comparison = JSON.parse(run.stdout); }
     catch { comparison = { equivalent: false, stdout: run.stdout, stderr: run.stderr }; }
-    results.push({ id: behavior.id, workflow_slice: behavior.workflow_slice, fixture: behavior.fixture, ...comparison });
+    results.push({
+      id: behavior.id,
+      workflow_slice: behavior.workflow_slice,
+      fixture: behavior.fixture,
+      command: behavior.command ?? "install",
+      mode: behavior.mode ?? "clean",
+      ...comparison,
+    });
   }
 }
 

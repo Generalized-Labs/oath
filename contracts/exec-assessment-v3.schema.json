@@ -70,7 +70,7 @@
       "required": ["decision", "reason_code", "grade", "score"],
       "properties": {
         "decision": { "$ref": "#/$defs/decision" },
-        "reason_code": { "type": "string", "pattern": "^OATH_[A-Z0-9_]+$" },
+        "reason_code": { "enum": ["OATH_EXEC_ALLOWED", "OATH_EXEC_GRADE_BELOW_REQUIRED", "OATH_EXEC_RELEASE_TOO_NEW"] },
         "grade": { "type": "string" },
         "score": { "type": "integer", "minimum": 0, "maximum": 100 }
       }

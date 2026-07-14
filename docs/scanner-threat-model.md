@@ -88,13 +88,19 @@ the scanner must not be marketed as GA-grade malware detection.
 ## Reproduce
 
 ```sh
-# benign corpus = your local store of installed popular packages
-cargo run --release -p oath-analyze --example bench -- ~/.oath/store <malware_dir>
+cargo run --release -p oath-analyze --example detection_gate -- \
+  --benign <benign_dir> \
+  --known-malware <frozen_malware_dir> \
+  --private-holdout <family-and-time-separated_dir> \
+  --secret-exfiltration <secret_exfil_dir> \
+  --metadata <corpus_metadata.json> \
+  --qualification qualifying
 ```
-Add `--json` after `--` for the versioned evidence document. The benchmark
-emits all denominators, scan errors, and Wilson 95% intervals, then exits
-nonzero when either corpus is empty, any scan fails, or a GA point threshold is
-missed.
+The versioned JSON report includes anonymized sample IDs, corpus and metadata
+digests, denominators, scan errors, exclusions, and Wilson 95% intervals. It
+exits nonzero for empty/incomplete corpora, scan errors, invalid separation
+metadata, or missed point thresholds. The committed one-sample corpora exercise
+only harness mechanics and always report `qualifies_for_ga: false`.
 
 The malware corpus (DataDog, Apache-2.0) is cloned separately and extracted
 read-only; nothing in it is ever executed.

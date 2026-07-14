@@ -1,0 +1,76 @@
+{
+  "schema_version": 1,
+  "review_status": "Maintainer-reviewed expansion candidates; eligibility is decided only by the pinned npm 11.12.1 preflight.",
+  "categories": {
+    "frameworks-applications": [
+      "calcom/cal.com", "directus/directus", "medusajs/medusa", "refinedev/refine", "marmelab/react-admin",
+      "t3-oss/create-t3-app", "saleor/storefront", "outline/outline", "hoppscotch/hoppscotch", "appsmithorg/appsmith",
+      "ToolJet/ToolJet", "Budibase/budibase", "nocodb/nocodb", "twentyhq/twenty", "RocketChat/Rocket.Chat",
+      "supabase/supabase", "dubinc/dub", "triggerdotdev/trigger.dev", "plane-software/plane", "novuhq/novu",
+      "vercel/commerce", "ixartz/SaaS-Boilerplate", "wasp-lang/open-saas", "documenso/documenso", "shadcn-ui/taxonomy"
+    ],
+    "build-tools": [
+      "unjs/mkdist", "egoist/bundle-require", "privatenumber/tsdown", "electron/forge", "electron/packager",
+      "electron-userland/electron-builder", "terser/terser", "cssnano/cssnano", "postcss/postcss", "parcel-bundler/lightningcss",
+      "sass/node-sass", "wclr/yalc", "jsenv/core", "preconstruct/preconstruct", "developit/wmr",
+      "fuse-box/fuse-box", "systemjs/systemjs", "jspm/jspm-cli", "facebook/metro", "expo/expo",
+      "angular/angular-cli", "vuejs/rollup-plugin-vue", "changesets/action", "semantic-release/npm", "emilkowalski/vaul"
+    ],
+    "typescript-compilers": [
+      "babel/minify", "jridgewell/sourcemap-codec", "jridgewell/trace-mapping", "Rich-Harris/magic-string", "privatenumber/tsx",
+      "millsp/ts-toolbelt", "gcanti/io-ts", "sindresorhus/type-fest", "samchon/typia", "vega/ts-json-schema-generator",
+      "YousefED/typescript-json-schema", "ajv-validator/ajv", "sinclairzx81/typebox", "Effect-TS/effect", "colinhacks/zod",
+      "ianstormtaylor/superstruct", "runtypes/runtypes", "fabian-hiller/valibot", "arktypeio/arktype", "dsherret/ts-ast-viewer",
+      "TypeStrong/fork-ts-checker-webpack-plugin", "typescript-language-server/typescript-language-server", "volarjs/volar.js", "vuejs/language-tools", "ota-meshi/eslint-plugin-regexp"
+    ],
+    "test-tools": [
+      "promptfoo/promptfoo", "microsoft/midscene", "react-cosmos/react-cosmos", "dubzzz/fast-check", "stryker-mutator/stryker-js",
+      "testcontainers/testcontainers-node", "codeceptjs/CodeceptJS", "bcoe/c8", "gotwarlost/istanbul", "wallabyjs/wallaby",
+      "qawolf/qawolf", "lambdatest/node-tunnel", "browserstack/browserstack-node-sdk", "artilleryio/artillery", "grafana/k6-jslib-k6chaijs",
+      "goldbergyoni/javascript-testing-best-practices", "testdouble/testdouble.js", "macacajs/macaca", "nightwatchjs/nightwatch", "modernweb-dev/web",
+      "web-test-runner/web-test-runner", "faker-js/faker", "microsoft/accessibility-insights-web", "dequelabs/axe-core", "americanexpress/jest-image-snapshot"
+    ],
+    "server-frameworks": [
+      "trpc/trpc", "apollographql/apollo-server", "graphql/graphql-js", "n1ru4l/envelop", "socketio/socket.io",
+      "websockets/ws", "tinyhttp/tinyhttp", "elysiajs/elysia", "oven-sh/bun", "nitrojs/nitro",
+      "unjs/h3", "unjs/listhen", "http-party/node-http-proxy", "chimurai/http-proxy-middleware", "express-rate-limit/express-rate-limit",
+      "pillarjs/router", "pillarjs/send", "pillarjs/path-to-regexp", "pillarjs/finalhandler", "jshttp/cookie",
+      "jshttp/compression", "jshttp/cors", "koajs/router", "fastify/fastify-cli", "nestjs/throttler"
+    ],
+    "ui-libraries": [
+      "lucide-icons/lucide", "adobe/react-spectrum", "tamagui/tamagui", "radix-ui/themes", "DevExpress/DevExtreme",
+      "heroui-inc/heroui", "nextui-org/nextui", "primefaces/primereact", "primefaces/primevue", "carbon-design-system/carbon",
+      "fluentui/react-components", "elastic/eui", "palantir/blueprint", "grommet/grommet", "rebassjs/rebass",
+      "ariakit/ariakit", "reach/reach-ui", "szhsin/react-menu", "floating-ui/floating-ui", "downshift-js/downshift",
+      "TanStack/table", "TanStack/query", "pmndrs/zustand", "reduxjs/redux-toolkit", "immerjs/immer"
+    ],
+    "database-orm": [
+      "mikro-orm/mikro-orm", "supabase/supabase-js", "remult/remult", "zenstackhq/zenstack", "jawj/zapatos",
+      "TypedORM/typedorm", "orchid-orm/orchid-orm", "electric-sql/pglite", "libsql/libsql-client-ts", "planetscale/database-js",
+      "firebase/firebase-js-sdk", "aws/aws-sdk-js-v3", "googleapis/nodejs-firestore", "googleapis/nodejs-datastore", "googleapis/nodejs-spanner",
+      "couchbase/couchnode", "apache/cassandra-nodejs-driver", "DataStax-Examples/astra-db-ts", "surrealdb/surrealdb.js", "influxdata/influxdb-client-js",
+      "clickhouse/clickhouse-js", "duckdb/duckdb-node-neo", "sequelize/umzug", "sequelize/cli", "prisma/prisma-client-js"
+    ],
+    "monorepos-workspaces": [
+      "teambit/bit", "ProtonMail/WebClients", "ethereumjs/ethereumjs-monorepo", "microsoft/rnx-kit", "nrwl/nx-examples",
+      "vltpkg/vltpkg", "microsoft/fluentui", "microsoft/fast", "microsoft/vscode", "microsoft/monaco-editor",
+      "facebook/react-native", "expo/expo-cli", "ionic-team/stencil", "ionic-team/capacitor", "electron/electron",
+      "remix-run/react-router", "ampproject/amphtml", "angular/components", "angular/dev-infra", "aws/aws-cdk",
+      "googleapis/google-cloud-node", "nestjs/nest-cli", "nestjs/schematics", "oclif/oclif", "salesforcecli/cli"
+    ],
+    "native-platform": [
+      "nodejs/node-addon-examples", "grpc/grpc-node", "node-webrtc/node-webrtc", "nodejs/nan", "nodejs/llnode",
+      "node-ffi-napi/node-ffi-napi", "prebuild/node-gyp-build", "cmake-js/cmake-js", "cryptocoinjs/secp256k1-node", "astro/node-expat",
+      "google/pprof-nodejs", "bnoordhuis/node-heapdump", "napi-rs/node-rs", "samizdatco/skia-canvas", "node-ffi-rs/node-ffi-rs",
+      "serialport/node-serialport", "nodegui/nodegui", "uNetworking/uWebSockets.js", "libsql/libsql-js", "mapbox/node-sqlite3",
+      "microsoft/node-jsonc-parser", "parcel-bundler/watcher", "cspotcode/node-options", "cpu-features/node-cpu-features", "nodejs/node-report"
+    ],
+    "cli-developer-tools": [
+      "google-gemini/gemini-cli", "continuedev/continue", "vercel/vercel", "sindresorhus/yocto-spinner", "microsoft/inshellisense",
+      "vercel/serve", "caporal/caporal.js", "voidzero-dev/oxlint", "webpro/knip", "depcheck/depcheck",
+      "webpro/npkill", "antfu-collective/ni", "bombshell-dev/clack", "unjs/consola", "google/clasp",
+      "marp-team/marp-cli", "cloudflare/workers-sdk", "npm/package-json", "npm/npm-packlist", "npm/pacote",
+      "npm/arborist", "npm/libnpmexec", "corepack/corepack", "Schniz/fnm", "bunx/bunx"
+    ]
+  }
+}

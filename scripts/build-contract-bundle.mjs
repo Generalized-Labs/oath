@@ -1,0 +1,122 @@
+#!/usr/bin/env node
+import { createHash } from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
+import { join, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
+
+const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
+const output = resolve(process.argv[2] ?? "contract-dist");
+const schemas = [
+  ["exec-assessment-v3.schema.json", 3, [
+    "OATH_EXEC_ALLOWED",
+    "OATH_EXEC_GRADE_BELOW_REQUIRED",
+    "OATH_EXEC_RELEASE_TOO_NEW",
+  ]],
+  ["publish-assessment-v2.schema.json", 2, [
+    "OATH_PUBLISH_ALLOWED",
+    "OATH_PUBLISH_SECRET_DETECTED",
+  ]],
+  ["registry-verdict-v1.schema.json", 1, [
+    "OATH_REGISTRY_ALLOWED",
+    "OATH_REGISTRY_CRITICAL_BEHAVIOR",
+    "OATH_REGISTRY_REVIEW_REQUIRED",
+    "OATH_REGISTRY_SECRET_DETECTED",
+    "OATH_REGISTRY_UNKNOWN",
+  ]],
+];
+const examples = [
+  "exec-assessment-v3.signed.json",
+  "publish-assessment-v2.signed.json",
+  "registry-verdict-v1.signed.json",
+];
+
+function sha256(bytes) {
+  return createHash("sha256").update(bytes).digest("hex");
+}
+
+function reasonCodes(schema) {
+  if (schema.properties.reason_code?.enum) return schema.properties.reason_code.enum;
+  return schema.$defs?.policy?.properties?.reason_code?.enum ?? [];
+}
+
+async function copy(relative, destination) {
+  const source = join(root, relative);
+  const target = join(output, destination);
+  const bytes = await readFile(source);
+  await mkdir(resolve(target, ".."), { recursive: true });
+  await copyFile(source, target);
+  return {
+    path: destination,
+    bytes: bytes.length,
+    sha256: sha256(bytes),
+  };
+}
+
+await mkdir(output, { recursive: true });
+const files = [];
+for (const [name, version, expectedCodes] of schemas) {
+  const source = join(root, "contracts", name);
+  const schema = JSON.parse(await readFile(source, "utf8"));
+  if (schema.$schema !== "https://json-schema.org/draft/2020-12/schema") {
+    throw new Error(`${name}: unsupported JSON Schema dialect`);
+  }
+  if (schema.properties?.schema_version?.const !== version) {
+    throw new Error(`${name}: schema version mismatch`);
+  }
+  if (schema.additionalProperties !== false || !schema.required?.includes("signature")) {
+    throw new Error(`${name}: signed closed-object contract required`);
+  }
+  if (JSON.stringify(reasonCodes(schema)) !== JSON.stringify(expectedCodes)) {
+    throw new Error(`${name}: reason-code catalog drift`);
+  }
+  files.push(await copy(`contracts/${name}`, `schemas/${name}`));
+}
+
+for (const name of examples) {
+  const example = JSON.parse(await readFile(join(root, "contracts", "examples", name), "utf8"));
+  if (example.signature?.algorithm !== "ed25519" || example.signature?.canonicalization !== "oath-json-v1") {
+    throw new Error(`${name}: missing supported detached signature`);
+  }
+  files.push(await copy(`contracts/examples/${name}`, `examples/${name}`));
+}
+
+files.push(await copy("contracts/oath-contracts.ts", "types/oath-contracts.ts"));
+files.push(await copy("contracts/registry-openapi.yaml", "openapi/registry-openapi.yaml"));
+files.push(await copy("contracts/README.md", "README.md"));
+files.sort((left, right) => left.path.localeCompare(right.path));
+
+const commit = process.env.OATH_CONTRACT_COMMIT
+  ?? process.env.GITHUB_SHA
+  ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
+if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`invalid contract commit: ${commit}`);
+
+const manifest = {
+  schema_version: 1,
+  bundle: "oath-agent-contracts",
+  source_commit: commit,
+  contract_versions: {
+    ExecAssessment: 3,
+    PublishAssessment: 2,
+    RegistryVerdict: 1,
+  },
+  signature: {
+    document_algorithm: "ed25519",
+    canonicalization: "oath-json-v1",
+    distribution_provenance: "GitHub artifact attestation",
+  },
+  reason_codes: schemas.flatMap(([, , codes]) => codes),
+  files,
+};
+const manifestBytes = Buffer.from(`${JSON.stringify(manifest, null, 2)}\n`);
+await writeFile(join(output, "contract-manifest.json"), manifestBytes);
+const checksums = [
+  ...files.map((file) => `${file.sha256}  ${file.path}`),
+  `${sha256(manifestBytes)}  contract-manifest.json`,
+].join("\n");
+await writeFile(join(output, "SHA256SUMS"), `${checksums}\n`);
+await writeFile(
+  join(output, "contract-manifest.json.sha256"),
+  `${sha256(manifestBytes)}  contract-manifest.json\n`,
+);
+console.log(JSON.stringify({ output, source_commit: commit, files: files.length }, null, 2));

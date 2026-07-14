@@ -58,6 +58,11 @@ Optional integrations are fail-closed configuration pairs:
 It defaults to 64 MiB and accepts 1 MiB through 1 GiB. Because tarballs are
 base64 encoded in the current beta API, usable tarball bytes are lower than the
 HTTP limit. Enforce a matching authenticated route limit at the reverse proxy.
+`OATH_REGISTRY_REQUESTS_PER_MINUTE` defaults to 6,000 and is enforced through a
+PostgreSQL atomic window keyed by bearer-token hash (or the anonymous bucket).
+`OATH_REGISTRY_MAX_PENDING_STAGES` defaults to 100 and is enforced atomically
+per organization. Both values must be positive. The reverse proxy should still
+apply connection and bandwidth controls.
 
 ## Bootstrap and access
 
@@ -113,10 +118,10 @@ paths after every production revocation and record the transparency checkpoint.
 - `GET /-/oath/transparency/checkpoint` returns the signed current Merkle root.
 - Core package mutations write audit intent transactionally to a PostgreSQL
   outbox. The retrying worker appends idempotent signed hash-chain events.
-- The checkpoint and inclusion endpoints expose Merkle roots and sibling
-  proofs. The consistency endpoint currently returns a complete leaf bundle,
-  which is independently recomputable but explicitly not a compact RFC 6962
-  proof or an externally witnessed checkpoint.
+- The checkpoint and inclusion endpoints expose domain-separated Merkle roots
+  and sibling proofs. The consistency endpoint returns a compact prefix/suffix
+  frontier that reconstructs both historical and current roots in logarithmic
+  space. Checkpoints are not yet externally witnessed.
 - `GET /v1/security/osv` exposes quarantined public packages in OSV shape and
   excludes private package identities.
 
@@ -144,8 +149,7 @@ failover.
 - OIDC membership exchange selects one organization per subject.
 - Non-package account and billing audit events have not all migrated to the
   transactional outbox yet.
-- Compact consistency proofs, external witnesses, KMS signing, and Rekor-backed
-  attestations remain GA work.
+- External witnesses, KMS signing, and Rekor-backed attestations remain GA work.
 - Service SLOs, restore targets, revocation propagation, external security
   review, and design-partner adoption have not yet met the GA gates.
 

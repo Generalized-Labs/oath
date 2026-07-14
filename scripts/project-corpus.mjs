@@ -11,6 +11,8 @@ import { analyzeLockMutation } from "./lock-mutation.mjs";
 const command = process.argv[2] ?? "validate";
 const npmReference = "11.12.1";
 const nodeReference = "24.13.0";
+const projectTarget = 250;
+const projectsPerCategory = 25;
 const categories = [
   "frameworks-applications",
   "build-tools",
@@ -74,11 +76,11 @@ async function runReferenceInstall(packageRoot, workspaceRoot, home) {
   return { lock, install, npmDir };
 }
 
-function validateManifest(manifest) {
+function validateManifest(manifest, expectedTarget = projectTarget, expectedPerCategory = projectsPerCategory) {
   if (manifest.schema_version !== 2 || manifest.npm !== npmReference || manifest.node !== nodeReference || !Array.isArray(manifest.projects)) {
     throw new Error("invalid pinned project corpus header");
   }
-  if (manifest.projects.length !== 100) throw new Error(`expected 100 pinned projects, found ${manifest.projects.length}`);
+  if (manifest.projects.length !== expectedTarget) throw new Error(`expected ${expectedTarget} pinned projects, found ${manifest.projects.length}`);
   const repositories = new Set();
   const counts = Object.fromEntries(categories.map(category => [category, 0]));
   for (const project of manifest.projects) {
@@ -94,7 +96,7 @@ function validateManifest(manifest) {
     counts[project.category]++;
   }
   for (const [category, count] of Object.entries(counts)) {
-    if (count !== 10) throw new Error(`${category}: expected 10 projects, found ${count}`);
+    if (count !== expectedPerCategory) throw new Error(`${category}: expected ${expectedPerCategory} projects, found ${count}`);
   }
   return counts;
 }
@@ -126,12 +128,20 @@ async function preflight() {
   const output = resolve(process.env.OATH_PROJECT_PREFLIGHT_OUTPUT ?? "compat-results/preflight/projects.json");
   const outputDir = resolve(output, "..");
   await mkdir(join(outputDir, "locks"), { recursive: true });
-  const candidateDocument = await readJson(candidatesPath);
-  const candidates = Array.isArray(candidateDocument)
+  const candidateDocuments = [await readJson(candidatesPath)];
+  const additionsPath = resolve("tests/compat/project-candidate-additions.json");
+  try { candidateDocuments.push(await readJson(additionsPath)); }
+  catch (error) { if (error?.code !== "ENOENT") throw error; }
+  const candidates = candidateDocuments.flatMap(candidateDocument => Array.isArray(candidateDocument)
     ? candidateDocument
     : Object.entries(candidateDocument.categories).flatMap(([category, repositories]) =>
         repositories.map(repository => ({ repository, subdirectory: ".", category }))
-      );
+      ));
+  const identities = new Set();
+  for (const candidate of candidates) {
+    if (identities.has(candidate.repository)) throw new Error(`duplicate candidate repository ${candidate.repository}`);
+    identities.add(candidate.repository);
+  }
   const shard = Number(process.env.OATH_PROJECT_SHARD ?? 0);
   const shards = Number(process.env.OATH_PROJECT_SHARDS ?? 1);
   const npmVersion = run("npm", ["--version"], process.cwd()).stdout.trim();
@@ -366,7 +376,7 @@ async function aggregate() {
       if (reason) failures.push({ repository: project.repository, reason });
     }
   }
-  const summary = { schema_version: 1, target: 100, exact_equivalents: 100 - failures.length, failures };
+  const summary = { schema_version: 1, target: projectTarget, exact_equivalents: projectTarget - failures.length, failures };
   const output = resolve(process.env.OATH_PROJECT_AGGREGATE_OUTPUT ?? join(resultDir, "project-summary.json"));
   await writeFile(output, JSON.stringify(summary, null, 2));
   console.log(JSON.stringify(summary, null, 2));
@@ -377,6 +387,9 @@ async function mergePreflight() {
   const input = resolve(process.env.OATH_PROJECT_PREFLIGHT_DIR ?? "compat-results/preflight");
   const output = resolve(process.env.OATH_PROJECT_MANIFEST ?? "tests/compat/projects.lock.json");
   const files = (await readdir(input)).filter(name => /^preflight-\d+\.json$/.test(name));
+  const baseline = await readJson(resolve("tests/compat/projects.lock.json"));
+  validateManifest(baseline, 100, 10);
+  await validatePinnedLocks(baseline);
   const results = [];
   for (const file of files) {
     const artifact = await readJson(join(input, file));
@@ -386,7 +399,6 @@ async function mergePreflight() {
   const unique = new Map(eligible.map(({ eligible: _, ...project }) => [project.repository, project]));
   const projects = [];
   const finalLockDir = resolve("tests/compat/project-locks");
-  await rm(finalLockDir, { recursive: true, force: true });
   await mkdir(finalLockDir, { recursive: true });
   const shortages = [];
   const categoryResults = [];
@@ -404,12 +416,17 @@ async function mergePreflight() {
       rejected: categoryCandidates.length - categoryEligible.length,
       rejection_reasons: reasons
     });
-    const selected = [...unique.values()]
+    const retained = baseline.projects.filter(project => project.category === category);
+    const retainedRepositories = new Set(retained.map(project => project.repository));
+    const selectedNew = [...unique.values()]
       .filter(project => project.category === category)
+      .filter(project => !retainedRepositories.has(project.repository))
       .sort((left, right) => left.candidate_index - right.candidate_index)
-      .slice(0, 10);
-    if (selected.length !== 10) shortages.push({ category, eligible: selected.length, required: 10 });
-    for (const project of selected) {
+      .slice(0, projectsPerCategory - retained.length);
+    const selected = [...retained, ...selectedNew];
+    if (selected.length !== projectsPerCategory) shortages.push({ category, eligible: selected.length, required: projectsPerCategory });
+    projects.push(...retained);
+    for (const project of selectedNew) {
       const { candidate_index: _, lock_artifact: lockArtifact, ...projectFields } = project;
       if (!/^locks\/[A-Za-z0-9_.-]+\.json\.gz$/.test(lockArtifact)) {
         throw new Error(`${project.repository}: invalid preflight lock artifact`);

@@ -18,6 +18,83 @@ pub enum Decision {
     Unknown,
 }
 
+impl Decision {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Allow => "allow",
+            Self::Deny => "deny",
+            Self::Review => "review",
+            Self::Unknown => "unknown",
+        }
+    }
+}
+
+impl std::fmt::Display for Decision {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum ReasonCode {
+    #[serde(rename = "OATH_EXEC_ALLOWED")]
+    ExecAllowed,
+    #[serde(rename = "OATH_EXEC_GRADE_BELOW_REQUIRED")]
+    ExecGradeBelowRequired,
+    #[serde(rename = "OATH_EXEC_RELEASE_TOO_NEW")]
+    ExecReleaseTooNew,
+    #[serde(rename = "OATH_PUBLISH_ALLOWED")]
+    PublishAllowed,
+    #[serde(rename = "OATH_PUBLISH_SECRET_DETECTED")]
+    PublishSecretDetected,
+    #[serde(rename = "OATH_REGISTRY_ALLOWED")]
+    RegistryAllowed,
+    #[serde(rename = "OATH_REGISTRY_CRITICAL_BEHAVIOR")]
+    RegistryCriticalBehavior,
+    #[serde(rename = "OATH_REGISTRY_REVIEW_REQUIRED")]
+    RegistryReviewRequired,
+    #[serde(rename = "OATH_REGISTRY_SECRET_DETECTED")]
+    RegistrySecretDetected,
+    #[serde(rename = "OATH_REGISTRY_UNKNOWN")]
+    RegistryUnknown,
+}
+
+impl ReasonCode {
+    pub const ALL: [Self; 10] = [
+        Self::ExecAllowed,
+        Self::ExecGradeBelowRequired,
+        Self::ExecReleaseTooNew,
+        Self::PublishAllowed,
+        Self::PublishSecretDetected,
+        Self::RegistryAllowed,
+        Self::RegistryCriticalBehavior,
+        Self::RegistryReviewRequired,
+        Self::RegistrySecretDetected,
+        Self::RegistryUnknown,
+    ];
+
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::ExecAllowed => "OATH_EXEC_ALLOWED",
+            Self::ExecGradeBelowRequired => "OATH_EXEC_GRADE_BELOW_REQUIRED",
+            Self::ExecReleaseTooNew => "OATH_EXEC_RELEASE_TOO_NEW",
+            Self::PublishAllowed => "OATH_PUBLISH_ALLOWED",
+            Self::PublishSecretDetected => "OATH_PUBLISH_SECRET_DETECTED",
+            Self::RegistryAllowed => "OATH_REGISTRY_ALLOWED",
+            Self::RegistryCriticalBehavior => "OATH_REGISTRY_CRITICAL_BEHAVIOR",
+            Self::RegistryReviewRequired => "OATH_REGISTRY_REVIEW_REQUIRED",
+            Self::RegistrySecretDetected => "OATH_REGISTRY_SECRET_DETECTED",
+            Self::RegistryUnknown => "OATH_REGISTRY_UNKNOWN",
+        }
+    }
+}
+
+impl std::fmt::Display for ReasonCode {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct DetachedSignature {
     pub algorithm: String,
@@ -62,7 +139,7 @@ pub struct PackageEvidence {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct PolicyDecision {
     pub decision: Decision,
-    pub reason_code: String,
+    pub reason_code: ReasonCode,
     pub grade: String,
     pub score: u8,
 }
@@ -94,13 +171,57 @@ pub struct ExecAssessmentV3 {
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishFile {
+    pub path: String,
+    pub bytes: u64,
+    pub sha256: String,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishDiff {
+    pub previous_version: String,
+    pub added_files: Vec<String>,
+    pub removed_files: Vec<String>,
+    pub changed_files: Vec<String>,
+    pub capabilities_added: Vec<String>,
+    pub capabilities_removed: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PublishAssessmentV2 {
+    pub schema_version: u32,
+    pub generated_at: u64,
+    pub expires_at: u64,
+    pub name: String,
+    pub version: String,
+    pub tag: String,
+    pub access: Option<String>,
+    pub package_digest: String,
+    pub unpacked_bytes: u64,
+    pub files: Vec<PublishFile>,
+    pub dependency_count: usize,
+    pub lifecycle_hooks: Vec<String>,
+    pub capabilities: Vec<String>,
+    pub source_available: bool,
+    pub secret_findings: Vec<String>,
+    pub decision: Decision,
+    pub reason_code: ReasonCode,
+    pub previous_release: Option<PublishDiff>,
+    pub policy_digest: String,
+    pub evidence_digest: String,
+    pub rule_bundle_version: String,
+    pub limitations: Vec<String>,
+    pub signature: Option<DetachedSignature>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegistryVerdictV1 {
     pub schema_version: u32,
     pub generated_at: u64,
     pub expires_at: u64,
     pub package: PackageIdentity,
     pub decision: Decision,
-    pub reason_code: String,
+    pub reason_code: ReasonCode,
     pub risk_score: u8,
     pub package_digest: String,
     pub assessment_digest: String,
@@ -237,6 +358,17 @@ pub fn verify_exec_assessment(value: &ExecAssessmentV3) -> Result<(), ContractEr
     verify_json(&unsigned, &signature)
 }
 
+pub fn verify_publish_assessment(value: &PublishAssessmentV2) -> Result<(), ContractError> {
+    let signature = value
+        .signature
+        .as_ref()
+        .ok_or(ContractError::InvalidSignature)?
+        .clone();
+    let mut unsigned = value.clone();
+    unsigned.signature = None;
+    verify_json(&unsigned, &signature)
+}
+
 pub fn verify_registry_verdict(value: &RegistryVerdictV1) -> Result<(), ContractError> {
     let signature = value
         .signature
@@ -303,6 +435,21 @@ mod tests {
     }
 
     #[test]
+    fn reason_codes_have_stable_wire_values() {
+        for code in ReasonCode::ALL {
+            assert_eq!(
+                serde_json::to_string(&code).unwrap(),
+                format!("\"{}\"", code.as_str())
+            );
+            assert_eq!(
+                serde_json::from_str::<ReasonCode>(&format!("\"{}\"", code.as_str())).unwrap(),
+                code
+            );
+        }
+        assert!(serde_json::from_str::<ReasonCode>("\"OATH_FUTURE_CODE\"").is_err());
+    }
+
+    #[test]
     fn published_contract_files_parse_and_keep_their_versions() {
         let contracts = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts");
         for (file, version) in [
@@ -338,5 +485,28 @@ mod tests {
                 "missing OpenAPI path {path}"
             );
         }
+    }
+
+    #[test]
+    fn published_signed_examples_verify() {
+        let examples =
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../contracts/examples");
+        let exec: ExecAssessmentV3 = serde_json::from_slice(
+            &std::fs::read(examples.join("exec-assessment-v3.signed.json")).unwrap(),
+        )
+        .unwrap();
+        verify_exec_assessment(&exec).unwrap();
+
+        let publish: PublishAssessmentV2 = serde_json::from_slice(
+            &std::fs::read(examples.join("publish-assessment-v2.signed.json")).unwrap(),
+        )
+        .unwrap();
+        verify_publish_assessment(&publish).unwrap();
+
+        let registry: RegistryVerdictV1 = serde_json::from_slice(
+            &std::fs::read(examples.join("registry-verdict-v1.signed.json")).unwrap(),
+        )
+        .unwrap();
+        verify_registry_verdict(&registry).unwrap();
     }
 }

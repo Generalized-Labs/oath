@@ -230,6 +230,9 @@ enum Commands {
         /// Deny outbound network access in the selected sandbox.
         #[arg(long)]
         deny_network: bool,
+        /// Permit the weaker Node permission sandbox when native containment is unavailable.
+        #[arg(long)]
+        allow_degraded_sandbox: bool,
         /// Persist an approval bound to this exact integrity, capability set, and sandbox policy.
         #[arg(long)]
         remember: bool,
@@ -411,6 +414,7 @@ async fn main() -> Result<()> {
             sandbox,
             sandbox_mode,
             deny_network,
+            allow_degraded_sandbox,
             remember,
         } => {
             cmd_exec(
@@ -425,6 +429,7 @@ async fn main() -> Result<()> {
                 sandbox,
                 sandbox_mode,
                 deny_network,
+                allow_degraded_sandbox,
                 remember,
             )
             .await?;
@@ -3010,11 +3015,13 @@ fn previous_release_diff(
 struct ExecSandboxDecision {
     requested_mode: ExecSandboxMode,
     effective_mode: ExecSandboxMode,
+    agent_mode: bool,
 }
 
 fn resolve_exec_sandbox(
     sandbox: bool,
     sandbox_mode: ExecSandboxMode,
+    allow_degraded_sandbox: bool,
 ) -> Result<ExecSandboxDecision> {
     let agent_mode = std::env::var("OATH_AGENT_MODE")
         .map(|value| {
@@ -3037,40 +3044,84 @@ fn resolve_exec_sandbox(
         sandbox_mode
     };
 
-    let effective_mode = match requested_mode {
-        ExecSandboxMode::Off => ExecSandboxMode::Off,
-        ExecSandboxMode::Node => {
-            ensure_node_permission_sandbox()?;
-            ExecSandboxMode::Node
-        }
-        ExecSandboxMode::Native => {
-            let capabilities = oath_sandbox::verified_native_capabilities();
-            if !capabilities.available {
-                anyhow::bail!(
-                    capabilities
-                        .degraded_reason
-                        .unwrap_or_else(|| "native sandbox unavailable".into())
-                )
-            }
-            ExecSandboxMode::Native
-        }
-        ExecSandboxMode::Auto => {
-            if node_permission_flag().is_some() {
-                ExecSandboxMode::Node
-            } else if agent_mode || sandbox {
-                anyhow::bail!(
-                    "no supported exec sandbox is available: install a Node version with permission flags or use --sandbox-mode off"
-                );
-            } else {
-                ExecSandboxMode::Off
-            }
-        }
-    };
+    if requested_mode == ExecSandboxMode::Off {
+        return Ok(ExecSandboxDecision {
+            requested_mode,
+            effective_mode: ExecSandboxMode::Off,
+            agent_mode,
+        });
+    }
+
+    let effective_mode = resolve_exec_sandbox_capabilities(
+        requested_mode,
+        allow_degraded_sandbox,
+        node_permission_flag().is_some(),
+        &oath_sandbox::verified_native_capabilities(),
+    )?;
 
     Ok(ExecSandboxDecision {
         requested_mode,
         effective_mode,
+        agent_mode,
     })
+}
+
+fn resolve_exec_sandbox_capabilities(
+    requested_mode: ExecSandboxMode,
+    allow_degraded_sandbox: bool,
+    node_permissions_available: bool,
+    native: &oath_sandbox::BackendCapabilities,
+) -> Result<ExecSandboxMode> {
+    let native_complete = native.available
+        && native.filesystem_isolation
+        && native.network_isolation
+        && native.process_isolation
+        && native.resource_limits;
+    match requested_mode {
+        ExecSandboxMode::Off => Ok(ExecSandboxMode::Off),
+        ExecSandboxMode::Native => {
+            anyhow::ensure!(
+                native_complete,
+                "native sandbox unavailable or incomplete: {}",
+                native
+                    .degraded_reason
+                    .as_deref()
+                    .unwrap_or("required controls did not pass the runtime probe")
+            );
+            Ok(ExecSandboxMode::Native)
+        }
+        ExecSandboxMode::Node => {
+            anyhow::ensure!(
+                allow_degraded_sandbox,
+                "Node permissions do not provide process or resource isolation; pass --allow-degraded-sandbox only when policy explicitly accepts that limitation"
+            );
+            anyhow::ensure!(
+                node_permissions_available,
+                "Node permission sandbox is unavailable on this Node runtime"
+            );
+            Ok(ExecSandboxMode::Node)
+        }
+        ExecSandboxMode::Auto => {
+            if native_complete {
+                Ok(ExecSandboxMode::Native)
+            } else if allow_degraded_sandbox && node_permissions_available {
+                Ok(ExecSandboxMode::Node)
+            } else {
+                anyhow::bail!(
+                    "verified native containment is unavailable: {}; Oath refused to downgrade automatically{}",
+                    native
+                        .degraded_reason
+                        .as_deref()
+                        .unwrap_or("required controls did not pass the runtime probe"),
+                    if node_permissions_available {
+                        "; pass --allow-degraded-sandbox only when policy accepts Node's missing process and resource isolation"
+                    } else {
+                        ""
+                    }
+                )
+            }
+        }
+    }
 }
 
 fn ensure_node_permission_sandbox() -> Result<&'static str> {
@@ -3162,6 +3213,7 @@ async fn cmd_exec(
     sandbox: bool,
     sandbox_mode: ExecSandboxMode,
     deny_network: bool,
+    allow_degraded_sandbox: bool,
     remember: bool,
 ) -> Result<()> {
     use oath_analyze::{
@@ -3175,7 +3227,8 @@ async fn cmd_exec(
         "unsupported exec assessment schema {schema_version}; supported versions are 2 and 3"
     );
     let (pkg_name, pkg_version) = parse_package_spec(package);
-    let sandbox_decision = resolve_exec_sandbox(sandbox, sandbox_mode)?;
+    let sandbox_decision = resolve_exec_sandbox(sandbox, sandbox_mode, allow_degraded_sandbox)?;
+    let effective_deny_network = deny_network || sandbox_decision.agent_mode;
 
     // Local node_modules/.bin fast path: already installed by the project (trusted).
     let local_bin = PathBuf::from("node_modules/.bin").join(&pkg_name);
@@ -3299,7 +3352,7 @@ async fn cmd_exec(
                     },
                     policy: exec_assessment::PolicyDecision {
                         decision: "block",
-                        reason_code: "OATH_EXEC_RELEASE_TOO_NEW",
+                        reason_code: oath_contracts::ReasonCode::ExecReleaseTooNew,
                         grade: "unknown".into(),
                         score: 0,
                     },
@@ -3311,7 +3364,8 @@ async fn cmd_exec(
                     "min_age": min_age,
                     "minimum_age_days": min_days,
                     "sandbox_mode": sandbox_decision.effective_mode.as_str(),
-                    "deny_network": deny_network,
+                    "deny_network": effective_deny_network,
+                    "allow_degraded_sandbox": allow_degraded_sandbox,
                 }))?;
                 let assessment_value = if schema_version == 2 {
                     serde_json::to_value(&assessment)?
@@ -3439,7 +3493,7 @@ async fn cmd_exec(
 
     let mut sandbox_plan = (sandbox_decision.effective_mode != ExecSandboxMode::Off)
         .then(|| oath_sandbox::SandboxPlan::strict(pkg_name.clone(), exec_path.clone()));
-    if !deny_network
+    if !effective_deny_network
         && caps.network
         && let Some(plan) = &mut sandbox_plan
     {
@@ -3489,9 +3543,9 @@ async fn cmd_exec(
         policy: exec_assessment::PolicyDecision {
             decision: if grade_blocked { "block" } else { "allow" },
             reason_code: if grade_blocked {
-                "OATH_EXEC_GRADE_BELOW_REQUIRED"
+                oath_contracts::ReasonCode::ExecGradeBelowRequired
             } else {
-                "OATH_EXEC_ALLOWED"
+                oath_contracts::ReasonCode::ExecAllowed
             },
             grade: score.grade.to_string(),
             score: score.score,
@@ -3525,7 +3579,7 @@ async fn cmd_exec(
         integrity: info.dist.integrity.clone().unwrap_or_default(),
         capabilities: perms.iter().map(|p| (*p).to_string()).collect(),
         sandbox_backend: assessment.sandbox.backend.clone(),
-        deny_network,
+        deny_network: effective_deny_network,
     };
     let approval_store = approvals::ApprovalStore::default_store()?;
     let previously_approved =
@@ -3536,7 +3590,8 @@ async fn cmd_exec(
             "require_grade": require_grade,
             "min_age": min_age,
             "sandbox_mode": sandbox_decision.effective_mode.as_str(),
-            "deny_network": deny_network,
+            "deny_network": effective_deny_network,
+            "allow_degraded_sandbox": allow_degraded_sandbox,
         }))?;
         let assessment_value = if schema_version == 2 {
             serde_json::to_value(&assessment)?
@@ -3568,6 +3623,8 @@ async fn cmd_exec(
             "permissions": perms,
             "sandbox_mode": sandbox_decision.requested_mode.as_str(),
             "sandbox_effective": sandbox_decision.effective_mode.as_str(),
+            "sandbox_degraded_allowed": allow_degraded_sandbox,
+            "network_denied": effective_deny_network,
             "verdict": format!("{:?}", report.overall_risk),
             "findings": serious,
             "decision": if grade_blocked { "block" } else { "allow" },
@@ -4321,7 +4378,7 @@ fn cmd_transfer(action: TransferAction) -> Result<()> {
                 publish_assessment::assess(&root, &files, &package, &tag, access.as_deref())?;
             publish_assessment::attach_previous_release(&root, &mut assessment)?;
             anyhow::ensure!(
-                assessment.decision == "allow",
+                assessment.decision == oath_contracts::Decision::Allow,
                 "oath transfer: blocked by {}",
                 assessment.reason_code
             );
@@ -4582,7 +4639,7 @@ async fn cmd_publish(
         }
     }
     anyhow::ensure!(
-        assessment.decision == "allow",
+        assessment.decision == oath_contracts::Decision::Allow,
         "oath publish: blocked by {}",
         assessment.reason_code
     );
@@ -4985,6 +5042,75 @@ fn cmd_log(tail: usize) -> Result<()> {
 mod tests {
     use super::*;
     use oath_resolve::DepNode;
+
+    fn sandbox_capabilities(available: bool) -> oath_sandbox::BackendCapabilities {
+        oath_sandbox::BackendCapabilities {
+            backend: "test-native".into(),
+            available,
+            filesystem_isolation: available,
+            network_isolation: available,
+            process_isolation: available,
+            resource_limits: available,
+            degraded_reason: (!available).then(|| "test backend unavailable".into()),
+        }
+    }
+
+    #[test]
+    fn exec_auto_prefers_complete_native_containment() {
+        let mode = resolve_exec_sandbox_capabilities(
+            ExecSandboxMode::Auto,
+            true,
+            true,
+            &sandbox_capabilities(true),
+        )
+        .unwrap();
+        assert_eq!(mode, ExecSandboxMode::Native);
+    }
+
+    #[test]
+    fn exec_auto_refuses_implicit_degraded_containment() {
+        let error = resolve_exec_sandbox_capabilities(
+            ExecSandboxMode::Auto,
+            false,
+            true,
+            &sandbox_capabilities(false),
+        )
+        .unwrap_err();
+        assert!(error.to_string().contains("refused to downgrade"));
+    }
+
+    #[test]
+    fn exec_node_requires_explicit_degraded_policy() {
+        assert!(
+            resolve_exec_sandbox_capabilities(
+                ExecSandboxMode::Node,
+                false,
+                true,
+                &sandbox_capabilities(false),
+            )
+            .is_err()
+        );
+        assert_eq!(
+            resolve_exec_sandbox_capabilities(
+                ExecSandboxMode::Node,
+                true,
+                true,
+                &sandbox_capabilities(false),
+            )
+            .unwrap(),
+            ExecSandboxMode::Node
+        );
+    }
+
+    #[test]
+    fn exec_native_rejects_incomplete_capability_claims() {
+        let mut capabilities = sandbox_capabilities(true);
+        capabilities.process_isolation = false;
+        assert!(
+            resolve_exec_sandbox_capabilities(ExecSandboxMode::Native, false, true, &capabilities,)
+                .is_err()
+        );
+    }
 
     #[test]
     fn parses_npm_and_node_stage_versions() {

@@ -1,5 +1,17 @@
 export type OathDecision = "allow" | "deny" | "review" | "unknown";
 
+export type OathReasonCode =
+  | "OATH_EXEC_ALLOWED"
+  | "OATH_EXEC_GRADE_BELOW_REQUIRED"
+  | "OATH_EXEC_RELEASE_TOO_NEW"
+  | "OATH_PUBLISH_ALLOWED"
+  | "OATH_PUBLISH_SECRET_DETECTED"
+  | "OATH_REGISTRY_ALLOWED"
+  | "OATH_REGISTRY_CRITICAL_BEHAVIOR"
+  | "OATH_REGISTRY_REVIEW_REQUIRED"
+  | "OATH_REGISTRY_SECRET_DETECTED"
+  | "OATH_REGISTRY_UNKNOWN";
+
 export interface DetachedSignature {
   algorithm: "ed25519";
   canonicalization: "oath-json-v1";
@@ -34,7 +46,7 @@ export interface ExecAssessmentV3 {
     limitations: string[];
     version_diff: Record<string, unknown> | null;
   };
-  policy: { decision: OathDecision; reason_code: string; grade: string; score: number };
+  policy: { decision: OathDecision; reason_code: Extract<OathReasonCode, `OATH_EXEC_${string}`>; grade: string; score: number };
   sandbox: {
     backend: string;
     available: boolean;
@@ -67,7 +79,7 @@ export interface PublishAssessmentV2 {
   source_available: boolean;
   secret_findings: string[];
   decision: OathDecision;
-  reason_code: string;
+  reason_code: Extract<OathReasonCode, `OATH_PUBLISH_${string}`>;
   previous_release: {
     previous_version: string;
     added_files: string[];
@@ -89,7 +101,7 @@ export interface RegistryVerdictV1 {
   expires_at: number;
   package: PackageIdentity;
   decision: OathDecision;
-  reason_code: string;
+  reason_code: Extract<OathReasonCode, `OATH_REGISTRY_${string}`>;
   risk_score: number;
   package_digest: string;
   assessment_digest: string;

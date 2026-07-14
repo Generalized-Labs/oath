@@ -77,12 +77,16 @@ impl PackageScanner {
                 continue;
             }
 
-            // Skip known non-threatening paths
-            let path_str = path.to_string_lossy();
-            if path_str.contains("test")
-                || path_str.contains("spec")
-                || path_str.contains("__tests__")
-            {
+            let relative_path = path
+                .strip_prefix(package_dir)
+                .unwrap_or(path)
+                .to_string_lossy()
+                .replace('\\', "/");
+
+            // Test fixtures are not package runtime code. Match only package-relative
+            // components and filename conventions; an absolute parent such as
+            // `/tmp/detection-test` must never make the whole package disappear.
+            if is_test_source(&relative_path) {
                 continue;
             }
 
@@ -95,12 +99,6 @@ impl PackageScanner {
             if source.len() > 500_000 {
                 continue;
             }
-
-            let relative_path = path
-                .strip_prefix(package_dir)
-                .unwrap_or(path)
-                .to_string_lossy()
-                .to_string();
 
             lines_scanned += source.lines().count();
             files_scanned += 1;
@@ -183,6 +181,20 @@ impl PackageScanner {
             verdict_reasons,
         })
     }
+}
+
+fn is_test_source(relative_path: &str) -> bool {
+    let normalized = relative_path.replace('\\', "/").to_ascii_lowercase();
+    let file_name = normalized.rsplit('/').next().unwrap_or(&normalized);
+    normalized.split('/').any(|component| {
+        matches!(
+            component,
+            "test" | "tests" | "__tests__" | "spec" | "specs" | "fixtures" | "__fixtures__"
+        )
+    }) || file_name.contains(".test.")
+        || file_name.contains(".spec.")
+        || file_name.starts_with("test-")
+        || file_name.starts_with("spec-")
 }
 
 fn merge_verdict(
@@ -541,4 +553,18 @@ pub fn detect_advanced_obfuscation(source: &str, relative_path: &str) -> Vec<Fin
     }
 
     findings
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::is_test_source;
+
+    #[test]
+    fn test_source_filter_uses_package_relative_conventions() {
+        assert!(!is_test_source("index.js"));
+        assert!(!is_test_source("latest/index.js"));
+        assert!(is_test_source("tests/index.js"));
+        assert!(is_test_source("src/parser.spec.ts"));
+        assert!(is_test_source("fixtures/payload.js"));
+    }
 }

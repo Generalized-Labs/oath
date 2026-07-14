@@ -85,6 +85,10 @@ impl PostgresControlPlane {
             .execute(&self.pool)
             .await
             .context("migrate GA foundation schema")?;
+        raw_sql(include_str!("../migrations/0003_limits.sql"))
+            .execute(&self.pool)
+            .await
+            .context("migrate registry limits schema")?;
         Ok(())
     }
 
@@ -147,8 +151,22 @@ impl PostgresControlPlane {
         stage: &StageRecord,
         event_key: &str,
         event: &Value,
-    ) -> Result<()> {
+        maximum_pending_stages: i64,
+    ) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
+        query("SELECT pg_advisory_xact_lock(hashtext($1))")
+            .bind(&stage.organization)
+            .execute(&mut *tx)
+            .await?;
+        let pending: i64 =
+            query_scalar("SELECT COUNT(*) FROM stages WHERE organization=$1 AND status='staged'")
+                .bind(&stage.organization)
+                .fetch_one(&mut *tx)
+                .await?;
+        if pending >= maximum_pending_stages {
+            tx.rollback().await?;
+            return Ok(false);
+        }
         query("INSERT INTO packages(name,organization,private,created_at) VALUES ($1,$2,$3,$4) ON CONFLICT (name) DO NOTHING")
             .bind(&stage.name).bind(&stage.organization).bind(stage.private).bind(stage.created_at as i64).execute(&mut *tx).await?;
         let package = query("SELECT organization,private FROM packages WHERE name=$1 FOR UPDATE")
@@ -174,7 +192,27 @@ impl PostgresControlPlane {
         query("INSERT INTO registry_outbox(event_key,event_json,available_at,created_at) VALUES ($1,$2,$3,$3)")
             .bind(event_key).bind(event).bind(crate::now() as i64).execute(&mut *tx).await?;
         tx.commit().await?;
-        Ok(())
+        Ok(true)
+    }
+
+    pub async fn consume_rate_limit(
+        &self,
+        subject_hash: &str,
+        bucket: &str,
+        maximum: i64,
+        window_seconds: i64,
+    ) -> Result<bool> {
+        let now = crate::now() as i64;
+        let window_start = now - now.rem_euclid(window_seconds);
+        let count: i64 = query_scalar(
+            "INSERT INTO registry_rate_limits(subject_hash,bucket,window_start,request_count) VALUES ($1,$2,$3,1) ON CONFLICT (subject_hash,bucket,window_start) DO UPDATE SET request_count=registry_rate_limits.request_count+1 RETURNING request_count",
+        )
+        .bind(subject_hash)
+        .bind(bucket)
+        .bind(window_start)
+        .fetch_one(&self.pool)
+        .await?;
+        Ok(count <= maximum)
     }
 
     pub async fn read_stage(&self, id: &str) -> Result<Option<StageRecord>> {
