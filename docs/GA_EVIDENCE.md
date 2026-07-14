@@ -33,10 +33,18 @@ logs/checksums.
   never count as passes.
 - Corpus manifest version 2 stores the exact compressed npm lockfile for each
   project. The harness verifies the decompressed digest, supplies identical
-  bytes to npm and Oath, and rejects lock mutation. This replaced the earlier
+  bytes to npm and Oath, uses lock-preserving `npm ci` for the frozen reference,
+  and rejects lock mutation. Generated fixtures separately retain ordinary
+  `npm install` differential coverage. This replaced the earlier
   hash-only design after exact-master run `29310661010` correctly blocked on
   Express and Ant Design lock drift caused by mutable registry resolution even
   though both npm/Oath trees were identical.
+- Exact-master run `29314277600` then exposed a second reproducibility flaw:
+  replaying Snowpack's frozen lock with `npm install` under a fresh cache changed
+  six `devOptional` flags to `dev`, despite an identical 46,695-entry dependency
+  tree. The run correctly failed. The corrected harness uses `npm ci`; the exact
+  Snowpack lock and tree passed locally, but a complete exact-commit CI run is
+  still required before release.
 - Next.js HEAD was replaced by the npm-eligible
   `NextJSTemplates/play-nextjs` commit
   `f0a5c55ef1d6198c41ac6354595adadc4c41b924`, which passed exact comparison.

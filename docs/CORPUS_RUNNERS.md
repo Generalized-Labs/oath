@@ -57,7 +57,9 @@ loss must be rerun and may never be counted as a compatibility pass.
 `tests/compat/projects.lock.json` binds every source commit to an exact,
 checked-in gzip-compressed npm lockfile under `tests/compat/project-locks/`.
 Corpus execution verifies the decompressed SHA-256 before either installer
-runs, gives npm and Oath the same bytes, and fails if npm mutates the pinned
-lock. Ordinary evidence runs never regenerate dependency resolution from
-mutable registry metadata. A corpus refresh emits new lock artifacts, but they
-become release inputs only through a reviewed source change.
+runs, gives npm and Oath the same bytes, and uses `npm ci` as the frozen npm
+reference. The run fails if npm mutates the pinned lock. Ordinary evidence runs
+never regenerate dependency resolution from mutable registry metadata. A corpus
+refresh emits new lock artifacts, validates each with `npm ci`, and makes them
+release inputs only through a reviewed source change. Generated fixture lanes
+continue to compare ordinary `npm install` behavior separately.
