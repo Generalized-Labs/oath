@@ -40,16 +40,29 @@ async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
 }
 
-async function prepareLockWorkspace(packageRoot, workspaceRoot) {
-  const lockDir = join(workspaceRoot, "lock");
-  await cp(packageRoot, lockDir, {
+async function prepareReferenceWorkspace(packageRoot, workspaceRoot, workspaceName) {
+  assert.ok(workspaceName === "lock" || workspaceName === "npm");
+  const workspace = join(workspaceRoot, workspaceName);
+  await cp(packageRoot, workspace, {
     recursive: true,
     filter(source) {
       const path = relative(packageRoot, source);
       return path !== ".git" && !path.startsWith(`.git${sep}`);
     }
   });
-  return lockDir;
+  return workspace;
+}
+
+async function runReferenceInstall(packageRoot, workspaceRoot, home) {
+  const lockDir = await prepareReferenceWorkspace(packageRoot, workspaceRoot, "lock");
+  const npmDir = await prepareReferenceWorkspace(packageRoot, workspaceRoot, "npm");
+  await mkdir(home, { recursive: true });
+  const env = { HOME: home, npm_config_cache: join(home, ".npm") };
+  const lock = run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--package-lock=true"], lockDir, env);
+  if (lock.status !== 0) return { lock, install: null, npmDir };
+  await cp(join(lockDir, "package-lock.json"), join(npmDir, "package-lock.json"));
+  const install = run("npm", ["install", "--ignore-scripts", "--package-lock=true"], npmDir, env);
+  return { lock, install, npmDir };
 }
 
 function validateManifest(manifest) {
@@ -105,25 +118,22 @@ async function preflight() {
       try { await readJson(join(packageRoot, "package.json")); }
       catch { results.push({ ...candidate, commit, eligible: false, reason: "missing_package_json" }); continue; }
       // npm derives a missing package name from the working-directory basename.
-      // Match npm-parity.mjs's stable `lock` workspace exactly so the raw lock
-      // digest remains reproducible for unnamed packages.
-      const lockDir = await prepareLockWorkspace(packageRoot, join(root, `lock-workspace-${index}`));
+      // Mirror npm-parity.mjs exactly: generate in `lock`, copy the generated
+      // lock into `npm`, install there, and hash the post-install npm lock.
+      const workspaceRoot = join(root, `reference-workspace-${index}`);
       const home = join(root, `home-${index}`);
-      await mkdir(home, { recursive: true });
-      const env = { HOME: home, npm_config_cache: join(home, ".npm") };
-      const lock = run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--package-lock=true"], lockDir, env);
+      const { lock, install, npmDir } = await runReferenceInstall(packageRoot, workspaceRoot, home);
       if (lock.status !== 0) {
         results.push({ ...candidate, commit, eligible: false, reason: "npm_lock_rejected", stderr: lock.stderr });
         continue;
       }
-      const install = run("npm", ["install", "--ignore-scripts", "--package-lock=true"], lockDir, env);
       if (install.status !== 0) {
         results.push({ ...candidate, commit, eligible: false, reason: "npm_install_rejected", stderr: install.stderr });
         continue;
       }
       let lockBytes;
       try {
-        lockBytes = await readFile(join(lockDir, "package-lock.json"));
+        lockBytes = await readFile(join(npmDir, "package-lock.json"));
       } catch (error) {
         if (error?.code !== "ENOENT") throw error;
         results.push({
@@ -160,13 +170,34 @@ async function selfTest() {
   try {
     const source = join(root, "62");
     await mkdir(join(source, ".git"), { recursive: true });
-    await writeFile(join(source, "package.json"), JSON.stringify({ private: true }));
+    await mkdir(join(source, "dep"), { recursive: true });
+    const packageDocument = { private: true, dependencies: { "fixture-dep": "file:./dep" } };
+    await writeFile(join(source, "package.json"), JSON.stringify(packageDocument));
+    await writeFile(join(source, "dep", "package.json"), JSON.stringify({ name: "fixture-dep", version: "1.0.0" }));
     await writeFile(join(source, ".git", "config"), "must not be copied");
-    const lockDir = await prepareLockWorkspace(source, join(root, "workspace"));
+    const workspaceRoot = join(root, "workspace");
+    const lockDir = await prepareReferenceWorkspace(source, workspaceRoot, "lock");
+    const npmDir = await prepareReferenceWorkspace(source, workspaceRoot, "npm");
     assert.equal(basename(lockDir), "lock");
-    assert.deepEqual(await readJson(join(lockDir, "package.json")), { private: true });
+    assert.equal(basename(npmDir), "npm");
+    assert.deepEqual(await readJson(join(lockDir, "package.json")), packageDocument);
+    assert.deepEqual(await readJson(join(npmDir, "package.json")), packageDocument);
     await assert.rejects(access(join(lockDir, ".git")));
-    console.log(JSON.stringify({ stable_lock_basename: true, git_metadata_excluded: true }, null, 2));
+    await assert.rejects(access(join(npmDir, ".git")));
+
+    const reference = await runReferenceInstall(source, join(root, "reference"), join(root, "home"));
+    assert.equal(reference.lock.status, 0);
+    assert.equal(reference.install.status, 0);
+    const expectedLockSha256 = sha256(await readFile(join(reference.npmDir, "package-lock.json")));
+    const parity = run(process.execPath, [resolve("scripts/npm-parity.mjs"), source], process.cwd(), { OATH_BIN: process.execPath });
+    const parityEvidence = JSON.parse(parity.stdout);
+    assert.equal(expectedLockSha256, parityEvidence.reference.lock_sha256);
+    console.log(JSON.stringify({
+      stable_lock_basename: true,
+      stable_npm_basename: true,
+      git_metadata_excluded: true,
+      parity_lock_digest_matched: true
+    }, null, 2));
   } finally {
     await rm(root, { recursive: true, force: true });
   }
