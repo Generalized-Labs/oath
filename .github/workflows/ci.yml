@@ -36,6 +36,8 @@ jobs:
           node-version: 24.13.0
       - name: Validate agent skill contracts and evals
         run: node scripts/validate-agent-skills.mjs
+      - name: Validate deterministic corpus lock workspace
+        run: node scripts/project-corpus.mjs self-test
 
   independent-behavioral:
     strategy:
