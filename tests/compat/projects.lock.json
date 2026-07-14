@@ -1,5 +1,5 @@
 {
-  "schema_version": 1,
+  "schema_version": 2,
   "npm": "11.12.1",
   "node": "24.13.0",
   "projects": [
@@ -9,7 +9,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "989e845765ef8c4b16d2c24bb9287f983371e1d71b2edb84cf80dde2ebda5320"
+      "expected_lock_sha256": "989e845765ef8c4b16d2c24bb9287f983371e1d71b2edb84cf80dde2ebda5320",
+      "lock_path": "tests/compat/project-locks/NextJSTemplates__play-nextjs--989e845765ef8c4b16d2c24bb9287f983371e1d71b2edb84cf80dde2ebda5320.json.gz"
     },
     {
       "repository": "solidjs/solid-start",
@@ -17,7 +18,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "af78e600baf60284d911f4727acbb5f4f1c9b7ca8ae1fb2e59ffbcfda8cc5d73"
+      "expected_lock_sha256": "af78e600baf60284d911f4727acbb5f4f1c9b7ca8ae1fb2e59ffbcfda8cc5d73",
+      "lock_path": "tests/compat/project-locks/solidjs__solid-start--af78e600baf60284d911f4727acbb5f4f1c9b7ca8ae1fb2e59ffbcfda8cc5d73.json.gz"
     },
     {
       "repository": "meteor/meteor",
@@ -25,7 +27,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "7262de28cc50a8d56f4990fdaf2ab1c12d6729b35474e2118f4926506bf5caa6"
+      "expected_lock_sha256": "7262de28cc50a8d56f4990fdaf2ab1c12d6729b35474e2118f4926506bf5caa6",
+      "lock_path": "tests/compat/project-locks/meteor__meteor--7262de28cc50a8d56f4990fdaf2ab1c12d6729b35474e2118f4926506bf5caa6.json.gz"
     },
     {
       "repository": "sahat/hackathon-starter",
@@ -33,7 +36,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "97df60932fbd27483eb224dfe5be27a1cde52c8cf7ba8e567b4dacceadd000d1"
+      "expected_lock_sha256": "97df60932fbd27483eb224dfe5be27a1cde52c8cf7ba8e567b4dacceadd000d1",
+      "lock_path": "tests/compat/project-locks/sahat__hackathon-starter--97df60932fbd27483eb224dfe5be27a1cde52c8cf7ba8e567b4dacceadd000d1.json.gz"
     },
     {
       "repository": "ixartz/Next-js-Boilerplate",
@@ -41,7 +45,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "f5dad5f35ea603ab0f60c50681346e3bb753ff53fe0125bd0ed511e55803f538"
+      "expected_lock_sha256": "f5dad5f35ea603ab0f60c50681346e3bb753ff53fe0125bd0ed511e55803f538",
+      "lock_path": "tests/compat/project-locks/ixartz__Next-js-Boilerplate--f5dad5f35ea603ab0f60c50681346e3bb753ff53fe0125bd0ed511e55803f538.json.gz"
     },
     {
       "repository": "Skolaczk/next-starter",
@@ -49,7 +54,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "7affbcebbf295402f107bd52944d9353575df45e0c0834f848023b86e27a026a"
+      "expected_lock_sha256": "7affbcebbf295402f107bd52944d9353575df45e0c0834f848023b86e27a026a",
+      "lock_path": "tests/compat/project-locks/Skolaczk__next-starter--7affbcebbf295402f107bd52944d9353575df45e0c0834f848023b86e27a026a.json.gz"
     },
     {
       "repository": "vercel-labs/botid-nextjs-starter",
@@ -57,7 +63,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "0d8a7203debbd43157cfb66fbfb76343c5042249a65863239f15ae9ff913d6bc"
+      "expected_lock_sha256": "0d8a7203debbd43157cfb66fbfb76343c5042249a65863239f15ae9ff913d6bc",
+      "lock_path": "tests/compat/project-locks/vercel-labs__botid-nextjs-starter--0d8a7203debbd43157cfb66fbfb76343c5042249a65863239f15ae9ff913d6bc.json.gz"
     },
     {
       "repository": "reddit/devvit-template-react",
@@ -65,7 +72,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "ea80867cf583fd2a6685907886f9df8c14e39c69a0f5a01c6873515902327583"
+      "expected_lock_sha256": "ea80867cf583fd2a6685907886f9df8c14e39c69a0f5a01c6873515902327583",
+      "lock_path": "tests/compat/project-locks/reddit__devvit-template-react--ea80867cf583fd2a6685907886f9df8c14e39c69a0f5a01c6873515902327583.json.gz"
     },
     {
       "repository": "CodelyTV/typescript-react_best_practices-vite_template",
@@ -73,7 +81,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "dbafa2fbd6d53da7a7b1e4dad1839455ec899e643002c037aa36ed625ad70067"
+      "expected_lock_sha256": "dbafa2fbd6d53da7a7b1e4dad1839455ec899e643002c037aa36ed625ad70067",
+      "lock_path": "tests/compat/project-locks/CodelyTV__typescript-react_best_practices-vite_template--dbafa2fbd6d53da7a7b1e4dad1839455ec899e643002c037aa36ed625ad70067.json.gz"
     },
     {
       "repository": "wbkd/react-starter",
@@ -81,15 +90,17 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
-      "expected_lock_sha256": "4d2098c94c971808ad2df67638df1bd8eee7f23b68c67ba9345c5fc123225802"
+      "expected_lock_sha256": "4d2098c94c971808ad2df67638df1bd8eee7f23b68c67ba9345c5fc123225802",
+      "lock_path": "tests/compat/project-locks/wbkd__react-starter--4d2098c94c971808ad2df67638df1bd8eee7f23b68c67ba9345c5fc123225802.json.gz"
     },
     {
       "repository": "webpack/webpack",
-      "commit": "175c32448a79d75339f45065240b36ad707bd2ac",
+      "commit": "dc576e6706812b8db2d3f4272ac15d0f28b51f77",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "9886d157922bfd9b5937d25c2150cbbb40aae216cdce93fb53d7a2b3b7709104"
+      "expected_lock_sha256": "9886d157922bfd9b5937d25c2150cbbb40aae216cdce93fb53d7a2b3b7709104",
+      "lock_path": "tests/compat/project-locks/webpack__webpack--9886d157922bfd9b5937d25c2150cbbb40aae216cdce93fb53d7a2b3b7709104.json.gz"
     },
     {
       "repository": "rollup/rollup",
@@ -97,15 +108,17 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "1829ad39620976935ead3e46f15ebe3a2fafa5d33820b97ff22fc64d259127b7"
+      "expected_lock_sha256": "1829ad39620976935ead3e46f15ebe3a2fafa5d33820b97ff22fc64d259127b7",
+      "lock_path": "tests/compat/project-locks/rollup__rollup--1829ad39620976935ead3e46f15ebe3a2fafa5d33820b97ff22fc64d259127b7.json.gz"
     },
     {
       "repository": "web-infra-dev/rspack",
-      "commit": "03465ca65d4d5b262c217c3f2438ef4fa27aeff8",
+      "commit": "10840b8ef13f81000c081287afa165154b6d6610",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "caf069a179100839943c616d38c701eee829f15e50653c0a640087fcbf853367"
+      "expected_lock_sha256": "caf069a179100839943c616d38c701eee829f15e50653c0a640087fcbf853367",
+      "lock_path": "tests/compat/project-locks/web-infra-dev__rspack--caf069a179100839943c616d38c701eee829f15e50653c0a640087fcbf853367.json.gz"
     },
     {
       "repository": "vercel/turborepo",
@@ -113,7 +126,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "6ecfa8117a295878d1e347efd6d153918d4512069854c39b79e0be18a0172ddc"
+      "expected_lock_sha256": "6ecfa8117a295878d1e347efd6d153918d4512069854c39b79e0be18a0172ddc",
+      "lock_path": "tests/compat/project-locks/vercel__turborepo--6ecfa8117a295878d1e347efd6d153918d4512069854c39b79e0be18a0172ddc.json.gz"
     },
     {
       "repository": "gulpjs/gulp",
@@ -121,7 +135,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "3c015d4ec391cc15a1019d1e5dff4d91ad23109bec5ae7b6810e78d7fe74bc0b"
+      "expected_lock_sha256": "3c015d4ec391cc15a1019d1e5dff4d91ad23109bec5ae7b6810e78d7fe74bc0b",
+      "lock_path": "tests/compat/project-locks/gulpjs__gulp--3c015d4ec391cc15a1019d1e5dff4d91ad23109bec5ae7b6810e78d7fe74bc0b.json.gz"
     },
     {
       "repository": "gruntjs/grunt",
@@ -129,7 +144,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "6438b2279008465f5bb36de62ce00a1a76288db3d02ae888ad4407f838a942f9"
+      "expected_lock_sha256": "6438b2279008465f5bb36de62ce00a1a76288db3d02ae888ad4407f838a942f9",
+      "lock_path": "tests/compat/project-locks/gruntjs__grunt--6438b2279008465f5bb36de62ce00a1a76288db3d02ae888ad4407f838a942f9.json.gz"
     },
     {
       "repository": "snowpackjs/snowpack",
@@ -137,7 +153,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "900e30d39dae8e4012b64915a785a52ea1d5f7858d7563d3522135d46dd568cf"
+      "expected_lock_sha256": "900e30d39dae8e4012b64915a785a52ea1d5f7858d7563d3522135d46dd568cf",
+      "lock_path": "tests/compat/project-locks/snowpackjs__snowpack--900e30d39dae8e4012b64915a785a52ea1d5f7858d7563d3522135d46dd568cf.json.gz"
     },
     {
       "repository": "egoist/tsup",
@@ -145,7 +162,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "d911a8d9cc54a2b37f69b61a25b9e1b796e4d6ada618929a55304a2d7e62ff96"
+      "expected_lock_sha256": "d911a8d9cc54a2b37f69b61a25b9e1b796e4d6ada618929a55304a2d7e62ff96",
+      "lock_path": "tests/compat/project-locks/egoist__tsup--d911a8d9cc54a2b37f69b61a25b9e1b796e4d6ada618929a55304a2d7e62ff96.json.gz"
     },
     {
       "repository": "unjs/unbuild",
@@ -153,7 +171,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "48dd8671e612c5304161b0ed317c2e4ff1fdac4709661b9d3c5b2ec2ab9fe424"
+      "expected_lock_sha256": "48dd8671e612c5304161b0ed317c2e4ff1fdac4709661b9d3c5b2ec2ab9fe424",
+      "lock_path": "tests/compat/project-locks/unjs__unbuild--48dd8671e612c5304161b0ed317c2e4ff1fdac4709661b9d3c5b2ec2ab9fe424.json.gz"
     },
     {
       "repository": "developit/microbundle",
@@ -161,7 +180,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
-      "expected_lock_sha256": "0964a3261ff17e9b310cf1110b75f4175243a826a23853695299698a3dc4da5a"
+      "expected_lock_sha256": "0964a3261ff17e9b310cf1110b75f4175243a826a23853695299698a3dc4da5a",
+      "lock_path": "tests/compat/project-locks/developit__microbundle--0964a3261ff17e9b310cf1110b75f4175243a826a23853695299698a3dc4da5a.json.gz"
     },
     {
       "repository": "microsoft/TypeScript",
@@ -169,7 +189,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "fee046e932f0ee95acc905e43fbb4b3655a314ada796286c70bb34f507717226"
+      "expected_lock_sha256": "fee046e932f0ee95acc905e43fbb4b3655a314ada796286c70bb34f507717226",
+      "lock_path": "tests/compat/project-locks/microsoft__TypeScript--fee046e932f0ee95acc905e43fbb4b3655a314ada796286c70bb34f507717226.json.gz"
     },
     {
       "repository": "TypeStrong/ts-node",
@@ -177,7 +198,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "3ae63c1864f1cbde365c023ea6373aa2514644191bb0553bb665a52c40e6f244"
+      "expected_lock_sha256": "3ae63c1864f1cbde365c023ea6373aa2514644191bb0553bb665a52c40e6f244",
+      "lock_path": "tests/compat/project-locks/TypeStrong__ts-node--3ae63c1864f1cbde365c023ea6373aa2514644191bb0553bb665a52c40e6f244.json.gz"
     },
     {
       "repository": "alangpierce/sucrase",
@@ -185,7 +207,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "b831d8ab9111be2f25aef4f66eeb8579a6e399ab17d7711386b23057a4429c5a"
+      "expected_lock_sha256": "b831d8ab9111be2f25aef4f66eeb8579a6e399ab17d7711386b23057a4429c5a",
+      "lock_path": "tests/compat/project-locks/alangpierce__sucrase--b831d8ab9111be2f25aef4f66eeb8579a6e399ab17d7711386b23057a4429c5a.json.gz"
     },
     {
       "repository": "facebook/flow",
@@ -193,7 +216,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "ba439b63d50719d855220c017fc3835b1622883b65861686674733f20eaf8fe1"
+      "expected_lock_sha256": "ba439b63d50719d855220c017fc3835b1622883b65861686674733f20eaf8fe1",
+      "lock_path": "tests/compat/project-locks/facebook__flow--ba439b63d50719d855220c017fc3835b1622883b65861686674733f20eaf8fe1.json.gz"
     },
     {
       "repository": "dsherret/ts-morph",
@@ -201,7 +225,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "97c84aeb929b0ec801de858a9921a45ea9be67d6f6ac5eb770e765e120588948"
+      "expected_lock_sha256": "97c84aeb929b0ec801de858a9921a45ea9be67d6f6ac5eb770e765e120588948",
+      "lock_path": "tests/compat/project-locks/dsherret__ts-morph--97c84aeb929b0ec801de858a9921a45ea9be67d6f6ac5eb770e765e120588948.json.gz"
     },
     {
       "repository": "TypeStrong/typedoc",
@@ -209,7 +234,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "c537d4f89b2cc66b9d6d866aeacbe9d3bc191e1a60a7d054ca87bf8ec700bf05"
+      "expected_lock_sha256": "c537d4f89b2cc66b9d6d866aeacbe9d3bc191e1a60a7d054ca87bf8ec700bf05",
+      "lock_path": "tests/compat/project-locks/TypeStrong__typedoc--c537d4f89b2cc66b9d6d866aeacbe9d3bc191e1a60a7d054ca87bf8ec700bf05.json.gz"
     },
     {
       "repository": "prettier/prettier",
@@ -217,7 +243,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "4339d82f02614faeaf44236f46b614ba4e104d12cb93ddd919acc88a8d10ddbb"
+      "expected_lock_sha256": "4339d82f02614faeaf44236f46b614ba4e104d12cb93ddd919acc88a8d10ddbb",
+      "lock_path": "tests/compat/project-locks/prettier__prettier--4339d82f02614faeaf44236f46b614ba4e104d12cb93ddd919acc88a8d10ddbb.json.gz"
     },
     {
       "repository": "eslint/eslint",
@@ -225,7 +252,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "bdb2fe4ac70c77ee230068d6af8206976569cf6fd9c8cd1e194416e468f88cf6"
+      "expected_lock_sha256": "bdb2fe4ac70c77ee230068d6af8206976569cf6fd9c8cd1e194416e468f88cf6",
+      "lock_path": "tests/compat/project-locks/eslint__eslint--bdb2fe4ac70c77ee230068d6af8206976569cf6fd9c8cd1e194416e468f88cf6.json.gz"
     },
     {
       "repository": "unjs/jiti",
@@ -233,7 +261,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "0b60e7bd7219b2e786caa0773f56b5fecdb229ba1f2aa4d17cbb399dc83f3162"
+      "expected_lock_sha256": "0b60e7bd7219b2e786caa0773f56b5fecdb229ba1f2aa4d17cbb399dc83f3162",
+      "lock_path": "tests/compat/project-locks/unjs__jiti--0b60e7bd7219b2e786caa0773f56b5fecdb229ba1f2aa4d17cbb399dc83f3162.json.gz"
     },
     {
       "repository": "acornjs/acorn",
@@ -241,7 +270,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "42fe5fbaf92212fcbdc9154fc2f9de6ab2344645a60008fe3b16dbd4094ef8b1"
+      "expected_lock_sha256": "42fe5fbaf92212fcbdc9154fc2f9de6ab2344645a60008fe3b16dbd4094ef8b1",
+      "lock_path": "tests/compat/project-locks/acornjs__acorn--42fe5fbaf92212fcbdc9154fc2f9de6ab2344645a60008fe3b16dbd4094ef8b1.json.gz"
     },
     {
       "repository": "mochajs/mocha",
@@ -249,7 +279,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "9f31ade711bf6e681fe3d453616f1439518fb9311af716aa5754123f3f666f6a"
+      "expected_lock_sha256": "9f31ade711bf6e681fe3d453616f1439518fb9311af716aa5754123f3f666f6a",
+      "lock_path": "tests/compat/project-locks/mochajs__mocha--9f31ade711bf6e681fe3d453616f1439518fb9311af716aa5754123f3f666f6a.json.gz"
     },
     {
       "repository": "avajs/ava",
@@ -257,7 +288,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "6255b59870c361804ad089cb1587aca31a838cee9bd7ef2fb874a79fa6b10982"
+      "expected_lock_sha256": "6255b59870c361804ad089cb1587aca31a838cee9bd7ef2fb874a79fa6b10982",
+      "lock_path": "tests/compat/project-locks/avajs__ava--6255b59870c361804ad089cb1587aca31a838cee9bd7ef2fb874a79fa6b10982.json.gz"
     },
     {
       "repository": "tapjs/tapjs",
@@ -265,7 +297,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "932b7e8b3004f0dbf9e411afa952f03490e745a823b251e7687b08e24183cbd3"
+      "expected_lock_sha256": "932b7e8b3004f0dbf9e411afa952f03490e745a823b251e7687b08e24183cbd3",
+      "lock_path": "tests/compat/project-locks/tapjs__tapjs--932b7e8b3004f0dbf9e411afa952f03490e745a823b251e7687b08e24183cbd3.json.gz"
     },
     {
       "repository": "jasmine/jasmine",
@@ -273,7 +306,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "8ee68c411b04166eba499cfeb9a88e363269485d1e64972355be94948ab186c4"
+      "expected_lock_sha256": "8ee68c411b04166eba499cfeb9a88e363269485d1e64972355be94948ab186c4",
+      "lock_path": "tests/compat/project-locks/jasmine__jasmine--8ee68c411b04166eba499cfeb9a88e363269485d1e64972355be94948ab186c4.json.gz"
     },
     {
       "repository": "karma-runner/karma",
@@ -281,15 +315,17 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "6e9c5467bd3b540273810d8bc65161167eef5b7e04593c84acf0cee8b27ba292"
+      "expected_lock_sha256": "6e9c5467bd3b540273810d8bc65161167eef5b7e04593c84acf0cee8b27ba292",
+      "lock_path": "tests/compat/project-locks/karma-runner__karma--6e9c5467bd3b540273810d8bc65161167eef5b7e04593c84acf0cee8b27ba292.json.gz"
     },
     {
       "repository": "microsoft/playwright",
-      "commit": "ec680e239889ffbd3ac7d23a319ff684e0cf06e3",
+      "commit": "dcc8d792a7b235fe4e5b12c526d61582a489ca79",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "23ca1e154cb7cae9cf7bb57844d54588d2c2613c2b9df5494e57e0731312404b"
+      "expected_lock_sha256": "23ca1e154cb7cae9cf7bb57844d54588d2c2613c2b9df5494e57e0731312404b",
+      "lock_path": "tests/compat/project-locks/microsoft__playwright--23ca1e154cb7cae9cf7bb57844d54588d2c2613c2b9df5494e57e0731312404b.json.gz"
     },
     {
       "repository": "puppeteer/puppeteer",
@@ -297,7 +333,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "517bd1c9016e5acc4aed25873e589bca83d94ff68004548f997d6eb342246a57"
+      "expected_lock_sha256": "517bd1c9016e5acc4aed25873e589bca83d94ff68004548f997d6eb342246a57",
+      "lock_path": "tests/compat/project-locks/puppeteer__puppeteer--517bd1c9016e5acc4aed25873e589bca83d94ff68004548f997d6eb342246a57.json.gz"
     },
     {
       "repository": "testing-library/dom-testing-library",
@@ -305,7 +342,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "34ee82978ce5b47760895a50e70e9cf5806c19344916f340c4827d62ef0b3001"
+      "expected_lock_sha256": "34ee82978ce5b47760895a50e70e9cf5806c19344916f340c4827d62ef0b3001",
+      "lock_path": "tests/compat/project-locks/testing-library__dom-testing-library--34ee82978ce5b47760895a50e70e9cf5806c19344916f340c4827d62ef0b3001.json.gz"
     },
     {
       "repository": "sinonjs/sinon",
@@ -313,7 +351,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "0dd6613f11c2a0ea446478bb8c4c1ea3c8ac0c456600417150e333827d1f8f4e"
+      "expected_lock_sha256": "0dd6613f11c2a0ea446478bb8c4c1ea3c8ac0c456600417150e333827d1f8f4e",
+      "lock_path": "tests/compat/project-locks/sinonjs__sinon--0dd6613f11c2a0ea446478bb8c4c1ea3c8ac0c456600417150e333827d1f8f4e.json.gz"
     },
     {
       "repository": "chaijs/chai",
@@ -321,7 +360,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "35d8bb71198e53ff03f0820d31254adbc290d68948fa5cbde42b251725c1bc45"
+      "expected_lock_sha256": "35d8bb71198e53ff03f0820d31254adbc290d68948fa5cbde42b251725c1bc45",
+      "lock_path": "tests/compat/project-locks/chaijs__chai--35d8bb71198e53ff03f0820d31254adbc290d68948fa5cbde42b251725c1bc45.json.gz"
     },
     {
       "repository": "expressjs/express",
@@ -329,7 +369,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "2d2a080fa43103b19bc74e050186263319b296a11d55802f21fdb07e498fbec8"
+      "expected_lock_sha256": "23382bdd4fabe664ef8b310888b0e07e5d4481808923b26b85c6e6494bd3f909",
+      "lock_path": "tests/compat/project-locks/expressjs__express--23382bdd4fabe664ef8b310888b0e07e5d4481808923b26b85c6e6494bd3f909.json.gz"
     },
     {
       "repository": "fastify/fastify",
@@ -337,7 +378,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "4057bfc0eb20f52336480549f289618fb62ba47e39b28116144f8d83c0fed398"
+      "expected_lock_sha256": "4057bfc0eb20f52336480549f289618fb62ba47e39b28116144f8d83c0fed398",
+      "lock_path": "tests/compat/project-locks/fastify__fastify--4057bfc0eb20f52336480549f289618fb62ba47e39b28116144f8d83c0fed398.json.gz"
     },
     {
       "repository": "koajs/koa",
@@ -345,7 +387,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "5998cd9ce44bdacb4a527549ff3baace8ed1e20955ca3a802b1c50455366e685"
+      "expected_lock_sha256": "5998cd9ce44bdacb4a527549ff3baace8ed1e20955ca3a802b1c50455366e685",
+      "lock_path": "tests/compat/project-locks/koajs__koa--5998cd9ce44bdacb4a527549ff3baace8ed1e20955ca3a802b1c50455366e685.json.gz"
     },
     {
       "repository": "honojs/hono",
@@ -353,7 +396,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "24715e78e268c0c257cc1d1369a903631c9d571a05aed6c8bce9357ce6dfe486"
+      "expected_lock_sha256": "24715e78e268c0c257cc1d1369a903631c9d571a05aed6c8bce9357ce6dfe486",
+      "lock_path": "tests/compat/project-locks/honojs__hono--24715e78e268c0c257cc1d1369a903631c9d571a05aed6c8bce9357ce6dfe486.json.gz"
     },
     {
       "repository": "adonisjs/core",
@@ -361,7 +405,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "f6b03592f91604eb7d9ac289c56ea206261eb932dd82325f540a3e2e0d0e33ca"
+      "expected_lock_sha256": "f6b03592f91604eb7d9ac289c56ea206261eb932dd82325f540a3e2e0d0e33ca",
+      "lock_path": "tests/compat/project-locks/adonisjs__core--f6b03592f91604eb7d9ac289c56ea206261eb932dd82325f540a3e2e0d0e33ca.json.gz"
     },
     {
       "repository": "feathersjs/feathers",
@@ -369,7 +414,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "3ce3d47f0d2e8a400ffbaa4a005f59cbeeb883aa83ee5ac6f9535ec0d76c1ab0"
+      "expected_lock_sha256": "3ce3d47f0d2e8a400ffbaa4a005f59cbeeb883aa83ee5ac6f9535ec0d76c1ab0",
+      "lock_path": "tests/compat/project-locks/feathersjs__feathers--3ce3d47f0d2e8a400ffbaa4a005f59cbeeb883aa83ee5ac6f9535ec0d76c1ab0.json.gz"
     },
     {
       "repository": "loopbackio/loopback-next",
@@ -377,7 +423,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "7d2f024aef9803fda5bc0cb25321512d91660b24cd467c55c7601f06d5cd17ce"
+      "expected_lock_sha256": "7d2f024aef9803fda5bc0cb25321512d91660b24cd467c55c7601f06d5cd17ce",
+      "lock_path": "tests/compat/project-locks/loopbackio__loopback-next--7d2f024aef9803fda5bc0cb25321512d91660b24cd467c55c7601f06d5cd17ce.json.gz"
     },
     {
       "repository": "restify/node-restify",
@@ -385,7 +432,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "2f6093304e22ac3a1443df3cb38e9282285c603f62d65c2ebecf72f8c495d204"
+      "expected_lock_sha256": "2f6093304e22ac3a1443df3cb38e9282285c603f62d65c2ebecf72f8c495d204",
+      "lock_path": "tests/compat/project-locks/restify__node-restify--2f6093304e22ac3a1443df3cb38e9282285c603f62d65c2ebecf72f8c495d204.json.gz"
     },
     {
       "repository": "lukeed/polka",
@@ -393,7 +441,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "f3fabf3b266afefce7e0d6db24b5f031086a038af2dc4723ec7a1170a55ba4f6"
+      "expected_lock_sha256": "f3fabf3b266afefce7e0d6db24b5f031086a038af2dc4723ec7a1170a55ba4f6",
+      "lock_path": "tests/compat/project-locks/lukeed__polka--f3fabf3b266afefce7e0d6db24b5f031086a038af2dc4723ec7a1170a55ba4f6.json.gz"
     },
     {
       "repository": "middyjs/middy",
@@ -401,7 +450,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "3c346d7371b6533724033b37edb2faff54c06e3cc6c0d1ac115bd5ec33a9c3ee"
+      "expected_lock_sha256": "3c346d7371b6533724033b37edb2faff54c06e3cc6c0d1ac115bd5ec33a9c3ee",
+      "lock_path": "tests/compat/project-locks/middyjs__middy--3c346d7371b6533724033b37edb2faff54c06e3cc6c0d1ac115bd5ec33a9c3ee.json.gz"
     },
     {
       "repository": "preactjs/preact",
@@ -409,7 +459,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "4c202de16f315c54a922bb9c16888b14e24c1147113f3fe83725a7a3e8862ca1"
+      "expected_lock_sha256": "4c202de16f315c54a922bb9c16888b14e24c1147113f3fe83725a7a3e8862ca1",
+      "lock_path": "tests/compat/project-locks/preactjs__preact--4c202de16f315c54a922bb9c16888b14e24c1147113f3fe83725a7a3e8862ca1.json.gz"
     },
     {
       "repository": "alpinejs/alpine",
@@ -417,7 +468,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "0012b93a89dddca6431eb458619af6e1015a40b87de9faf705d175c253b991f5"
+      "expected_lock_sha256": "0012b93a89dddca6431eb458619af6e1015a40b87de9faf705d175c253b991f5",
+      "lock_path": "tests/compat/project-locks/alpinejs__alpine--0012b93a89dddca6431eb458619af6e1015a40b87de9faf705d175c253b991f5.json.gz"
     },
     {
       "repository": "lit/lit",
@@ -425,7 +477,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "c200d9cbd368ef637aaaee71260d9d2735998aed4bcb64e05b8e67045e250060"
+      "expected_lock_sha256": "c200d9cbd368ef637aaaee71260d9d2735998aed4bcb64e05b8e67045e250060",
+      "lock_path": "tests/compat/project-locks/lit__lit--c200d9cbd368ef637aaaee71260d9d2735998aed4bcb64e05b8e67045e250060.json.gz"
     },
     {
       "repository": "ant-design/ant-design",
@@ -433,7 +486,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "42b9c45efb4529ca6d4edc544a92a8d11cba958a93d101bdc0efe66a349fff2e"
+      "expected_lock_sha256": "83df6b13f8213048cb7b9ca8a49e446ab2981f9faad9baad39283d4fbb13096a",
+      "lock_path": "tests/compat/project-locks/ant-design__ant-design--83df6b13f8213048cb7b9ca8a49e446ab2981f9faad9baad39283d4fbb13096a.json.gz"
     },
     {
       "repository": "radix-ui/primitives",
@@ -441,7 +495,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "845f8f58c552f3ae6cfa20932ecb883aca85d050e6436f48d1300fa98749b7be"
+      "expected_lock_sha256": "845f8f58c552f3ae6cfa20932ecb883aca85d050e6436f48d1300fa98749b7be",
+      "lock_path": "tests/compat/project-locks/radix-ui__primitives--845f8f58c552f3ae6cfa20932ecb883aca85d050e6436f48d1300fa98749b7be.json.gz"
     },
     {
       "repository": "tailwindlabs/headlessui",
@@ -449,7 +504,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "524ac77bf334973ba6d28a7caa7def4d451b63ccd53e7aa97199fe7d6014a591"
+      "expected_lock_sha256": "524ac77bf334973ba6d28a7caa7def4d451b63ccd53e7aa97199fe7d6014a591",
+      "lock_path": "tests/compat/project-locks/tailwindlabs__headlessui--524ac77bf334973ba6d28a7caa7def4d451b63ccd53e7aa97199fe7d6014a591.json.gz"
     },
     {
       "repository": "shoelace-style/shoelace",
@@ -457,7 +513,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "5fdd4b5f78df8aff1a94b684245bf5ba92cbe40cf2d2e79ba2b1217b56579649"
+      "expected_lock_sha256": "5fdd4b5f78df8aff1a94b684245bf5ba92cbe40cf2d2e79ba2b1217b56579649",
+      "lock_path": "tests/compat/project-locks/shoelace-style__shoelace--5fdd4b5f78df8aff1a94b684245bf5ba92cbe40cf2d2e79ba2b1217b56579649.json.gz"
     },
     {
       "repository": "stenciljs/core",
@@ -465,7 +522,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "7b5e9fa327001c7d21185bffec76a287d7fbacaf4bb1b150e88b2f2b0bd38f6c"
+      "expected_lock_sha256": "7b5e9fa327001c7d21185bffec76a287d7fbacaf4bb1b150e88b2f2b0bd38f6c",
+      "lock_path": "tests/compat/project-locks/stenciljs__core--7b5e9fa327001c7d21185bffec76a287d7fbacaf4bb1b150e88b2f2b0bd38f6c.json.gz"
     },
     {
       "repository": "ionic-team/ionic-framework",
@@ -473,7 +531,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "a16207a84e4dafe2cf2a921fb8a40c1e823e7e094ba7b65cdfd4f7643ca2277a"
+      "expected_lock_sha256": "a16207a84e4dafe2cf2a921fb8a40c1e823e7e094ba7b65cdfd4f7643ca2277a",
+      "lock_path": "tests/compat/project-locks/ionic-team__ionic-framework--a16207a84e4dafe2cf2a921fb8a40c1e823e7e094ba7b65cdfd4f7643ca2277a.json.gz"
     },
     {
       "repository": "styled-components/styled-components",
@@ -481,7 +540,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "6c633521d712021da617e6751ee2199e77fd95e20d371ab7e20ff874ffbd6103"
+      "expected_lock_sha256": "6c633521d712021da617e6751ee2199e77fd95e20d371ab7e20ff874ffbd6103",
+      "lock_path": "tests/compat/project-locks/styled-components__styled-components--6c633521d712021da617e6751ee2199e77fd95e20d371ab7e20ff874ffbd6103.json.gz"
     },
     {
       "repository": "knex/knex",
@@ -489,7 +549,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "49cd8c84e88a1cd1d4bc8c503e01c047f645c02638f5022a43b6146e097c3410"
+      "expected_lock_sha256": "49cd8c84e88a1cd1d4bc8c503e01c047f645c02638f5022a43b6146e097c3410",
+      "lock_path": "tests/compat/project-locks/knex__knex--49cd8c84e88a1cd1d4bc8c503e01c047f645c02638f5022a43b6146e097c3410.json.gz"
     },
     {
       "repository": "Automattic/mongoose",
@@ -497,7 +558,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "1adddb72c2c78871012eed1f57291015f9fb1f94086e1bc6ff515e99409e1542"
+      "expected_lock_sha256": "1adddb72c2c78871012eed1f57291015f9fb1f94086e1bc6ff515e99409e1542",
+      "lock_path": "tests/compat/project-locks/Automattic__mongoose--1adddb72c2c78871012eed1f57291015f9fb1f94086e1bc6ff515e99409e1542.json.gz"
     },
     {
       "repository": "mongodb/node-mongodb-native",
@@ -505,7 +567,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "2629d5856587d21ae1ab4adc5e6387e3e24bd7d374fdf155054ddb60638d22ba"
+      "expected_lock_sha256": "2629d5856587d21ae1ab4adc5e6387e3e24bd7d374fdf155054ddb60638d22ba",
+      "lock_path": "tests/compat/project-locks/mongodb__node-mongodb-native--2629d5856587d21ae1ab4adc5e6387e3e24bd7d374fdf155054ddb60638d22ba.json.gz"
     },
     {
       "repository": "redis/node-redis",
@@ -513,7 +576,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "858f134b649b201278a124baac649d1e72f672e5c5fac5496f49ba9f10fa1023"
+      "expected_lock_sha256": "858f134b649b201278a124baac649d1e72f672e5c5fac5496f49ba9f10fa1023",
+      "lock_path": "tests/compat/project-locks/redis__node-redis--858f134b649b201278a124baac649d1e72f672e5c5fac5496f49ba9f10fa1023.json.gz"
     },
     {
       "repository": "redis/ioredis",
@@ -521,7 +585,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "14487d0410cac13a48a05ff20d39134dc766dd0001c2d8987922c17b339b30c6"
+      "expected_lock_sha256": "14487d0410cac13a48a05ff20d39134dc766dd0001c2d8987922c17b339b30c6",
+      "lock_path": "tests/compat/project-locks/redis__ioredis--14487d0410cac13a48a05ff20d39134dc766dd0001c2d8987922c17b339b30c6.json.gz"
     },
     {
       "repository": "brianc/node-postgres",
@@ -529,7 +594,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "4437cf067f38a465243ed483ebb504dce04c3fc52b9b9de9e4c58a10469318cf"
+      "expected_lock_sha256": "4437cf067f38a465243ed483ebb504dce04c3fc52b9b9de9e4c58a10469318cf",
+      "lock_path": "tests/compat/project-locks/brianc__node-postgres--4437cf067f38a465243ed483ebb504dce04c3fc52b9b9de9e4c58a10469318cf.json.gz"
     },
     {
       "repository": "mysqljs/mysql",
@@ -537,7 +603,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "e88f0bc1a3a5d234cdaed03ee44c60bd7e0e443f2bea26b59c8ef7138d95e5be"
+      "expected_lock_sha256": "e88f0bc1a3a5d234cdaed03ee44c60bd7e0e443f2bea26b59c8ef7138d95e5be",
+      "lock_path": "tests/compat/project-locks/mysqljs__mysql--e88f0bc1a3a5d234cdaed03ee44c60bd7e0e443f2bea26b59c8ef7138d95e5be.json.gz"
     },
     {
       "repository": "sidorares/node-mysql2",
@@ -545,7 +612,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "4638608d2deabc6a98fa6a610f29f1ad80333184b65aeb58919742886a8295c5"
+      "expected_lock_sha256": "4638608d2deabc6a98fa6a610f29f1ad80333184b65aeb58919742886a8295c5",
+      "lock_path": "tests/compat/project-locks/sidorares__node-mysql2--4638608d2deabc6a98fa6a610f29f1ad80333184b65aeb58919742886a8295c5.json.gz"
     },
     {
       "repository": "WiseLibs/better-sqlite3",
@@ -553,7 +621,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "4d6d6dc0297810c3cc10506f00750f00e269f483139c02f6e7c79e0a01e1e0f0"
+      "expected_lock_sha256": "4d6d6dc0297810c3cc10506f00750f00e269f483139c02f6e7c79e0a01e1e0f0",
+      "lock_path": "tests/compat/project-locks/WiseLibs__better-sqlite3--4d6d6dc0297810c3cc10506f00750f00e269f483139c02f6e7c79e0a01e1e0f0.json.gz"
     },
     {
       "repository": "tediousjs/tedious",
@@ -561,7 +630,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "e451e5ab88cd69dfc0aeca5798d7bb8dfc14074739ecfa10190d4aed435ad8d7"
+      "expected_lock_sha256": "e451e5ab88cd69dfc0aeca5798d7bb8dfc14074739ecfa10190d4aed435ad8d7",
+      "lock_path": "tests/compat/project-locks/tediousjs__tedious--e451e5ab88cd69dfc0aeca5798d7bb8dfc14074739ecfa10190d4aed435ad8d7.json.gz"
     },
     {
       "repository": "npm/cli",
@@ -569,7 +639,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "1378086c59cdf5d9e9305f16e6a74418ed06d16e8f38ef61537bfbe4190e442c"
+      "expected_lock_sha256": "1378086c59cdf5d9e9305f16e6a74418ed06d16e8f38ef61537bfbe4190e442c",
+      "lock_path": "tests/compat/project-locks/npm__cli--1378086c59cdf5d9e9305f16e6a74418ed06d16e8f38ef61537bfbe4190e442c.json.gz"
     },
     {
       "repository": "lerna/lerna",
@@ -577,7 +648,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "83c7694303c14d9f42d8e57e5f1eb661c155fa5f44cf24c0cdb4641224dd7fe9"
+      "expected_lock_sha256": "83c7694303c14d9f42d8e57e5f1eb661c155fa5f44cf24c0cdb4641224dd7fe9",
+      "lock_path": "tests/compat/project-locks/lerna__lerna--83c7694303c14d9f42d8e57e5f1eb661c155fa5f44cf24c0cdb4641224dd7fe9.json.gz"
     },
     {
       "repository": "google/wireit",
@@ -585,7 +657,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "35b0c4b66c622fede38390b7ab4501f138021bc709239207edefbf2bb2e30790"
+      "expected_lock_sha256": "35b0c4b66c622fede38390b7ab4501f138021bc709239207edefbf2bb2e30790",
+      "lock_path": "tests/compat/project-locks/google__wireit--35b0c4b66c622fede38390b7ab4501f138021bc709239207edefbf2bb2e30790.json.gz"
     },
     {
       "repository": "FormidableLabs/builder",
@@ -593,7 +666,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "49fbd1aa3fdce214dac5dc2292e117195bf41962d8bd9d565477b7dd7d8491b5"
+      "expected_lock_sha256": "49fbd1aa3fdce214dac5dc2292e117195bf41962d8bd9d565477b7dd7d8491b5",
+      "lock_path": "tests/compat/project-locks/FormidableLabs__builder--49fbd1aa3fdce214dac5dc2292e117195bf41962d8bd9d565477b7dd7d8491b5.json.gz"
     },
     {
       "repository": "Thinkmill/manypkg",
@@ -601,7 +675,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "0c6ffc7f358bca0bbbdc6e525a9b104a457b5c48bdf38c3ba79c128343463ef8"
+      "expected_lock_sha256": "0c6ffc7f358bca0bbbdc6e525a9b104a457b5c48bdf38c3ba79c128343463ef8",
+      "lock_path": "tests/compat/project-locks/Thinkmill__manypkg--0c6ffc7f358bca0bbbdc6e525a9b104a457b5c48bdf38c3ba79c128343463ef8.json.gz"
     },
     {
       "repository": "wixplosives/sample-monorepo",
@@ -609,7 +684,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "a6ba64f83887a3f441cfbd8cedb4fa5032eaaa16e8d49282da9055da6171c133"
+      "expected_lock_sha256": "a6ba64f83887a3f441cfbd8cedb4fa5032eaaa16e8d49282da9055da6171c133",
+      "lock_path": "tests/compat/project-locks/wixplosives__sample-monorepo--a6ba64f83887a3f441cfbd8cedb4fa5032eaaa16e8d49282da9055da6171c133.json.gz"
     },
     {
       "repository": "azu/monorepo-utils",
@@ -617,7 +693,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "5a478d1f4a60e811120379f0ac63975186ab00c80a253b615c43e448911116a7"
+      "expected_lock_sha256": "5a478d1f4a60e811120379f0ac63975186ab00c80a253b615c43e448911116a7",
+      "lock_path": "tests/compat/project-locks/azu__monorepo-utils--5a478d1f4a60e811120379f0ac63975186ab00c80a253b615c43e448911116a7.json.gz"
     },
     {
       "repository": "jaredpalmer/tsdx",
@@ -625,7 +702,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "06a51652f8dfb7590b37eced95f34fc73e2e3671c7488d13884b7d432fdda4b8"
+      "expected_lock_sha256": "06a51652f8dfb7590b37eced95f34fc73e2e3671c7488d13884b7d432fdda4b8",
+      "lock_path": "tests/compat/project-locks/jaredpalmer__tsdx--06a51652f8dfb7590b37eced95f34fc73e2e3671c7488d13884b7d432fdda4b8.json.gz"
     },
     {
       "repository": "mattermost/mattermost-webapp",
@@ -633,15 +711,17 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "cd03abaa420357490e001742451f05786759e9db90efb8cd9aa565acf98dbbbe"
+      "expected_lock_sha256": "cd03abaa420357490e001742451f05786759e9db90efb8cd9aa565acf98dbbbe",
+      "lock_path": "tests/compat/project-locks/mattermost__mattermost-webapp--cd03abaa420357490e001742451f05786759e9db90efb8cd9aa565acf98dbbbe.json.gz"
     },
     {
       "repository": "WordPress/gutenberg",
-      "commit": "b5abf9e3ae0dc9fe924921e3fa7fab94b56993e3",
+      "commit": "3944b0e352a25776f7e7081939f261d8c17e818d",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "806603ebf0beba4d3bed91cc9bdb13ada44812767e9535f8b3ab04323e6bb171"
+      "expected_lock_sha256": "806603ebf0beba4d3bed91cc9bdb13ada44812767e9535f8b3ab04323e6bb171",
+      "lock_path": "tests/compat/project-locks/WordPress__gutenberg--806603ebf0beba4d3bed91cc9bdb13ada44812767e9535f8b3ab04323e6bb171.json.gz"
     },
     {
       "repository": "nodejs/node-addon-api",
@@ -649,7 +729,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "c22a993d482ac8d6f28f9f95aafd947cd40acc42c4cdc46818835a623463db96"
+      "expected_lock_sha256": "c22a993d482ac8d6f28f9f95aafd947cd40acc42c4cdc46818835a623463db96",
+      "lock_path": "tests/compat/project-locks/nodejs__node-addon-api--c22a993d482ac8d6f28f9f95aafd947cd40acc42c4cdc46818835a623463db96.json.gz"
     },
     {
       "repository": "nodejs/node-gyp",
@@ -657,7 +738,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "11537470794dc6c64ffa7a8756d90917950c64861fdb6a6b7af6f5e624c1b5bb"
+      "expected_lock_sha256": "11537470794dc6c64ffa7a8756d90917950c64861fdb6a6b7af6f5e624c1b5bb",
+      "lock_path": "tests/compat/project-locks/nodejs__node-gyp--11537470794dc6c64ffa7a8756d90917950c64861fdb6a6b7af6f5e624c1b5bb.json.gz"
     },
     {
       "repository": "prebuild/prebuild",
@@ -665,7 +747,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "4f4a13af57160cb8d46bd7d5c9e9cd16ae5eff17687a74cea6e6b638b6603f4f"
+      "expected_lock_sha256": "4f4a13af57160cb8d46bd7d5c9e9cd16ae5eff17687a74cea6e6b638b6603f4f",
+      "lock_path": "tests/compat/project-locks/prebuild__prebuild--4f4a13af57160cb8d46bd7d5c9e9cd16ae5eff17687a74cea6e6b638b6603f4f.json.gz"
     },
     {
       "repository": "prebuild/prebuildify",
@@ -673,7 +756,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "6c23b02113d431dd535a30b80db381227c29e77c13fe7da5bcd3584dcf82a970"
+      "expected_lock_sha256": "6c23b02113d431dd535a30b80db381227c29e77c13fe7da5bcd3584dcf82a970",
+      "lock_path": "tests/compat/project-locks/prebuild__prebuildify--6c23b02113d431dd535a30b80db381227c29e77c13fe7da5bcd3584dcf82a970.json.gz"
     },
     {
       "repository": "mapbox/node-pre-gyp",
@@ -681,7 +765,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "3f91fd64a3b941c82d6e908a22d3cc22919c7d447ebaffb1f8543513c6066150"
+      "expected_lock_sha256": "3f91fd64a3b941c82d6e908a22d3cc22919c7d447ebaffb1f8543513c6066150",
+      "lock_path": "tests/compat/project-locks/mapbox__node-pre-gyp--3f91fd64a3b941c82d6e908a22d3cc22919c7d447ebaffb1f8543513c6066150.json.gz"
     },
     {
       "repository": "neon-bindings/neon",
@@ -689,7 +774,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "f6169e004f60836763ada91e0a033206c9ac3b03b4d89a8b7e11ce1c5b276c58"
+      "expected_lock_sha256": "f6169e004f60836763ada91e0a033206c9ac3b03b4d89a8b7e11ce1c5b276c58",
+      "lock_path": "tests/compat/project-locks/neon-bindings__neon--f6169e004f60836763ada91e0a033206c9ac3b03b4d89a8b7e11ce1c5b276c58.json.gz"
     },
     {
       "repository": "lovell/sharp",
@@ -697,7 +783,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "cc6473344a123c6479ea6fd0d75d1e99a731fc0b8d11923716db0f8fa634c047"
+      "expected_lock_sha256": "cc6473344a123c6479ea6fd0d75d1e99a731fc0b8d11923716db0f8fa634c047",
+      "lock_path": "tests/compat/project-locks/lovell__sharp--cc6473344a123c6479ea6fd0d75d1e99a731fc0b8d11923716db0f8fa634c047.json.gz"
     },
     {
       "repository": "Automattic/node-canvas",
@@ -705,7 +792,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "122d2661674e8fe08af5766af55c6a200679538ee8fd2ae955adba7a168a4869"
+      "expected_lock_sha256": "122d2661674e8fe08af5766af55c6a200679538ee8fd2ae955adba7a168a4869",
+      "lock_path": "tests/compat/project-locks/Automattic__node-canvas--122d2661674e8fe08af5766af55c6a200679538ee8fd2ae955adba7a168a4869.json.gz"
     },
     {
       "repository": "kelektiv/node.bcrypt.js",
@@ -713,7 +801,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "d60af1447edee0519f26235fde94ee26a179ed2b07ae50836a20816fdc439ef5"
+      "expected_lock_sha256": "d60af1447edee0519f26235fde94ee26a179ed2b07ae50836a20816fdc439ef5",
+      "lock_path": "tests/compat/project-locks/kelektiv__node.bcrypt.js--d60af1447edee0519f26235fde94ee26a179ed2b07ae50836a20816fdc439ef5.json.gz"
     },
     {
       "repository": "ranisalt/node-argon2",
@@ -721,7 +810,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
-      "expected_lock_sha256": "18cea357abf0069eae7b893844d92e25d435a9bb51c59ab4f37f1351f62de7ba"
+      "expected_lock_sha256": "18cea357abf0069eae7b893844d92e25d435a9bb51c59ab4f37f1351f62de7ba",
+      "lock_path": "tests/compat/project-locks/ranisalt__node-argon2--18cea357abf0069eae7b893844d92e25d435a9bb51c59ab4f37f1351f62de7ba.json.gz"
     },
     {
       "repository": "tj/commander.js",
@@ -729,7 +819,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "b92530c30cb2ab5770f24e632e60a8b031e2c90cc268b5c1ffe524907c84c233"
+      "expected_lock_sha256": "b92530c30cb2ab5770f24e632e60a8b031e2c90cc268b5c1ffe524907c84c233",
+      "lock_path": "tests/compat/project-locks/tj__commander.js--b92530c30cb2ab5770f24e632e60a8b031e2c90cc268b5c1ffe524907c84c233.json.gz"
     },
     {
       "repository": "yargs/yargs",
@@ -737,7 +828,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "fbab2725e79189189ff45ccef1cdee7b7400af5bdb7197b407c2aea118177130"
+      "expected_lock_sha256": "fbab2725e79189189ff45ccef1cdee7b7400af5bdb7197b407c2aea118177130",
+      "lock_path": "tests/compat/project-locks/yargs__yargs--fbab2725e79189189ff45ccef1cdee7b7400af5bdb7197b407c2aea118177130.json.gz"
     },
     {
       "repository": "oclif/core",
@@ -745,7 +837,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "a240a74845602a284d96530c042b4c53d8d9bbdfc561d173a1d2a58156ef850c"
+      "expected_lock_sha256": "a240a74845602a284d96530c042b4c53d8d9bbdfc561d173a1d2a58156ef850c",
+      "lock_path": "tests/compat/project-locks/oclif__core--a240a74845602a284d96530c042b4c53d8d9bbdfc561d173a1d2a58156ef850c.json.gz"
     },
     {
       "repository": "vadimdemedes/ink",
@@ -753,7 +846,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "f014029f9a38cb7075ee8c630447eb064f06f04c2f183b9fca49febc5e36acd1"
+      "expected_lock_sha256": "f014029f9a38cb7075ee8c630447eb064f06f04c2f183b9fca49febc5e36acd1",
+      "lock_path": "tests/compat/project-locks/vadimdemedes__ink--f014029f9a38cb7075ee8c630447eb064f06f04c2f183b9fca49febc5e36acd1.json.gz"
     },
     {
       "repository": "terkelg/prompts",
@@ -761,7 +855,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "f739cb0d3703ef182501b4ed7737e58dd44310c5814af279b95c2cce04135e8b"
+      "expected_lock_sha256": "f739cb0d3703ef182501b4ed7737e58dd44310c5814af279b95c2cce04135e8b",
+      "lock_path": "tests/compat/project-locks/terkelg__prompts--f739cb0d3703ef182501b4ed7737e58dd44310c5814af279b95c2cce04135e8b.json.gz"
     },
     {
       "repository": "chalk/chalk",
@@ -769,7 +864,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "fa515ad809b317a7f969b529dab10841b0fa35e58d36b410bf4c4ca9e1aba5fd"
+      "expected_lock_sha256": "fa515ad809b317a7f969b529dab10841b0fa35e58d36b410bf4c4ca9e1aba5fd",
+      "lock_path": "tests/compat/project-locks/chalk__chalk--fa515ad809b317a7f969b529dab10841b0fa35e58d36b410bf4c4ca9e1aba5fd.json.gz"
     },
     {
       "repository": "sindresorhus/ora",
@@ -777,7 +873,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "a23b72eb143d8e5df02b554d03cd661dab2a05324294a08e6d4ef7fdc572f611"
+      "expected_lock_sha256": "a23b72eb143d8e5df02b554d03cd661dab2a05324294a08e6d4ef7fdc572f611",
+      "lock_path": "tests/compat/project-locks/sindresorhus__ora--a23b72eb143d8e5df02b554d03cd661dab2a05324294a08e6d4ef7fdc572f611.json.gz"
     },
     {
       "repository": "sindresorhus/execa",
@@ -785,7 +882,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "747ac3b8ae45778853a91ea0bbaa2b37bd8a4d0c1c647f9beb9c972c75212c0d"
+      "expected_lock_sha256": "747ac3b8ae45778853a91ea0bbaa2b37bd8a4d0c1c647f9beb9c972c75212c0d",
+      "lock_path": "tests/compat/project-locks/sindresorhus__execa--747ac3b8ae45778853a91ea0bbaa2b37bd8a4d0c1c647f9beb9c972c75212c0d.json.gz"
     },
     {
       "repository": "google/zx",
@@ -793,7 +891,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "764171c5e516826de9bc5be21f0b89c96062a6a8abe7c924a57755d368ed87c2"
+      "expected_lock_sha256": "764171c5e516826de9bc5be21f0b89c96062a6a8abe7c924a57755d368ed87c2",
+      "lock_path": "tests/compat/project-locks/google__zx--764171c5e516826de9bc5be21f0b89c96062a6a8abe7c924a57755d368ed87c2.json.gz"
     },
     {
       "repository": "shelljs/shelljs",
@@ -801,7 +900,8 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "cli-developer-tools",
-      "expected_lock_sha256": "0c82d86ff58a5c52416fb727034863251dce3903d432fb46b760bc3bfe9e00a8"
+      "expected_lock_sha256": "0c82d86ff58a5c52416fb727034863251dce3903d432fb46b760bc3bfe9e00a8",
+      "lock_path": "tests/compat/project-locks/shelljs__shelljs--0c82d86ff58a5c52416fb727034863251dce3903d432fb46b760bc3bfe9e00a8.json.gz"
     }
   ]
 }

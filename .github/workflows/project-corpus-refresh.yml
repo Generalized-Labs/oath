@@ -52,6 +52,7 @@ jobs:
           name: project-preflight-${{ matrix.shard }}
           path: |
             compat-results/preflight/preflight-${{ matrix.shard }}.json
+            compat-results/preflight/locks/*.json.gz
             runner-${{ matrix.shard }}.json
 
   merge:
@@ -80,4 +81,6 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         with:
           name: proposed-projects-lock
-          path: tests/compat/projects.lock.json
+          path: |
+            tests/compat/projects.lock.json
+            tests/compat/project-locks/*.json.gz

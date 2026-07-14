@@ -39,8 +39,12 @@ function gitFailure(command){
 let projects;
 if(manifestPath){
  const manifest=JSON.parse(await readFile(resolve(manifestPath),"utf8"));
- if(manifest.schema_version!==1||manifest.npm!=="11.12.1"||manifest.node!=="24.13.0"||!Array.isArray(manifest.projects))throw new Error("invalid pinned project manifest");
+ if(manifest.schema_version!==2||manifest.npm!=="11.12.1"||manifest.node!=="24.13.0"||!Array.isArray(manifest.projects))throw new Error("invalid pinned project manifest");
  if(process.versions.node!==manifest.node)throw new Error(`pinned project corpus requires Node ${manifest.node}; found ${process.versions.node}`);
+ for(const project of manifest.projects){
+  if(typeof project.lock_path!=="string"||!project.lock_path.startsWith("tests/compat/project-locks/")||!project.lock_path.endsWith(".json.gz"))throw new Error(`${project.repository}: invalid pinned lock path`);
+  if(!/^[0-9a-f]{64}$/.test(project.expected_lock_sha256))throw new Error(`${project.repository}: invalid pinned lock digest`);
+ }
  projects=manifest.projects;
 }else{
  projects=(await readFile(new URL("../tests/compat/projects.txt",import.meta.url),"utf8")).split(/\r?\n/).map(v=>v.trim()).filter(Boolean).map(repository=>({repository}));
@@ -104,7 +108,18 @@ try{
   }
   await rm(join(cwd,".git"),{recursive:true,force:true});
   const projectRoot=resolve(cwd,projectSpec.subdirectory??".");
-  const run=spawnSync(process.execPath,[parityScript,projectRoot],{encoding:"utf8",maxBuffer:64*1024*1024,timeout:Number(process.env.OATH_PROJECT_TIMEOUT_MS??300_000),env:{...process.env}});
+  const run=spawnSync(process.execPath,[parityScript,projectRoot],{
+   encoding:"utf8",
+   maxBuffer:64*1024*1024,
+   timeout:Number(process.env.OATH_PROJECT_TIMEOUT_MS??300_000),
+   env:{
+    ...process.env,
+    ...(projectSpec.lock_path?{
+     OATH_PINNED_LOCK_PATH:resolve(projectSpec.lock_path),
+     OATH_PINNED_LOCK_SHA256:projectSpec.expected_lock_sha256
+    }:{})
+   }
+  });
   let evidence;
   if(run.error){
    evidence={equivalent:false,classification:run.error.code==="ETIMEDOUT"?"harness_timeout":"harness_error",error:run.error.message,stdout:run.stdout,stderr:run.stderr};

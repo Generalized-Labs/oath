@@ -5,6 +5,7 @@ import assert from "node:assert/strict";
 import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
+import { gunzipSync, gzipSync } from "node:zlib";
 
 const command = process.argv[2] ?? "validate";
 const npmReference = "11.12.1";
@@ -73,7 +74,7 @@ async function runReferenceInstall(packageRoot, workspaceRoot, home) {
 }
 
 function validateManifest(manifest) {
-  if (manifest.schema_version !== 1 || manifest.npm !== npmReference || manifest.node !== nodeReference || !Array.isArray(manifest.projects)) {
+  if (manifest.schema_version !== 2 || manifest.npm !== npmReference || manifest.node !== nodeReference || !Array.isArray(manifest.projects)) {
     throw new Error("invalid pinned project corpus header");
   }
   if (manifest.projects.length !== 100) throw new Error(`expected 100 pinned projects, found ${manifest.projects.length}`);
@@ -82,6 +83,9 @@ function validateManifest(manifest) {
   for (const project of manifest.projects) {
     if (!/^[0-9a-f]{40}$/.test(project.commit)) throw new Error(`${project.repository}: commit must be a full SHA`);
     if (!/^[0-9a-f]{64}$/.test(project.expected_lock_sha256)) throw new Error(`${project.repository}: missing lock SHA-256`);
+    if (!/^tests\/compat\/project-locks\/[A-Za-z0-9_.-]+\.json\.gz$/.test(project.lock_path)) {
+      throw new Error(`${project.repository}: invalid pinned lock path`);
+    }
     if (project.npm !== npmReference) throw new Error(`${project.repository}: npm reference drifted`);
     if (!(project.category in counts)) throw new Error(`${project.repository}: unknown category ${project.category}`);
     if (repositories.has(project.repository)) throw new Error(`duplicate repository ${project.repository}`);
@@ -94,9 +98,22 @@ function validateManifest(manifest) {
   return counts;
 }
 
+async function validatePinnedLocks(manifest) {
+  for (const project of manifest.projects) {
+    const compressed = await readFile(resolve(project.lock_path));
+    const actual = sha256(gunzipSync(compressed));
+    if (actual !== project.expected_lock_sha256) {
+      throw new Error(`${project.repository}: pinned lock digest mismatch; expected ${project.expected_lock_sha256}, found ${actual}`);
+    }
+  }
+  return manifest.projects.length;
+}
+
 async function preflight() {
   const candidatesPath = resolve(process.env.OATH_PROJECT_CANDIDATES ?? "tests/compat/project-candidates.json");
   const output = resolve(process.env.OATH_PROJECT_PREFLIGHT_OUTPUT ?? "compat-results/preflight/projects.json");
+  const outputDir = resolve(output, "..");
+  await mkdir(join(outputDir, "locks"), { recursive: true });
   const candidateDocument = await readJson(candidatesPath);
   const candidates = Array.isArray(candidateDocument)
     ? candidateDocument
@@ -162,6 +179,9 @@ async function preflight() {
         });
         continue;
       }
+      const lockDigest = sha256(lockBytes);
+      const lockArtifactName = `${candidate.repository.replaceAll("/", "__")}--${lockDigest}.json.gz`;
+      await writeFile(join(outputDir, "locks", lockArtifactName), gzipSync(lockBytes, { level: 9 }));
       results.push({
         repository: candidate.repository,
         commit,
@@ -169,7 +189,8 @@ async function preflight() {
         npm: npmReference,
         category: candidate.category,
         candidate_index: index,
-        expected_lock_sha256: sha256(lockBytes),
+        expected_lock_sha256: lockDigest,
+        lock_artifact: `locks/${lockArtifactName}`,
         eligible: true
       });
       await rm(cwd, { recursive: true, force: true });
@@ -177,7 +198,7 @@ async function preflight() {
   } finally {
     await rm(root, { recursive: true, force: true });
   }
-  await mkdir(resolve(output, ".."), { recursive: true });
+  await mkdir(outputDir, { recursive: true });
   await writeFile(output, JSON.stringify({ schema_version: 1, npm: npmReference, node: nodeReference, shard, shards, results }, null, 2));
   console.log(JSON.stringify({ shard, tested: results.length, eligible: results.filter(result => result.eligible).length }, null, 2));
 }
@@ -205,15 +226,34 @@ async function selfTest() {
     const reference = await runReferenceInstall(source, join(root, "reference"), join(root, "home"));
     assert.equal(reference.lock.status, 0);
     assert.equal(reference.install.status, 0);
-    const expectedLockSha256 = sha256(await readFile(join(reference.npmDir, "package-lock.json")));
-    const parity = run(process.execPath, [resolve("scripts/npm-parity.mjs"), source], process.cwd(), { OATH_BIN: process.execPath });
+    const lockBytes = await readFile(join(reference.npmDir, "package-lock.json"));
+    const expectedLockSha256 = sha256(lockBytes);
+    const pinnedLockPath = join(root, "pinned-lock.json.gz");
+    await writeFile(pinnedLockPath, gzipSync(lockBytes, { level: 9 }));
+    const parity = run(process.execPath, [resolve("scripts/npm-parity.mjs"), source], process.cwd(), {
+      OATH_BIN: process.execPath,
+      OATH_PINNED_LOCK_PATH: pinnedLockPath,
+      OATH_PINNED_LOCK_SHA256: expectedLockSha256
+    });
     const parityEvidence = JSON.parse(parity.stdout);
     assert.equal(expectedLockSha256, parityEvidence.reference.lock_sha256);
+    assert.equal(expectedLockSha256, parityEvidence.reference.pinned_lock_sha256);
+    assert.equal(parityEvidence.reference.pinned_lock_preserved, true);
+    const tampered = run(process.execPath, [resolve("scripts/npm-parity.mjs"), source], process.cwd(), {
+      OATH_BIN: process.execPath,
+      OATH_PINNED_LOCK_PATH: pinnedLockPath,
+      OATH_PINNED_LOCK_SHA256: "0".repeat(64)
+    });
+    assert.notEqual(tampered.status, 0);
+    assert.match(tampered.stderr, /pinned lock digest mismatch/);
     console.log(JSON.stringify({
       stable_lock_basename: true,
       stable_npm_basename: true,
       git_metadata_excluded: true,
-      parity_lock_digest_matched: true
+      parity_lock_digest_matched: true,
+      pinned_lock_digest_matched: true,
+      pinned_lock_preserved: true,
+      tampered_lock_rejected: true
     }, null, 2));
   } finally {
     await rm(root, { recursive: true, force: true });
@@ -225,6 +265,7 @@ async function aggregate() {
   const resultDir = resolve(process.env.OATH_COMPAT_RESULTS ?? "compat-results/ga");
   const manifest = await readJson(manifestPath);
   validateManifest(manifest);
+  await validatePinnedLocks(manifest);
   const files = (await readdir(resultDir)).filter(name => /^project-shard-\d+\.json$/.test(name));
   const results = [];
   for (const file of files) results.push(...(await readJson(join(resultDir, file))).results);
@@ -256,6 +297,9 @@ async function mergePreflight() {
   const eligible = results.filter(result => result.eligible);
   const unique = new Map(eligible.map(({ eligible: _, ...project }) => [project.repository, project]));
   const projects = [];
+  const finalLockDir = resolve("tests/compat/project-locks");
+  await rm(finalLockDir, { recursive: true, force: true });
+  await mkdir(finalLockDir, { recursive: true });
   const shortages = [];
   const categoryResults = [];
   for (const category of categories) {
@@ -277,7 +321,16 @@ async function mergePreflight() {
       .sort((left, right) => left.candidate_index - right.candidate_index)
       .slice(0, 10);
     if (selected.length !== 10) shortages.push({ category, eligible: selected.length, required: 10 });
-    projects.push(...selected.map(({ candidate_index: _, ...project }) => project));
+    for (const project of selected) {
+      const { candidate_index: _, lock_artifact: lockArtifact, ...projectFields } = project;
+      if (!/^locks\/[A-Za-z0-9_.-]+\.json\.gz$/.test(lockArtifact)) {
+        throw new Error(`${project.repository}: invalid preflight lock artifact`);
+      }
+      const lockFile = basename(lockArtifact);
+      const lockPath = `tests/compat/project-locks/${lockFile}`;
+      await cp(join(input, lockArtifact), resolve(lockPath));
+      projects.push({ ...projectFields, lock_path: lockPath });
+    }
   }
   const selectionSummary = {
     schema_version: 1,
@@ -295,8 +348,9 @@ async function mergePreflight() {
   if (shortages.length) {
     throw new Error(shortages.map(({ category, eligible, required }) => `${category}: ${eligible}/${required} eligible`).join(", "));
   }
-  const manifest = { schema_version: 1, npm: npmReference, node: nodeReference, projects };
+  const manifest = { schema_version: 2, npm: npmReference, node: nodeReference, projects };
   validateManifest(manifest);
+  await validatePinnedLocks(manifest);
   await mkdir(resolve(output, ".."), { recursive: true });
   await writeFile(output, JSON.stringify(manifest, null, 2));
   console.log(JSON.stringify({ output, projects: projects.length }, null, 2));
@@ -304,7 +358,12 @@ async function mergePreflight() {
 
 if (command === "preflight") await preflight();
 else if (command === "merge-preflight") await mergePreflight();
-else if (command === "validate") console.log(JSON.stringify(validateManifest(await readJson(resolve(process.argv[3] ?? "tests/compat/projects.lock.json"))), null, 2));
+else if (command === "validate") {
+  const manifest = await readJson(resolve(process.argv[3] ?? "tests/compat/projects.lock.json"));
+  const categories = validateManifest(manifest);
+  const locksVerified = await validatePinnedLocks(manifest);
+  console.log(JSON.stringify({ categories, locks_verified: locksVerified }, null, 2));
+}
 else if (command === "aggregate") await aggregate();
 else if (command === "self-test") await selfTest();
 else throw new Error(`unknown command ${command}`);
