@@ -25,22 +25,25 @@ administrator enforcement, and force-push/deletion blocking. Independent
 approval becomes mandatory when a second active Oath maintainer is onboarded
 and remains a GA governance gate.
 
-## Last signed candidate evidence
+## Audited full-evidence baseline
 
-The table below describes commit `8e49d586040be3582262d3405a80dcf5d37e1507`
-and run `29292367523`. It must not be relabeled as evidence for later source.
+The corrected install-evidence contract first passed in run
+[`29320179154`](https://github.com/Generalized-Labs/oath/actions/runs/29320179154)
+at commit `aafc55c7403bc859b68ec6785de29bb2f28802ae`. All 54 jobs
+passed. The downloaded manifest checksum and GitHub OIDC/SLSA provenance both
+verified, and the manifest remained explicit that GA is not ready. This is a
+historical audited baseline for that exact commit; it must not be relabeled as
+evidence for later source.
 
 | Gate | Result |
 | --- | ---: |
 | Rust format and warning-fatal Clippy | Pass |
-| Rust workspace tests, including live PostgreSQL | 161 / 161 |
+| Rust workspace tests, including live PostgreSQL | Pass |
 | Declared Rust 1.94 MSRV check | Pass |
-| RustSec audit | 0 advisories or warnings across 421 locked dependencies |
-| Website audit | 0 npm vulnerabilities |
-| Independent npm behaviors | 3 / 3 exact tree matches |
-| AI ecosystem cases | 4 / 4 |
-| Generated stress executions | 500 / 500 in the latest full evidence baseline |
-| Pinned real-project trees | 100 / 100 in the latest full evidence baseline |
+| Rust and website dependency audits | Pass |
+| Independent npm behaviors | 30 / 30 platform results across 10 behavior IDs |
+| Generated stress executions | 500 / 500 |
+| Pinned real-project trees | 100 / 100 |
 | Local registry reliability smoke | Pass |
 | Public stable-release README smoke | Pass |
 
@@ -60,8 +63,10 @@ and 100-project gates for the exact release commit.
   SPDX SBOM, registry-observation provenance, private verdict authorization,
   step-up approval enforcement, atomic outbox delivery, download accounting,
   revocation rollback, OSV quarantine output, and Merkle proof verification.
-- These are local source checks. The exact post-merge CI run remains required
-  before the developer-preview tag.
+- Every later candidate still requires a manually dispatched full-evidence run
+  and signed manifest bound to its exact commit before the developer-preview
+  tag. This document intentionally does not maintain a mutable latest-run
+  pointer.
 - The real-project corpus now commits and digest-verifies 100 compressed npm
   lockfiles. Evidence runs no longer regenerate dependency resolution from
   mutable registry state, and npm and Oath consume the same pinned bytes through
@@ -80,8 +85,8 @@ and 100-project gates for the exact release commit.
   [`scanner-threat-model.md`](scanner-threat-model.md).
 - The current source independently extracts and scans the exact staged tarball,
   signs a server `RegistryVerdict v1`, retains publisher claims separately, and
-  prevents approval of a server-denied artifact. The new path still requires
-  the exact-commit cross-platform release run before it becomes release proof.
+  prevents approval of a server-denied artifact. It becomes release proof only
+  through the exact candidate's cross-platform run and signed manifest.
 - Core stage, approval, rejection, and revocation mutations enqueue audit intent
   in the same PostgreSQL transaction. An idempotent worker appends signed log
   entries with retry. Full process-kill, restore, key-rotation, and regional

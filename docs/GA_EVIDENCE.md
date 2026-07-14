@@ -18,15 +18,10 @@ logs/checksums.
   offline, repeat, and interrupted-recovery modes. They prove deterministic
   stress behavior; they do not count as 500 independent npm features.
 - Independent behavioral coverage and generated stress coverage are separate
-  release artifacts and public metrics. The current independent behavioral
-  baseline is 3/3; GA requires the workflow contract in this document, not a
-  generated-case count by itself.
-- The source contract now contains ten reviewed behavior IDs. A local macOS run
-  on this candidate matched all 10/10 against npm 11.12.1, including peers,
-  optionals, overrides, scoped packages, dist-tags, nested placement, aliases,
-  workspaces, production dependencies, and development dependencies. This is
-  useful pre-merge evidence, but it does not replace the signed cross-platform
-  CI artifact and therefore does not change the public 3/3 baseline above.
+  release artifacts and public metrics. The reviewed contract contains ten
+  behavior IDs. A complete run executes all ten on Linux, macOS, and Windows,
+  producing 30 platform results; GA still requires 100 independently reviewed
+  workflows, not a generated-case or platform-result count by itself.
 - The pinned corpus now has 100/100 exact npm/Oath tree equivalents. The
   aggregate contains zero failures. Repositories rejected by reference npm or
   requiring another package manager are not eligible for the locked corpus and
@@ -48,8 +43,15 @@ logs/checksums.
   installed files because `npm ci` and `npm install` have different bundled
   package materialization behavior. The run correctly failed. The final
   contract keeps `npm install`, accepts only paired Snowpack-style
-  dependency-classification normalization as explained metadata, and requires
-  a new complete exact-commit run before release.
+  dependency-classification normalization as explained metadata.
+- The corrected contract first passed a complete full-evidence run in
+  [`29320179154`](https://github.com/Generalized-Labs/oath/actions/runs/29320179154)
+  at commit `aafc55c7403bc859b68ec6785de29bb2f28802ae`. All 54 jobs
+  passed: 30/30 independent platform results, 500/500 generated stress
+  executions, and 100/100 exact real-project trees. Its checksum-verified
+  manifest received GitHub OIDC/SLSA provenance bound to that workflow, run,
+  branch, and commit. This is historical evidence for that exact commit only;
+  every later candidate must produce its own signed manifest.
 - Next.js HEAD was replaced by the npm-eligible
   `NextJSTemplates/play-nextjs` commit
   `f0a5c55ef1d6198c41ac6354595adadc4c41b924`, which passed exact comparison.
@@ -61,14 +63,10 @@ logs/checksums.
   ABI is unavailable. Native Windows AppContainer, restricted-token, ACL, Job
   Object, environment, filesystem, and network-denial checks passed on Windows
   Server 2022 and 2025 in PRs 16 and 17.
-- Final v0.2 release-candidate evidence run
-  [`29292367523`](https://github.com/Generalized-Labs/oath/actions/runs/29292367523)
-  passed all 53 jobs at commit
-  `8e49d586040be3582262d3405a80dcf5d37e1507`. It published
-  GitHub OIDC attestations for the Linux and Windows capability reports. Ubuntu
-  24.04 reported the strict Landlock/seccomp backend active; Ubuntu 22.04
-  reported an explicit fail-closed degradation; Windows Server 2022 and 2025
-  reported the AppContainer/Job Object backend active.
+- Full-evidence manifests retain the native capability reports. Ubuntu 24.04
+  must report the strict Landlock/seccomp backend active; Ubuntu 22.04 must
+  report explicit fail-closed degradation; Windows Server 2022 and 2025 must
+  report the AppContainer/Job Object backend active.
 
 Scheduled and manually dispatched CI produce release evidence. Pull-request CI
 runs the independent behavioral baseline and native enforcement checks. Public
@@ -80,4 +78,6 @@ Successful full-evidence runs now produce `ga-evidence-manifest.json`. The
 manifest hashes every input summary, binds them to the exact commit and run,
 lists every still-open external GA gate, receives a GitHub OIDC artifact
 attestation, and is attached to the corresponding release. This document is a
-human index; the signed manifest is the release claim source of truth.
+human index and intentionally does not maintain a mutable latest-run pointer;
+the signed manifest attached to the exact candidate is the release claim source
+of truth.
