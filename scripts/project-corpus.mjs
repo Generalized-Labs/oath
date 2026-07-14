@@ -1,9 +1,10 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
-import { mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import assert from "node:assert/strict";
+import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
-import { join, resolve } from "node:path";
+import { basename, join, relative, resolve, sep } from "node:path";
 
 const command = process.argv[2] ?? "validate";
 const npmReference = "11.12.1";
@@ -37,6 +38,18 @@ function sha256(value) {
 
 async function readJson(path) {
   return JSON.parse(await readFile(path, "utf8"));
+}
+
+async function prepareLockWorkspace(packageRoot, workspaceRoot) {
+  const lockDir = join(workspaceRoot, "lock");
+  await cp(packageRoot, lockDir, {
+    recursive: true,
+    filter(source) {
+      const path = relative(packageRoot, source);
+      return path !== ".git" && !path.startsWith(`.git${sep}`);
+    }
+  });
+  return lockDir;
 }
 
 function validateManifest(manifest) {
@@ -91,22 +104,26 @@ async function preflight() {
       const packageRoot = resolve(cwd, candidate.subdirectory ?? ".");
       try { await readJson(join(packageRoot, "package.json")); }
       catch { results.push({ ...candidate, commit, eligible: false, reason: "missing_package_json" }); continue; }
+      // npm derives a missing package name from the working-directory basename.
+      // Match npm-parity.mjs's stable `lock` workspace exactly so the raw lock
+      // digest remains reproducible for unnamed packages.
+      const lockDir = await prepareLockWorkspace(packageRoot, join(root, `lock-workspace-${index}`));
       const home = join(root, `home-${index}`);
       await mkdir(home, { recursive: true });
       const env = { HOME: home, npm_config_cache: join(home, ".npm") };
-      const lock = run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--package-lock=true"], packageRoot, env);
+      const lock = run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--package-lock=true"], lockDir, env);
       if (lock.status !== 0) {
         results.push({ ...candidate, commit, eligible: false, reason: "npm_lock_rejected", stderr: lock.stderr });
         continue;
       }
-      const install = run("npm", ["install", "--ignore-scripts", "--package-lock=true"], packageRoot, env);
+      const install = run("npm", ["install", "--ignore-scripts", "--package-lock=true"], lockDir, env);
       if (install.status !== 0) {
         results.push({ ...candidate, commit, eligible: false, reason: "npm_install_rejected", stderr: install.stderr });
         continue;
       }
       let lockBytes;
       try {
-        lockBytes = await readFile(join(packageRoot, "package-lock.json"));
+        lockBytes = await readFile(join(lockDir, "package-lock.json"));
       } catch (error) {
         if (error?.code !== "ENOENT") throw error;
         results.push({
@@ -136,6 +153,23 @@ async function preflight() {
   await mkdir(resolve(output, ".."), { recursive: true });
   await writeFile(output, JSON.stringify({ schema_version: 1, npm: npmReference, node: nodeReference, shard, shards, results }, null, 2));
   console.log(JSON.stringify({ shard, tested: results.length, eligible: results.filter(result => result.eligible).length }, null, 2));
+}
+
+async function selfTest() {
+  const root = await mkdtemp(join(tmpdir(), "oath-corpus-self-test-"));
+  try {
+    const source = join(root, "62");
+    await mkdir(join(source, ".git"), { recursive: true });
+    await writeFile(join(source, "package.json"), JSON.stringify({ private: true }));
+    await writeFile(join(source, ".git", "config"), "must not be copied");
+    const lockDir = await prepareLockWorkspace(source, join(root, "workspace"));
+    assert.equal(basename(lockDir), "lock");
+    assert.deepEqual(await readJson(join(lockDir, "package.json")), { private: true });
+    await assert.rejects(access(join(lockDir, ".git")));
+    console.log(JSON.stringify({ stable_lock_basename: true, git_metadata_excluded: true }, null, 2));
+  } finally {
+    await rm(root, { recursive: true, force: true });
+  }
 }
 
 async function aggregate() {
@@ -224,4 +258,5 @@ if (command === "preflight") await preflight();
 else if (command === "merge-preflight") await mergePreflight();
 else if (command === "validate") console.log(JSON.stringify(validateManifest(await readJson(resolve(process.argv[3] ?? "tests/compat/projects.lock.json"))), null, 2));
 else if (command === "aggregate") await aggregate();
+else if (command === "self-test") await selfTest();
 else throw new Error(`unknown command ${command}`);
