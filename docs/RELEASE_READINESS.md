@@ -1,10 +1,10 @@
-# v0.2.0 release readiness
+# v0.2.1 release readiness
 
 Audit date: 2026-07-14
 
 ## Decision
 
-Oath `v0.2.0` is a **developer preview**. The CLI and the documented npm
+Oath `v0.2.1` is a **developer preview**. The CLI and the documented npm
 workflow slices are eligible for a preview tag only after the exact candidate
 commit passes the manually dispatched `release-evidence-gate`. The release
 workflow checks that exact-commit result before it builds or publishes assets
@@ -20,7 +20,7 @@ adoption have not met the complete GA contract.
 Oath currently has one active maintainer. Protected `master` therefore requires
 pull requests with zero human approvals during this phase; requiring an
 independent approval would deadlock every maintainer-authored change. The
-repository still enforces all 19 required cross-platform checks, strict branch
+repository still enforces its configured cross-platform checks, strict branch
 freshness, verified commit signatures, linear history, conversation resolution,
 administrator enforcement, and force-push/deletion blocking. Independent
 approval becomes mandatory when a second active Oath maintainer is onboarded
@@ -68,6 +68,16 @@ and 100-project gates for the exact release commit.
   and signed manifest bound to its exact commit before the developer-preview
   tag. This document intentionally does not maintain a mutable latest-run
   pointer.
+- The signed `v0.2.0` tag points to commit
+  `6147df33b5beee7a9a1c39e9cbb3173226490310`, whose exact evidence run
+  [`29324736660`](https://github.com/Generalized-Labs/oath/actions/runs/29324736660)
+  passed all 54 jobs. Release run
+  [`29349917900`](https://github.com/Generalized-Labs/oath/actions/runs/29349917900)
+  then failed only while linking the Linux x86-64 and ARM64 assets because the
+  cross images lacked target `libseccomp`. No `v0.2.0` GitHub release or assets
+  were published. The tag is not moved or deleted.
+- The `v0.2.1` candidate installs target `libseccomp` in both cross images and
+  makes those two release builds required CI and exact-evidence jobs.
 - The real-project corpus now commits and digest-verifies 100 compressed npm
   lockfiles. Evidence runs no longer regenerate dependency resolution from
   mutable registry state, and npm and Oath consume the same pinned bytes through
@@ -98,7 +108,7 @@ and 100-project gates for the exact release commit.
 1. Merge the reviewed candidate to `master`.
 2. Manually dispatch `.github/workflows/ci.yml` on the exact master commit.
 3. Require every job in `release-evidence-gate` to pass without exceptions.
-4. Create `v0.2.0` on that exact commit.
+4. Create `v0.2.1` on that exact commit.
 5. Let `.github/workflows/release.yml` revalidate version, changelog, MSRV,
    tests, dependency audits, website, exact-commit evidence, platform builds,
    checksums, and provenance before publishing the GitHub release.

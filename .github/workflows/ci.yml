@@ -227,6 +227,30 @@ jobs:
             target/${{ matrix.target }}/release/oath.exe
             oath.exe.sha256
 
+  linux-artifacts:
+    strategy:
+      fail-fast: false
+      matrix:
+        target: [x86_64-unknown-linux-gnu, aarch64-unknown-linux-gnu]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - run: rustup target add ${{ matrix.target }}
+      - run: cargo install cross --version 0.2.5 --locked
+      - run: cross build --release --locked --bin oath --target ${{ matrix.target }}
+      - name: Verify and checksum Linux release binary
+        shell: bash
+        run: |
+          set -euo pipefail
+          file target/${{ matrix.target }}/release/oath
+          sha256sum target/${{ matrix.target }}/release/oath > oath.sha256
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        with:
+          name: oath-${{ matrix.target }}
+          path: |
+            target/${{ matrix.target }}/release/oath
+            oath.sha256
+
   audit:
     if: github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
     runs-on: ubuntu-latest
@@ -441,6 +465,7 @@ jobs:
       - msrv
       - check
       - windows-artifacts
+      - linux-artifacts
       - audit
       - compatibility-scale
       - real-project-aggregate
@@ -462,6 +487,7 @@ jobs:
           MSRV: ${{ needs.msrv.result }}
           CHECKS: ${{ needs.check.result }}
           WINDOWS_ARTIFACTS: ${{ needs.windows-artifacts.result }}
+          LINUX_ARTIFACTS: ${{ needs.linux-artifacts.result }}
           AUDIT: ${{ needs.audit.result }}
           RELIABILITY: ${{ needs.reliability-drills.result }}
         run: |
@@ -476,6 +502,7 @@ jobs:
           test "$MSRV" = success
           test "$CHECKS" = success
           test "$WINDOWS_ARTIFACTS" = success
+          test "$LINUX_ARTIFACTS" = success
           test "$AUDIT" = success
           test "$RELIABILITY" = success
           echo "Oath release evidence gate passed"

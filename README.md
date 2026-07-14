@@ -64,15 +64,17 @@ procedure live in [`contracts/`](contracts/README.md).
 window. JSON modes reserve stdout for one parseable document.
 
 > [!IMPORTANT]
-> The installer follows the latest non-prerelease GitHub release. The `v0.2.0`
+> The installer follows the latest non-prerelease GitHub release. The `v0.2.1`
 > line is a developer preview that adds staged publishing, signed transfers,
 > the PostgreSQL registry control plane, expanded evidence, native capability
 > reporting, and Windows artifacts. Preview users can download its release
-> assets or build `master` from source; `v0.1.7` remains the stable binary.
+> assets or build `master` from source; `v0.1.7` remains the stable binary. The
+> signed `v0.2.0` tag did not publish a GitHub release after its Linux artifact
+> builds failed, and it remains immutable as part of the release record.
 
 ## Release status
 
-`v0.2.0` is a developer preview, not a general-availability
+`v0.2.1` is a developer preview, not a general-availability
 claim. The tested CLI workflow slices and native Linux/Windows boundaries have
 public evidence. The hosted registry remains a business-beta control plane, and
 the broader GA gates for detection quality, performance, signed platform
@@ -137,7 +139,7 @@ speed claim: Oath was slower than npm and Bun on both cold and warm runs.
 
 - [Live evidence website](https://generalized-labs.github.io/oath/)
 - [Compatibility and security methodology](docs/GA_EVIDENCE.md)
-- [v0.2.0 release-readiness report](docs/RELEASE_READINESS.md)
+- [v0.2.1 release-readiness report](docs/RELEASE_READINESS.md)
 - [npm workflow contract](docs/NPM_COMPATIBILITY_CONTRACT.md)
 - [Scanner threat model and limitations](docs/scanner-threat-model.md)
 - [Registry deployment and operations](docs/REGISTRY_OPERATIONS.md)
@@ -198,7 +200,7 @@ cargo build --release --locked --bin oath
 .\target\release\oath.exe --version
 ```
 
-Windows Server 2022 and 2025 native-containment checks pass in CI. The `v0.2.0`
+Windows Server 2022 and 2025 native-containment checks pass in CI. The `v0.2.1`
 developer-preview release includes x86-64 and ARM64 Windows binaries. Do not use
 the Unix installer on Windows.
 
@@ -225,7 +227,7 @@ oath log                           # inspect the local transparency log
 oath score lodash                  # inspect package evidence
 ```
 
-These commands are available in the `v0.2.0` developer preview and on `master`:
+These commands are available in the `v0.2.1` developer preview and on `master`:
 
 ```sh
 oath sandbox-info --json
