@@ -13,7 +13,7 @@
     },
     {
       "repository": "solidjs/solid-start",
-      "commit": "0c95804d9e0b617dcc2c7003e7051e3533fbe28b",
+      "commit": "8fb81e6cbf8c2cefb0c9b8f77829c60b5e3df91c",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
@@ -21,7 +21,7 @@
     },
     {
       "repository": "meteor/meteor",
-      "commit": "67712f69146b3ed88e43c1c20d25d970058d2bf0",
+      "commit": "c13c86a2b933dbd8266866bb360010c77abb1577",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "frameworks-applications",
@@ -85,7 +85,7 @@
     },
     {
       "repository": "webpack/webpack",
-      "commit": "0034b8ac8d6b235e6d51820215a20605a6098fd3",
+      "commit": "175c32448a79d75339f45065240b36ad707bd2ac",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
@@ -101,7 +101,7 @@
     },
     {
       "repository": "web-infra-dev/rspack",
-      "commit": "8ab773f47dd6ac1c06f6090274a16417ad79897c",
+      "commit": "03465ca65d4d5b262c217c3f2438ef4fa27aeff8",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
@@ -109,7 +109,7 @@
     },
     {
       "repository": "vercel/turborepo",
-      "commit": "ed1724965d854cd9c2f8b71a0fa826ec786be161",
+      "commit": "02ef8289079e6fcedfd20a7733ad7b9383c65b58",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "build-tools",
@@ -189,7 +189,7 @@
     },
     {
       "repository": "facebook/flow",
-      "commit": "2304a9a1337c98f5a34531b3932ea743b7317fe4",
+      "commit": "17a8ebeda85e3d809bd2c5d928bbe2bc4f304980",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
@@ -213,11 +213,11 @@
     },
     {
       "repository": "prettier/prettier",
-      "commit": "41a8b99bb8d7d68c00d90d5b8fbaed20511d4cfd",
+      "commit": "c4174396c53538bace2fd6bb4610e8d9b85664a0",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "typescript-compilers",
-      "expected_lock_sha256": "ec29c0ecf4f8725061b2c384394e307896e6cddf528536e32d8682ad903b6211"
+      "expected_lock_sha256": "4339d82f02614faeaf44236f46b614ba4e104d12cb93ddd919acc88a8d10ddbb"
     },
     {
       "repository": "eslint/eslint",
@@ -285,7 +285,7 @@
     },
     {
       "repository": "microsoft/playwright",
-      "commit": "b635709153e72aeacc5cb6f13a6546b5c8dd2bb6",
+      "commit": "ec680e239889ffbd3ac7d23a319ff684e0cf06e3",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
@@ -293,11 +293,11 @@
     },
     {
       "repository": "puppeteer/puppeteer",
-      "commit": "3232cd4bd432107d2007e9d582fee5ade311a1df",
+      "commit": "5f5f931a0f2bc64bfb30039c507d763ce044c263",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "0e859f691bd5f707031875c59efb2e463258897525364d1d210f3f2dab8736b5"
+      "expected_lock_sha256": "517bd1c9016e5acc4aed25873e589bca83d94ff68004548f997d6eb342246a57"
     },
     {
       "repository": "testing-library/dom-testing-library",
@@ -317,11 +317,11 @@
     },
     {
       "repository": "chaijs/chai",
-      "commit": "21b1becd3151a465c3f52e90e516360d917bd074",
+      "commit": "c2821ba5ba89e8e5ed8b6e8255f7ee16241bdc38",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "test-tools",
-      "expected_lock_sha256": "243eed5f4aa8c86645366c9629426498fd3a151d75bff1779cb39e12174c92fa"
+      "expected_lock_sha256": "35d8bb71198e53ff03f0820d31254adbc290d68948fa5cbde42b251725c1bc45"
     },
     {
       "repository": "expressjs/express",
@@ -329,7 +329,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "33ec538e997daab092acb7e67f93f86faa5e813fdec0260ecfb553b444551442"
+      "expected_lock_sha256": "2d2a080fa43103b19bc74e050186263319b296a11d55802f21fdb07e498fbec8"
     },
     {
       "repository": "fastify/fastify",
@@ -353,7 +353,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "server-frameworks",
-      "expected_lock_sha256": "f776520318037f1ad44746ef939359ed2fdc144390a8fd77821590f04b93caf3"
+      "expected_lock_sha256": "24715e78e268c0c257cc1d1369a903631c9d571a05aed6c8bce9357ce6dfe486"
     },
     {
       "repository": "adonisjs/core",
@@ -429,15 +429,15 @@
     },
     {
       "repository": "ant-design/ant-design",
-      "commit": "3fb6aa78c71fc80719319201451cc0b8bd9697f7",
+      "commit": "f97ec837e9187dc688de922d755e11aa8e5c06cb",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
-      "expected_lock_sha256": "3d014f644cb41caae3e58acbccbafdafb95390e3c946bb0558e98c8748c9bce6"
+      "expected_lock_sha256": "42b9c45efb4529ca6d4edc544a92a8d11cba958a93d101bdc0efe66a349fff2e"
     },
     {
       "repository": "radix-ui/primitives",
-      "commit": "e4e06649716b0134ece0df9e067403992cfeb47d",
+      "commit": "65a3fa4658fa1ed84e82634701fd4bb4e8baf65e",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
@@ -469,7 +469,7 @@
     },
     {
       "repository": "ionic-team/ionic-framework",
-      "commit": "4f2ab734fa62389f0b757746a8ed4d05697ef81f",
+      "commit": "44461ddda5ef44030f477931dd94cce4674801a6",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "ui-libraries",
@@ -497,7 +497,7 @@
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "dd97d2f8bddd46b5211818b2bd30956be70d73d6db632fb7d46e49562bc07637"
+      "expected_lock_sha256": "1adddb72c2c78871012eed1f57291015f9fb1f94086e1bc6ff515e99409e1542"
     },
     {
       "repository": "mongodb/node-mongodb-native",
@@ -509,11 +509,11 @@
     },
     {
       "repository": "redis/node-redis",
-      "commit": "d29677ac4d3e86d307a76160df7a28baf02709a9",
+      "commit": "cfcb5d5ba8cadb4fead0e4e0f8f76929f7235445",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
-      "expected_lock_sha256": "15405edd444ba08bcfb153c31760e09078da4afb9e31631dffea1213aaf45fc5"
+      "expected_lock_sha256": "858f134b649b201278a124baac649d1e72f672e5c5fac5496f49ba9f10fa1023"
     },
     {
       "repository": "redis/ioredis",
@@ -541,7 +541,7 @@
     },
     {
       "repository": "sidorares/node-mysql2",
-      "commit": "6b933f6d248b8fb5f3004d85d9562e9f5abdd16f",
+      "commit": "631649241506b09703d56e7203408bf17b21ad3a",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "database-orm",
@@ -573,11 +573,11 @@
     },
     {
       "repository": "lerna/lerna",
-      "commit": "294e33a2a6885bb34fdd8e48125eaf80d1058db1",
+      "commit": "b1ff72f7053870eaf661b06af9759c9fe6c0c5d6",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "731a16242aa81091f19aab7d1bd3b73a9d3d9f170375cad7726202efe6d89a69"
+      "expected_lock_sha256": "83c7694303c14d9f42d8e57e5f1eb661c155fa5f44cf24c0cdb4641224dd7fe9"
     },
     {
       "repository": "google/wireit",
@@ -637,11 +637,11 @@
     },
     {
       "repository": "WordPress/gutenberg",
-      "commit": "431fb5ae1502040a3ad83372e2cf809e648f7df3",
+      "commit": "b5abf9e3ae0dc9fe924921e3fa7fab94b56993e3",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "monorepos-workspaces",
-      "expected_lock_sha256": "5da02b9dcfb231037b3f5aa912e04fc9dd57b3e71aa9a56156d8a2ddcc99df5f"
+      "expected_lock_sha256": "806603ebf0beba4d3bed91cc9bdb13ada44812767e9535f8b3ab04323e6bb171"
     },
     {
       "repository": "nodejs/node-addon-api",
@@ -701,7 +701,7 @@
     },
     {
       "repository": "Automattic/node-canvas",
-      "commit": "cffde0df80b385f5787c29369194966b39496066",
+      "commit": "47cd1428bf6dc76591f66486be98b8bb069827a9",
       "subdirectory": ".",
       "npm": "11.12.1",
       "category": "native-platform",
