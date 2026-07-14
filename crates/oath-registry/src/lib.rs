@@ -15,6 +15,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+pub mod assessment;
 pub mod billing;
 pub mod control_plane;
 pub mod identity;
@@ -77,6 +78,7 @@ impl IntoResponse for ApiError {
 pub struct Principal {
     pub organization: String,
     pub role: String,
+    pub kind: String,
 }
 
 #[derive(Debug, Serialize)]
@@ -85,6 +87,7 @@ pub struct TransparencyCheckpoint {
     pub event_count: usize,
     pub merkle_root: String,
     pub latest_hash: Option<String>,
+    pub canonicalization: String,
     pub public_key: String,
     pub signature: String,
 }
@@ -116,7 +119,11 @@ pub struct StageRecord {
     pub status: String,
     pub private: bool,
     pub manifest: Value,
+    pub publisher_assessment: Value,
     pub assessment: Value,
+    pub server_evidence: Value,
+    pub sbom: Value,
+    pub provenance: Value,
     pub created_at: u64,
 }
 
@@ -215,6 +222,47 @@ pub(crate) fn merkle_root(mut hashes: Vec<String>) -> String {
     hashes.remove(0)
 }
 
+pub(crate) fn merkle_inclusion_proof(
+    mut hashes: Vec<String>,
+    mut index: usize,
+) -> Option<Vec<String>> {
+    if hashes.is_empty() || index >= hashes.len() {
+        return None;
+    }
+    let mut proof = Vec::new();
+    while hashes.len() > 1 {
+        if hashes.len() % 2 == 1 {
+            hashes.push(hashes.last()?.clone());
+        }
+        proof.push(hashes[index ^ 1].clone());
+        index /= 2;
+        hashes = hashes
+            .chunks(2)
+            .map(|pair| hex_sha256(format!("{}{}", pair[0], pair[1]).as_bytes()))
+            .collect();
+    }
+    Some(proof)
+}
+
+#[cfg(test)]
+pub(crate) fn verify_merkle_inclusion(
+    leaf: &str,
+    mut index: usize,
+    proof: &[String],
+    root: &str,
+) -> bool {
+    let mut current = leaf.to_owned();
+    for sibling in proof {
+        current = if index.is_multiple_of(2) {
+            hex_sha256(format!("{current}{sibling}").as_bytes())
+        } else {
+            hex_sha256(format!("{sibling}{current}").as_bytes())
+        };
+        index /= 2;
+    }
+    current == root
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -226,6 +274,16 @@ mod tests {
             merkle_root(vec!["a".into(), "b".into()])
         );
         assert_ne!(merkle_root(vec!["a".into()]), merkle_root(vec!["b".into()]));
+    }
+
+    #[test]
+    fn inclusion_proofs_verify_every_leaf() {
+        let leaves = vec!["a".into(), "b".into(), "c".into(), "d".into(), "e".into()];
+        let root = merkle_root(leaves.clone());
+        for (index, leaf) in leaves.iter().enumerate() {
+            let proof = merkle_inclusion_proof(leaves.clone(), index).unwrap();
+            assert!(verify_merkle_inclusion(leaf, index, &proof, &root));
+        }
     }
 
     #[test]

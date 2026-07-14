@@ -1,0 +1,9 @@
+{
+  "name": "oath-compat-peer-dependency",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "react": "19.1.0",
+    "react-dom": "19.1.0"
+  }
+}

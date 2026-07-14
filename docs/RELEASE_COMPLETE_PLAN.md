@@ -9,6 +9,22 @@ publish -> verify -> registry/CDN -> install/exec -> revoke -> audit/replay
 Until every GA gate below passes, releases must be labeled developer preview or
 private beta, never a production npm replacement.
 
+## Gate-driven delivery windows
+
+1. Weeks 0-2: developer preview, repository/release protection, generated
+   evidence manifest, and supported-platform contract.
+2. Weeks 2-10: trusted install/exec contract, layered decisions, deterministic
+   signatures, and fail-closed native containment.
+3. Weeks 6-18: staged safe publishing, server reassessment, managed registry,
+   managed isolation, OIDC identity, and immutable evidence.
+4. Weeks 12-24: atomic revocation/outbox delivery, rollback/freshness,
+   transparency witnesses, SLO instrumentation, restore, rotation, and failover.
+5. Weeks 20-36: design-partner validation, independent review, penetration and
+   sandbox testing, 60-day soak, workflow replacements, and exact-tag GA audit.
+
+These windows overlap and are planning targets, not a promise. A failed gate
+moves the date instead of weakening the claim.
+
 ## Product invariants
 
 1. Supported npm projects behave identically under the pinned npm reference.
@@ -87,11 +103,12 @@ Exit gate: rollback propagates within the SLO and all state transitions verify.
 ### Technical GA gates
 
 - Compatibility: a reviewed independent behavioral specification for every
-  supported workflow slice, >=500 generated stress executions, >=100 pinned real
-  projects, required workflows at 100%, and zero unexplained graph/content/
+  supported workflow slice, 100 independently reviewed workflows, >=10,000
+  generated executions, >=250 pinned real projects, required workflows at 100%,
+  and zero unexplained graph/content/
   lifecycle/shim/exit-code differences. Generated repetitions never count as
   independent workflow coverage.
-- Detection: >=98% known-malware recall, >=95% private adversarial recall, <=0.5%
+- Detection: >=99% known-malware recall, >=95% private adversarial recall, <=0.5%
   clean-corpus false positives, and 100% block for secret-plus-exfiltration cases.
 - Sandbox: zero escapes, secret leaks, outside writes, unauthorized connections, or
   child-policy bypasses on supported operating systems.
@@ -105,6 +122,7 @@ Exit gate: rollback propagates within the SLO and all state transitions verify.
 ### Commercial GA gates
 
 - 50 design partners; 20 teams active in CI; 10 teams using private packages.
+- 10 private-package tenants and 10 production publisher workflows.
 - 10,000 weekly exec assessments; >=40% second-week retention.
 - >=25% activated-team rate and >=10% activated free-to-paid conversion.
 - >=70% hosted-assessment gross margin and <5% monthly paid logo churn.
@@ -116,8 +134,17 @@ Exit gate: rollback propagates within the SLO and all state transitions verify.
 - Pro: hosted assessments, private packages, CI policy, 30-day audit history.
 - Team: SSO, organization policy, hosted private registry, approval workflows,
   exports, alerts, analytics, and one-year retention.
-- Enterprise: SCIM, custom retention, CMK/storage, regions, SLA, air-gap support,
-  policy packs, security review support, and incident response.
+- Enterprise: managed isolation, SCIM, custom retention, CMK/storage, regions,
+  data residency, SLA, policy packs, security review support, and incident response.
+
+Customer-operated self-hosting and air-gapped operation are post-GA. GA includes
+managed multi-tenant and managed isolated deployments using the same binaries,
+APIs, evidence contract, upgrade process, and backup controls.
+
+The CLI, schemas, decision verification, and local transparency tooling remain
+MIT. The commercial product has three entry messages over one trust chain: safe
+execution for agents, enforceable policy for security teams, and reversible,
+evidence-backed releases for publishers.
 
 ## GA release checklist
 
@@ -128,3 +155,6 @@ Exit gate: rollback propagates within the SLO and all state transitions verify.
 - Status page, support, terms, privacy, DPA, incident response, and billing are live.
 - Ten design partners confirm replacement of their existing workflow.
 - Every launch claim maps to a current public evidence artifact.
+- The exact tagged commit completes a 60-day production soak with every service
+  objective green, no unresolved critical/high security findings, and all
+  required disaster, key-compromise, isolation, and split-view drills passing.

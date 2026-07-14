@@ -1,0 +1,70 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oath.dev/schemas/publish-assessment-v2.json",
+  "title": "Oath PublishAssessment v2",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "expires_at", "name", "version", "tag", "access", "package_digest", "unpacked_bytes", "files", "dependency_count", "lifecycle_hooks", "capabilities", "source_available", "secret_findings", "decision", "reason_code", "previous_release", "policy_digest", "evidence_digest", "rule_bundle_version", "limitations", "signature"],
+  "properties": {
+    "schema_version": { "const": 2 },
+    "generated_at": { "type": "integer", "minimum": 0 },
+    "expires_at": { "type": "integer", "minimum": 0 },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "string", "minLength": 1 },
+    "tag": { "type": "string", "minLength": 1 },
+    "access": { "type": ["string", "null"] },
+    "package_digest": { "$ref": "#/$defs/digest" },
+    "unpacked_bytes": { "type": "integer", "minimum": 0 },
+    "files": { "type": "array", "items": { "$ref": "#/$defs/file" } },
+    "dependency_count": { "type": "integer", "minimum": 0 },
+    "lifecycle_hooks": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "capabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+    "source_available": { "type": "boolean" },
+    "secret_findings": { "type": "array", "items": { "type": "string" } },
+    "decision": { "enum": ["allow", "deny", "review", "unknown"] },
+    "reason_code": { "type": "string", "pattern": "^OATH_[A-Z0-9_]+$" },
+    "previous_release": { "oneOf": [{ "$ref": "#/$defs/publishDiff" }, { "type": "null" }] },
+    "policy_digest": { "$ref": "#/$defs/digest" },
+    "evidence_digest": { "$ref": "#/$defs/digest" },
+    "rule_bundle_version": { "type": "string", "minLength": 1 },
+    "limitations": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+    "signature": { "$ref": "#/$defs/signature" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "file": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["path", "bytes", "sha256"],
+      "properties": {
+        "path": { "type": "string", "minLength": 1 },
+        "bytes": { "type": "integer", "minimum": 0 },
+        "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" }
+      }
+    },
+    "publishDiff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous_version", "added_files", "removed_files", "changed_files", "capabilities_added", "capabilities_removed"],
+      "properties": {
+        "previous_version": { "type": "string", "minLength": 1 },
+        "added_files": { "type": "array", "items": { "type": "string" } },
+        "removed_files": { "type": "array", "items": { "type": "string" } },
+        "changed_files": { "type": "array", "items": { "type": "string" } },
+        "capabilities_added": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "capabilities_removed": { "type": "array", "items": { "type": "string" }, "uniqueItems": true }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "canonicalization", "public_key", "signature"],
+      "properties": {
+        "algorithm": { "const": "ed25519" },
+        "canonicalization": { "const": "oath-json-v1" },
+        "public_key": { "type": "string" },
+        "signature": { "type": "string" }
+      }
+    }
+  }
+}

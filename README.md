@@ -52,6 +52,17 @@ The result is machine-readable and includes the resolved identity, integrity,
 inferred permissions, findings, policy decision, and effective sandbox mode.
 `--dry-run` does not start package code.
 
+`ExecAssessment v3` is the default JSON contract and includes policy/evidence
+digests, expiry, rule-bundle identity, limitations, and an Ed25519 signature.
+Existing integrations can request the previous shape with
+`--schema-version 2` for one major release.
+The schemas, TypeScript types, and cross-language `oath-json-v1` verification
+procedure live in [`contracts/`](contracts/README.md).
+
+`oath publish --dry-run --json` similarly emits a signed
+`PublishAssessment v2`; use `--schema-version 1` during the compatibility
+window. JSON modes reserve stdout for one parseable document.
+
 > [!IMPORTANT]
 > The installer follows the latest stable GitHub release. The current `master`
 > branch is the `v0.2.0` release candidate and adds staged publishing, signed
@@ -93,7 +104,7 @@ flowchart LR
 
   subgraph Publish["publish / transfer"]
     PK["npm's actual packlist"] --> PD["File + capability diff"]
-    PD --> PS["SPDX SBOM + provenance + signed assessment"]
+    PD --> PS["SPDX SBOM + assessment attestation + signed assessment"]
     PS --> PR["Stage, publish, or signed handoff"]
   end
 
@@ -116,6 +127,10 @@ a new decision.
 | Independent install behaviors | 3 / 3 | Reviewed `basic`, `alias`, and `workspace` behaviors |
 | Native capability reports | 4 / 4 | Ubuntu 24 strict enforcement, Ubuntu 22 fail-closed behavior, and Windows Server 2022/2025 containment |
 
+The candidate source contract now contains ten behavior IDs and passed 10/10
+locally on macOS against npm 11.12.1. The table stays at the last signed 3/3 CI
+baseline until a new exact-commit cross-platform evidence artifact is attested.
+
 The post-merge smoke set also matched 108,376 installed entries across Rspack,
 Karma, and Mattermost. The current installer benchmark does **not** support a
 speed claim: Oath was slower than npm and Bun on both cold and warm runs.
@@ -126,6 +141,16 @@ speed claim: Oath was slower than npm and Bun on both cold and warm runs.
 - [npm workflow contract](docs/NPM_COMPATIBILITY_CONTRACT.md)
 - [Scanner threat model and limitations](docs/scanner-threat-model.md)
 - [Registry deployment and operations](docs/REGISTRY_OPERATIONS.md)
+- [Supported platform and compatibility matrix](docs/SUPPORTED_PLATFORMS.md)
+- [Published JSON Schemas and TypeScript contracts](contracts/)
+- [Registry OpenAPI contract](contracts/registry-openapi.yaml)
+- [Service objectives](docs/SERVICE_LEVEL_OBJECTIVES.md)
+- [Incident response](docs/INCIDENT_RESPONSE.md)
+- [Data retention and deletion](docs/DATA_RETENTION.md)
+- [Package lifecycle and revocation policy](docs/PACKAGE_LIFECYCLE_POLICY.md)
+- [Legal and compliance gate tracker](docs/LEGAL_READINESS.md)
+- [GA gate tracker](docs/GA_GATE_TRACKER.md)
+- [Support policy](SUPPORT.md)
 - [Raw installer benchmark](compat-results/benchmarks/installers.json)
 
 ## Installation options

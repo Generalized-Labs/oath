@@ -19,6 +19,48 @@
       "workflow_slice": "workspaces",
       "fixture": "workspace",
       "mode": "clean"
+    },
+    {
+      "id": "install-development-dependency",
+      "workflow_slice": "dependency-groups",
+      "fixture": "dev-dependency",
+      "mode": "clean"
+    },
+    {
+      "id": "install-optional-dependency",
+      "workflow_slice": "optional-dependencies",
+      "fixture": "optional-dependency",
+      "mode": "clean"
+    },
+    {
+      "id": "install-peer-dependency-pair",
+      "workflow_slice": "peer-dependencies",
+      "fixture": "peer-dependency",
+      "mode": "clean"
+    },
+    {
+      "id": "install-root-override",
+      "workflow_slice": "overrides",
+      "fixture": "override",
+      "mode": "clean"
+    },
+    {
+      "id": "install-nested-version-conflict",
+      "workflow_slice": "nested-placement",
+      "fixture": "nested-conflict",
+      "mode": "clean"
+    },
+    {
+      "id": "install-scoped-package",
+      "workflow_slice": "scoped-packages",
+      "fixture": "scoped-package",
+      "mode": "clean"
+    },
+    {
+      "id": "install-dist-tag-latest",
+      "workflow_slice": "dist-tags",
+      "fixture": "dist-tag",
+      "mode": "clean"
     }
   ]
 }

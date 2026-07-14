@@ -1,4 +1,5 @@
 use anyhow::{Context, Result};
+use futures_util::StreamExt;
 use object_store::{
     ObjectStore, ObjectStoreExt, PutMode, PutOptions, aws::AmazonS3Builder,
     gcp::GoogleCloudStorageBuilder, local::LocalFileSystem, path::Path as ObjectPath,
@@ -87,6 +88,16 @@ impl ArtifactStore {
             }
         }
         anyhow::bail!("artifact {digest} was not found in primary or replica stores")
+    }
+
+    pub async fn ready(&self) -> Result<()> {
+        for store in std::iter::once(&self.primary).chain(self.replicas.iter()) {
+            let mut objects = store.list(None);
+            if let Some(result) = objects.next().await {
+                result.context("object store readiness listing failed")?;
+            }
+        }
+        Ok(())
     }
 }
 

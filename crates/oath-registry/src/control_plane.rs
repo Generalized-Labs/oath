@@ -27,13 +27,32 @@ pub struct PackageVersionRecord {
     pub private: bool,
     pub manifest: Value,
     pub assessment: Value,
+    pub server_evidence: Value,
+    pub sbom: Value,
+    pub provenance: Value,
     pub published_at: i64,
+    pub download_count: i64,
 }
 
 #[derive(Debug)]
 pub struct PackageRecord {
     pub organization: String,
     pub private: bool,
+}
+
+#[derive(Debug)]
+pub struct VersionBundleRecord {
+    pub organization: String,
+    pub digest: String,
+    pub status: String,
+    pub private: bool,
+    pub assessment: Value,
+    pub server_evidence: Value,
+    pub sbom: Value,
+    pub provenance: Value,
+    pub published_at: i64,
+    pub download_count: i64,
+    pub tombstone: Option<Value>,
 }
 
 #[derive(Debug)]
@@ -62,6 +81,10 @@ impl PostgresControlPlane {
             .execute(&self.pool)
             .await
             .context("migrate PostgreSQL control plane")?;
+        raw_sql(include_str!("../migrations/0002_ga_foundation.sql"))
+            .execute(&self.pool)
+            .await
+            .context("migrate GA foundation schema")?;
         Ok(())
     }
 
@@ -81,18 +104,20 @@ impl PostgresControlPlane {
         organization: &str,
         role: &str,
         expires_at: i64,
+        kind: &str,
     ) -> Result<()> {
-        query("INSERT INTO tokens(token_hash,organization,role,expires_at,kind) VALUES ($1,$2,$3,$4,'short-lived')")
-            .bind(hash).bind(organization).bind(role).bind(expires_at).execute(&self.pool).await?;
+        query("INSERT INTO tokens(token_hash,organization,role,expires_at,kind) VALUES ($1,$2,$3,$4,$5)")
+            .bind(hash).bind(organization).bind(role).bind(expires_at).bind(kind).execute(&self.pool).await?;
         Ok(())
     }
 
     pub async fn authenticate(&self, hash: &str) -> Result<Option<Principal>> {
-        let row = query("SELECT organization,role FROM tokens WHERE token_hash=$1 AND (expires_at IS NULL OR expires_at>$2)")
+        let row = query("SELECT organization,role,kind FROM tokens WHERE token_hash=$1 AND (expires_at IS NULL OR expires_at>$2)")
             .bind(hash).bind(crate::now() as i64).fetch_optional(&self.pool).await?;
         Ok(row.map(|row| Principal {
             organization: row.get("organization"),
             role: row.get("role"),
+            kind: row.get("kind"),
         }))
     }
 
@@ -117,7 +142,12 @@ impl PostgresControlPlane {
         }))
     }
 
-    pub async fn create_stage(&self, stage: &StageRecord) -> Result<()> {
+    pub async fn create_stage(
+        &self,
+        stage: &StageRecord,
+        event_key: &str,
+        event: &Value,
+    ) -> Result<()> {
         let mut tx = self.pool.begin().await?;
         query("INSERT INTO packages(name,organization,private,created_at) VALUES ($1,$2,$3,$4) ON CONFLICT (name) DO NOTHING")
             .bind(&stage.name).bind(&stage.organization).bind(stage.private).bind(stage.created_at as i64).execute(&mut *tx).await?;
@@ -135,22 +165,26 @@ impl PostgresControlPlane {
             private == stage.private,
             "package visibility cannot change between versions"
         );
-        query("INSERT INTO stages(id,organization,name,version,tag,digest,status,private,manifest,assessment,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)")
+        query("INSERT INTO stages(id,organization,name,version,tag,digest,status,private,manifest,publisher_assessment,assessment,server_evidence,sbom,provenance,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15)")
             .bind(&stage.id).bind(&stage.organization).bind(&stage.name).bind(&stage.version)
             .bind(&stage.tag).bind(&stage.digest).bind(&stage.status).bind(stage.private)
-            .bind(&stage.manifest).bind(&stage.assessment).bind(stage.created_at as i64).execute(&mut *tx).await?;
+            .bind(&stage.manifest).bind(&stage.publisher_assessment).bind(&stage.assessment)
+            .bind(&stage.server_evidence).bind(&stage.sbom).bind(&stage.provenance)
+            .bind(stage.created_at as i64).execute(&mut *tx).await?;
+        query("INSERT INTO registry_outbox(event_key,event_json,available_at,created_at) VALUES ($1,$2,$3,$3)")
+            .bind(event_key).bind(event).bind(crate::now() as i64).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(())
     }
 
     pub async fn read_stage(&self, id: &str) -> Result<Option<StageRecord>> {
-        let row = query("SELECT id,organization,name,version,tag,digest,status,private,manifest,assessment,created_at FROM stages WHERE id=$1")
+        let row = query("SELECT id,organization,name,version,tag,digest,status,private,manifest,publisher_assessment,assessment,server_evidence,sbom,provenance,created_at FROM stages WHERE id=$1")
             .bind(id).fetch_optional(&self.pool).await?;
         Ok(row.map(stage_from_row))
     }
 
     pub async fn list_stages(&self, organization: &str) -> Result<Vec<StageRecord>> {
-        Ok(query("SELECT id,organization,name,version,tag,digest,status,private,manifest,assessment,created_at FROM stages WHERE stages.organization=$1 OR EXISTS (SELECT 1 FROM package_roles WHERE package_roles.name=stages.name AND package_roles.principal_org=$1) ORDER BY created_at DESC")
+        Ok(query("SELECT id,organization,name,version,tag,digest,status,private,manifest,publisher_assessment,assessment,server_evidence,sbom,provenance,created_at FROM stages WHERE stages.organization=$1 OR EXISTS (SELECT 1 FROM package_roles WHERE package_roles.name=stages.name AND package_roles.principal_org=$1) ORDER BY created_at DESC")
             .bind(organization).fetch_all(&self.pool).await?.into_iter().map(stage_from_row).collect())
     }
 
@@ -159,6 +193,8 @@ impl PostgresControlPlane {
         stage: &StageRecord,
         approve: bool,
         reason: Option<&str>,
+        event_key: &str,
+        event: &Value,
     ) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
         let status: Option<String> =
@@ -176,8 +212,11 @@ impl PostgresControlPlane {
                 .bind(reason)
                 .execute(&mut *tx)
                 .await?;
-            query("INSERT INTO versions(name,version,organization,digest,status,private,manifest,assessment,published_at) VALUES ($1,$2,$3,$4,'active',$5,$6,$7,$8)")
-                .bind(&stage.name).bind(&stage.version).bind(&stage.organization).bind(&stage.digest).bind(stage.private).bind(&stage.manifest).bind(&stage.assessment).bind(crate::now() as i64).execute(&mut *tx).await?;
+            query("INSERT INTO versions(name,version,organization,digest,status,private,manifest,publisher_assessment,assessment,server_evidence,sbom,provenance,published_at) VALUES ($1,$2,$3,$4,'active',$5,$6,$7,$8,$9,$10,$11,$12)")
+                .bind(&stage.name).bind(&stage.version).bind(&stage.organization).bind(&stage.digest)
+                .bind(stage.private).bind(&stage.manifest).bind(&stage.publisher_assessment)
+                .bind(&stage.assessment).bind(&stage.server_evidence).bind(&stage.sbom)
+                .bind(&stage.provenance).bind(crate::now() as i64).execute(&mut *tx).await?;
             query("INSERT INTO dist_tags(name,tag,version) VALUES ($1,$2,$3) ON CONFLICT (name,tag) DO UPDATE SET version=EXCLUDED.version")
                 .bind(&stage.name).bind(&stage.tag).bind(&stage.version).execute(&mut *tx).await?;
         } else {
@@ -187,6 +226,8 @@ impl PostgresControlPlane {
                 .execute(&mut *tx)
                 .await?;
         }
+        query("INSERT INTO registry_outbox(event_key,event_json,available_at,created_at) VALUES ($1,$2,$3,$3)")
+            .bind(event_key).bind(event).bind(crate::now() as i64).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -215,8 +256,46 @@ impl PostgresControlPlane {
         }))
     }
 
+    pub async fn version_bundle(
+        &self,
+        name: &str,
+        version: &str,
+    ) -> Result<Option<VersionBundleRecord>> {
+        let row = query("SELECT versions.organization,versions.digest,versions.status,versions.private,versions.assessment,versions.server_evidence,versions.sbom,versions.provenance,versions.published_at,versions.download_count,to_jsonb(tombstones) AS tombstone FROM versions LEFT JOIN tombstones USING (name,version) WHERE versions.name=$1 AND versions.version=$2")
+            .bind(name).bind(version).fetch_optional(&self.pool).await?;
+        Ok(row.map(|row| VersionBundleRecord {
+            organization: row.get("organization"),
+            digest: row.get("digest"),
+            status: row.get("status"),
+            private: row.get("private"),
+            assessment: row.get("assessment"),
+            server_evidence: row.get("server_evidence"),
+            sbom: row.get("sbom"),
+            provenance: row.get("provenance"),
+            published_at: row.get("published_at"),
+            download_count: row.get("download_count"),
+            tombstone: row.get("tombstone"),
+        }))
+    }
+
+    pub async fn public_quarantines(&self) -> Result<Vec<(String, String, String, i64)>> {
+        let rows = query("SELECT tombstones.name,tombstones.version,tombstones.reason,tombstones.created_at FROM tombstones JOIN packages USING (name) WHERE tombstones.status='quarantined' AND packages.private=false ORDER BY tombstones.created_at")
+            .fetch_all(&self.pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| {
+                (
+                    row.get("name"),
+                    row.get("version"),
+                    row.get("reason"),
+                    row.get("created_at"),
+                )
+            })
+            .collect())
+    }
+
     pub async fn package_versions(&self, name: &str) -> Result<Vec<PackageVersionRecord>> {
-        let rows = query("SELECT organization,version,digest,status,private,manifest,assessment,published_at FROM versions WHERE name=$1 AND status='active' ORDER BY published_at")
+        let rows = query("SELECT organization,version,digest,status,private,manifest,assessment,server_evidence,sbom,provenance,published_at,download_count FROM versions WHERE name=$1 AND status='active' ORDER BY published_at")
             .bind(name).fetch_all(&self.pool).await?;
         Ok(rows
             .into_iter()
@@ -228,9 +307,22 @@ impl PostgresControlPlane {
                 private: row.get("private"),
                 manifest: row.get("manifest"),
                 assessment: row.get("assessment"),
+                server_evidence: row.get("server_evidence"),
+                sbom: row.get("sbom"),
+                provenance: row.get("provenance"),
                 published_at: row.get("published_at"),
+                download_count: row.get("download_count"),
             })
             .collect())
+    }
+
+    pub async fn record_download(&self, name: &str, version: &str) -> Result<()> {
+        query("UPDATE versions SET download_count=download_count+1 WHERE name=$1 AND version=$2")
+            .bind(name)
+            .bind(version)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
     }
 
     pub async fn dist_tags(&self, name: &str) -> Result<Vec<(String, String)>> {
@@ -252,8 +344,11 @@ impl PostgresControlPlane {
         status: &str,
         reason: &str,
         actor_org: &str,
+        created_at: i64,
         signature: &str,
         public_key: &str,
+        event_key: &str,
+        event: &Value,
     ) -> Result<bool> {
         let mut tx = self.pool.begin().await?;
         let updated = query("UPDATE versions SET status=$3 WHERE name=$1 AND version=$2")
@@ -268,7 +363,7 @@ impl PostgresControlPlane {
             return Ok(false);
         }
         query("INSERT INTO tombstones(name,version,status,reason,actor_org,created_at,signature,public_key) VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (name,version) DO UPDATE SET status=EXCLUDED.status,reason=EXCLUDED.reason,actor_org=EXCLUDED.actor_org,created_at=EXCLUDED.created_at,signature=EXCLUDED.signature,public_key=EXCLUDED.public_key")
-            .bind(name).bind(version).bind(status).bind(reason).bind(actor_org).bind(crate::now() as i64).bind(signature).bind(public_key).execute(&mut *tx).await?;
+            .bind(name).bind(version).bind(status).bind(reason).bind(actor_org).bind(created_at).bind(signature).bind(public_key).execute(&mut *tx).await?;
         let active: Vec<String> =
             query_scalar("SELECT version FROM versions WHERE name=$1 AND status='active'")
                 .bind(name)
@@ -298,6 +393,8 @@ impl PostgresControlPlane {
                 .execute(&mut *tx)
                 .await?;
         }
+        query("INSERT INTO registry_outbox(event_key,event_json,available_at,created_at) VALUES ($1,$2,$3,$3)")
+            .bind(event_key).bind(event).bind(crate::now() as i64).execute(&mut *tx).await?;
         tx.commit().await?;
         Ok(true)
     }
@@ -387,6 +484,42 @@ impl PostgresControlPlane {
             .bind(event_id).bind(event_type).bind(payload).bind(crate::now() as i64).execute(&self.pool).await?.rows_affected()==1)
     }
 
+    pub async fn pending_outbox(&self, limit: i64) -> Result<Vec<(i64, String, Value)>> {
+        let rows = query("SELECT id,event_key,event_json FROM registry_outbox WHERE delivered_at IS NULL AND available_at<=$1 ORDER BY id LIMIT $2")
+            .bind(crate::now() as i64).bind(limit).fetch_all(&self.pool).await?;
+        Ok(rows
+            .into_iter()
+            .map(|row| (row.get("id"), row.get("event_key"), row.get("event_json")))
+            .collect())
+    }
+
+    pub async fn mark_outbox_delivered(&self, id: i64) -> Result<()> {
+        query("UPDATE registry_outbox SET delivered_at=$2 WHERE id=$1")
+            .bind(id)
+            .bind(crate::now() as i64)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn retry_outbox(&self, id: i64) -> Result<()> {
+        query("UPDATE registry_outbox SET attempts=attempts+1,available_at=$2 WHERE id=$1")
+            .bind(id)
+            .bind(crate::now().saturating_add(5) as i64)
+            .execute(&self.pool)
+            .await?;
+        Ok(())
+    }
+
+    pub async fn ready(&self) -> Result<()> {
+        let value: i32 = query_scalar("SELECT 1").fetch_one(&self.pool).await?;
+        anyhow::ensure!(
+            value == 1,
+            "PostgreSQL readiness query returned an invalid value"
+        );
+        Ok(())
+    }
+
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
@@ -403,7 +536,11 @@ fn stage_from_row(row: PgRow) -> StageRecord {
         status: row.get("status"),
         private: row.get("private"),
         manifest: row.get::<Value, _>("manifest"),
+        publisher_assessment: row.get::<Value, _>("publisher_assessment"),
         assessment: row.get::<Value, _>("assessment"),
+        server_evidence: row.get::<Value, _>("server_evidence"),
+        sbom: row.get::<Value, _>("sbom"),
+        provenance: row.get::<Value, _>("provenance"),
         created_at: row.get::<i64, _>("created_at") as u64,
     }
 }

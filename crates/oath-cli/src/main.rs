@@ -212,6 +212,9 @@ enum Commands {
         /// Emit a machine-readable JSON verdict and never prompt (for agents / CI)
         #[arg(long)]
         json: bool,
+        /// Assessment schema version to emit with --json (2 or 3).
+        #[arg(long, default_value_t = 3)]
+        schema_version: u32,
         /// Refuse to run if the safety grade is below this (A/B/C/D/F)
         #[arg(long)]
         require_grade: Option<String>,
@@ -274,6 +277,9 @@ enum Commands {
         /// Emit the versioned publish assessment as JSON.
         #[arg(long)]
         json: bool,
+        /// Assessment schema version to emit with --json (1 or 2).
+        #[arg(long, default_value_t = 2)]
+        schema_version: u32,
         /// Submit through npm's staged-publishing protocol after Oath preflight.
         #[arg(long)]
         stage: bool,
@@ -399,6 +405,7 @@ async fn main() -> Result<()> {
             yes,
             min_age,
             json,
+            schema_version,
             require_grade,
             dry_run,
             sandbox,
@@ -412,6 +419,7 @@ async fn main() -> Result<()> {
                 yes,
                 min_age.as_deref(),
                 json,
+                schema_version,
                 require_grade.as_deref(),
                 dry_run,
                 sandbox,
@@ -432,9 +440,18 @@ async fn main() -> Result<()> {
             access,
             dry_run,
             json,
+            schema_version,
             stage,
         } => {
-            cmd_publish(tag.as_deref(), access.as_deref(), dry_run, json, stage).await?;
+            cmd_publish(
+                tag.as_deref(),
+                access.as_deref(),
+                dry_run,
+                json,
+                schema_version,
+                stage,
+            )
+            .await?;
         }
         Commands::Stage { action } => {
             cmd_stage(action)?;
@@ -3139,6 +3156,7 @@ async fn cmd_exec(
     yes: bool,
     min_age: Option<&str>,
     json: bool,
+    schema_version: u32,
     require_grade: Option<&str>,
     dry_run: bool,
     sandbox: bool,
@@ -3152,6 +3170,10 @@ async fn cmd_exec(
     use std::io::Write;
 
     let start = std::time::Instant::now();
+    anyhow::ensure!(
+        matches!(schema_version, 2 | 3),
+        "unsupported exec assessment schema {schema_version}; supported versions are 2 and 3"
+    );
     let (pkg_name, pkg_version) = parse_package_spec(package);
     let sandbox_decision = resolve_exec_sandbox(sandbox, sandbox_mode)?;
 
@@ -3226,11 +3248,93 @@ async fn cmd_exec(
         let min_days = (min_secs / 86400).max(1);
         if days < min_days {
             if json {
+                let sandbox_capabilities = match sandbox_decision.effective_mode {
+                    ExecSandboxMode::Native => oath_sandbox::verified_native_capabilities(),
+                    ExecSandboxMode::Node => oath_sandbox::BackendCapabilities {
+                        backend: "node-permissions".into(),
+                        available: true,
+                        filesystem_isolation: true,
+                        network_isolation: true,
+                        process_isolation: false,
+                        resource_limits: false,
+                        degraded_reason: Some(
+                            "Node permissions are not an OS process sandbox".into(),
+                        ),
+                    },
+                    _ => oath_sandbox::BackendCapabilities {
+                        backend: "off".into(),
+                        available: true,
+                        filesystem_isolation: false,
+                        network_isolation: false,
+                        process_isolation: false,
+                        resource_limits: false,
+                        degraded_reason: Some("sandbox disabled".into()),
+                    },
+                };
+                let assessment = exec_assessment::ExecAssessment {
+                    schema_version: exec_assessment::EXEC_ASSESSMENT_VERSION,
+                    identity: exec_assessment::PackageIdentity {
+                        name: pkg_name.clone(),
+                        version: version.clone(),
+                        binary: None,
+                        registry: "https://registry.npmjs.org".into(),
+                        integrity: info.dist.integrity.clone(),
+                        publisher: last_publisher.clone(),
+                        publish_age_days: age_days,
+                        repository: repository.clone(),
+                    },
+                    evidence: exec_assessment::PackageEvidence {
+                        unpacked_bytes: 0,
+                        dependency_count: 0,
+                        readable_source: false,
+                        obfuscated: false,
+                        native_code: false,
+                        lifecycle_hooks: false,
+                        capabilities: Vec::new(),
+                        findings: Vec::new(),
+                        limitations: vec![
+                            "Artifact analysis was skipped because release-age policy denied execution before download",
+                        ],
+                        version_diff: None,
+                    },
+                    policy: exec_assessment::PolicyDecision {
+                        decision: "block",
+                        reason_code: "OATH_EXEC_RELEASE_TOO_NEW",
+                        grade: "unknown".into(),
+                        score: 0,
+                    },
+                    sandbox: sandbox_capabilities,
+                    sandbox_plan: None,
+                };
+                let policy_digest = oath_contracts::digest_json(&serde_json::json!({
+                    "require_grade": require_grade,
+                    "min_age": min_age,
+                    "minimum_age_days": min_days,
+                    "sandbox_mode": sandbox_decision.effective_mode.as_str(),
+                    "deny_network": deny_network,
+                }))?;
+                let assessment_value = if schema_version == 2 {
+                    serde_json::to_value(&assessment)?
+                } else {
+                    let generated_at = std::time::SystemTime::now()
+                        .duration_since(std::time::UNIX_EPOCH)
+                        .map(|duration| duration.as_secs())
+                        .unwrap_or(0);
+                    serde_json::to_value(exec_assessment::signed_v3(
+                        &assessment,
+                        generated_at,
+                        policy_digest,
+                    )?)?
+                };
                 println!(
                     "{}",
                     serde_json::to_string_pretty(&serde_json::json!({
-                        "name": pkg_name, "version": version,
-                        "age_days": days, "decision": "block", "reason": "min-age"
+                        "assessment": assessment_value,
+                        "name": pkg_name,
+                        "version": version,
+                        "age_days": days,
+                        "decision": if schema_version == 2 { "block" } else { "deny" },
+                        "reason": "min-age"
                     }))?
                 );
             } else {
@@ -3428,8 +3532,27 @@ async fn cmd_exec(
         !approval.integrity.is_empty() && approval_store.contains(&approval)?;
 
     if json {
+        let policy_digest = oath_contracts::digest_json(&serde_json::json!({
+            "require_grade": require_grade,
+            "min_age": min_age,
+            "sandbox_mode": sandbox_decision.effective_mode.as_str(),
+            "deny_network": deny_network,
+        }))?;
+        let assessment_value = if schema_version == 2 {
+            serde_json::to_value(&assessment)?
+        } else {
+            let generated_at = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .map(|duration| duration.as_secs())
+                .unwrap_or(0);
+            serde_json::to_value(exec_assessment::signed_v3(
+                &assessment,
+                generated_at,
+                policy_digest,
+            )?)?
+        };
         let verdict = serde_json::json!({
-            "assessment": assessment,
+            "assessment": assessment_value,
             "approval": { "integrity_bound": true, "previously_approved": previously_approved },
             "name": pkg_name,
             "version": version,
@@ -4356,6 +4479,7 @@ async fn cmd_publish(
     access: Option<&str>,
     dry_run: bool,
     json: bool,
+    schema_version: u32,
     stage: bool,
 ) -> Result<()> {
     use base64::Engine;
@@ -4367,6 +4491,10 @@ async fn cmd_publish(
     anyhow::ensure!(
         !json || dry_run,
         "oath publish --json is an assessment-only interface and requires --dry-run; stage or publish in a separate explicit command"
+    );
+    anyhow::ensure!(
+        matches!(schema_version, 1 | 2),
+        "unsupported publish assessment schema {schema_version}; supported versions are 1 and 2"
     );
 
     let dist_tag = tag.unwrap_or("latest");
@@ -4383,7 +4511,9 @@ async fn cmd_publish(
         .to_string();
     let description = pkg["description"].as_str().unwrap_or("").to_string();
 
-    println!("oath publish: packing {}@{}...", name, version);
+    if !json {
+        println!("oath publish: packing {}@{}...", name, version);
+    }
 
     // 2. Collect files to include in tarball
     // Start with the configured `files` field if present, otherwise include everything
@@ -4442,7 +4572,14 @@ async fn cmd_publish(
     let mut assessment = publish_assessment::assess(&cwd, &files_to_pack, &pkg, dist_tag, access)?;
     publish_assessment::attach_previous_release(&cwd, &mut assessment)?;
     if json {
-        println!("{}", serde_json::to_string_pretty(&assessment)?);
+        if schema_version == 1 {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&publish_assessment::legacy_v1(&assessment))?
+            );
+        } else {
+            println!("{}", serde_json::to_string_pretty(&assessment)?);
+        }
     }
     anyhow::ensure!(
         assessment.decision == "allow",

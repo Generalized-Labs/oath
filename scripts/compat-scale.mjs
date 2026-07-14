@@ -3,8 +3,10 @@ import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import { dirname, join, resolve } from "node:path";
 
-const fixtureCount=500;
-const projectTarget=100;
+const fixtureCount=Number(process.env.OATH_GENERATED_EXECUTION_TARGET??500);
+const projectTarget=Number(process.env.OATH_PROJECT_TARGET??100);
+if(!Number.isSafeInteger(fixtureCount)||fixtureCount<1)throw new Error("OATH_GENERATED_EXECUTION_TARGET must be a positive integer");
+if(!Number.isSafeInteger(projectTarget)||projectTarget<1)throw new Error("OATH_PROJECT_TARGET must be a positive integer");
 const out=resolve(process.env.OATH_COMPAT_RESULTS??"compat-results/ga");
 const shard=Number(process.env.OATH_COMPAT_SHARD??0);
 const shards=Number(process.env.OATH_COMPAT_SHARDS??1);
@@ -12,7 +14,9 @@ const execute=process.argv.includes("--execute");
 const projects=(await readFile(new URL("../tests/compat/projects.txt",import.meta.url),"utf8")).split(/\r?\n/).map(v=>v.trim()).filter(v=>v&&!v.startsWith("#"));
 if(projects.length!==projectTarget)throw new Error(`expected ${projectTarget} real projects, found ${projects.length}`);
 
-const templates=["basic","alias","workspace"];
+const behaviorContract=JSON.parse(await readFile(new URL("../tests/compat/behavioral-contract.json",import.meta.url),"utf8"));
+if(behaviorContract.schema_version!==1||!Array.isArray(behaviorContract.behaviors)||behaviorContract.behaviors.length===0)throw new Error("invalid independent behavior contract");
+const templates=behaviorContract.behaviors.map(behavior=>behavior.fixture);
 const fixtures=Array.from({length:fixtureCount},(_,id)=>({id,template:templates[id%templates.length],mode:["clean","warm","offline","repeat","interrupted"][Math.floor(id/templates.length)%5],shard:id%shards}));
 await mkdir(out,{recursive:true});
 await writeFile(join(out,"manifest.json"),JSON.stringify({schema_version:2,evidence_class:"generated_stress",reference_npm_major:11,generated_execution_target:fixtureCount,independent_template_count:templates.length,independent_templates:templates,project_target:projectTarget,shards,fixtures,projects},null,2));

@@ -1,0 +1,8 @@
+{
+  "name": "oath-compat-optional-dependency",
+  "version": "1.0.0",
+  "private": true,
+  "optionalDependencies": {
+    "is-number": "7.0.0"
+  }
+}

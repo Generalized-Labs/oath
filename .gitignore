@@ -16,3 +16,4 @@ compat-results/ga/
 !compat-results/ga/
 compat-results/ga/*
 !compat-results/ga/summary.json
+compat-results/ga-local/

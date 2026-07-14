@@ -19,6 +19,29 @@ pub struct IdentityClaims {
     pub email: Option<String>,
     #[serde(default)]
     pub email_verified: bool,
+    #[serde(default)]
+    pub amr: Vec<String>,
+    #[serde(default)]
+    pub acr: Option<String>,
+}
+
+impl IdentityClaims {
+    pub fn has_step_up_authentication(&self) -> bool {
+        self.amr.iter().any(|method| {
+            matches!(
+                method.to_ascii_lowercase().as_str(),
+                "mfa" | "otp" | "hwk" | "fido" | "webauthn" | "swk"
+            )
+        }) || self
+            .acr
+            .as_deref()
+            .map(|value| {
+                value
+                    .split([':', '/', ' '])
+                    .any(|component| component.eq_ignore_ascii_case("mfa"))
+            })
+            .unwrap_or(false)
+    }
 }
 
 #[derive(Deserialize)]
@@ -123,5 +146,31 @@ impl InvitationMailer {
             .json(&serde_json::json!({"from":self.from,"to":[email],"subject":format!("Join {organization} on Oath"),"text":format!("Accept your Oath invitation: {accept_url}")}))
             .send().await?.error_for_status().context("send invitation email")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn claims(amr: &[&str], acr: Option<&str>) -> IdentityClaims {
+        IdentityClaims {
+            sub: "subject".into(),
+            iss: "https://issuer.example".into(),
+            aud: serde_json::json!("oath"),
+            exp: u64::MAX,
+            email: None,
+            email_verified: false,
+            amr: amr.iter().map(|value| (*value).into()).collect(),
+            acr: acr.map(Into::into),
+        }
+    }
+
+    #[test]
+    fn recognizes_step_up_without_treating_password_as_mfa() {
+        assert!(claims(&["pwd", "webauthn"], None).has_step_up_authentication());
+        assert!(claims(&[], Some("urn:example:loa:mfa")).has_step_up_authentication());
+        assert!(!claims(&["pwd"], None).has_step_up_authentication());
+        assert!(!claims(&[], Some("urn:example:loa:not-mfa")).has_step_up_authentication());
     }
 }
