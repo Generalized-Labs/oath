@@ -69,7 +69,10 @@ async function runReferenceInstall(packageRoot, workspaceRoot, home) {
     return { lock, install: null, npmDir, missingLock: true };
   }
   await cp(generatedLock, join(npmDir, "package-lock.json"));
-  const install = run("npm", ["install", "--ignore-scripts", "--package-lock=true"], npmDir, env);
+  // A selected lock becomes an immutable release input. npm ci is npm's
+  // lock-preserving materializer; npm install may normalize lock metadata based
+  // on cache state even when the resolved tree is unchanged.
+  const install = run("npm", ["ci", "--ignore-scripts"], npmDir, env);
   return { lock, install, npmDir };
 }
 
@@ -143,7 +146,7 @@ async function preflight() {
       catch { results.push({ ...candidate, commit, eligible: false, reason: "missing_package_json" }); continue; }
       // npm derives a missing package name from the working-directory basename.
       // Mirror npm-parity.mjs exactly: generate in `lock`, copy the generated
-      // lock into `npm`, install there, and hash the post-install npm lock.
+      // lock into `npm`, validate it with npm ci, and hash the preserved lock.
       const workspaceRoot = join(root, `reference-workspace-${index}`);
       const home = join(root, `home-${index}`);
       const { lock, install, npmDir, missingLock } = await runReferenceInstall(packageRoot, workspaceRoot, home);
@@ -239,6 +242,7 @@ async function selfTest() {
     assert.equal(expectedLockSha256, parityEvidence.reference.lock_sha256);
     assert.equal(expectedLockSha256, parityEvidence.reference.pinned_lock_sha256);
     assert.equal(parityEvidence.reference.pinned_lock_preserved, true);
+    assert.equal(parityEvidence.reference.command, "ci");
     const tampered = run(process.execPath, [resolve("scripts/npm-parity.mjs"), source], process.cwd(), {
       OATH_BIN: process.execPath,
       OATH_PINNED_LOCK_PATH: pinnedLockPath,
@@ -253,6 +257,7 @@ async function selfTest() {
       parity_lock_digest_matched: true,
       pinned_lock_digest_matched: true,
       pinned_lock_preserved: true,
+      pinned_reference_uses_npm_ci: true,
       tampered_lock_rejected: true
     }, null, 2));
   } finally {

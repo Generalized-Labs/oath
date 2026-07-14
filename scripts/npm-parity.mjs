@@ -87,6 +87,7 @@ try {
   let lockResult;
   let lockSha256 = null;
   let pinnedLockSha256 = null;
+  const npmInstallCommand = pinnedLockPath ? "ci" : "install";
   if (pinnedLockPath) {
     const pinnedLock = gunzipSync(await readFile(pinnedLockPath));
     pinnedLockSha256 = sha256(pinnedLock);
@@ -108,12 +109,12 @@ try {
     }
   }
   let npmResult = lockResult.status === 0
-    ? run(npmCommand, ["install", "--ignore-scripts", "--package-lock=true"], npmDir, home)
+    ? run(npmCommand, [npmInstallCommand, "--ignore-scripts", ...(pinnedLockPath ? [] : ["--package-lock=true"])], npmDir, home)
     : lockResult;
   if (npmResult.status === 0 && mode !== "clean") {
     await rm(join(npmDir, "node_modules"), { recursive: true, force: true });
     const offline = mode === "offline";
-    npmResult = run(npmCommand, ["install", "--ignore-scripts", "--package-lock=true", ...(offline ? ["--offline"] : [])], npmDir, home);
+    npmResult = run(npmCommand, [npmInstallCommand, "--ignore-scripts", ...(pinnedLockPath ? [] : ["--package-lock=true"]), ...(offline ? ["--offline"] : [])], npmDir, home);
   }
   if (npmResult.status === 0) {
     lockSha256 = sha256(await readFile(join(npmDir, "package-lock.json")));
@@ -148,6 +149,7 @@ try {
     schema_version: 1,
     reference: {
       npm: npmVersion,
+      command: npmInstallCommand,
       lock_sha256: lockSha256,
       ...(pinnedLockPath ? { pinned_lock_sha256: pinnedLockSha256, pinned_lock_preserved: pinnedLockPreserved } : {})
     },
