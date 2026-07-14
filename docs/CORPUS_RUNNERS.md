@@ -22,7 +22,9 @@ shortage into a skipped compatibility claim.
 1. Keep the Blacksmith GitHub App restricted to `Generalized-Labs/oath`.
 2. Use `blacksmith-16vcpu-ubuntu-2404`; do not silently select another label.
 3. Set a hard monthly spend limit and alert at 50%, 75%, and 90%.
-4. Run `project-corpus-refresh.yml` before the complete evidence workflow.
+4. Run `project-corpus-refresh.yml` only when intentionally changing the pinned
+   corpus. Review and commit its version-2 manifest and compressed lock bundle
+   before running complete evidence.
 5. Record the runner name, OS, architecture, total disk, free disk, shard, and
    workflow commit in the retained artifacts.
 
@@ -49,3 +51,13 @@ can be changed with `OATH_GIT_NETWORK_ATTEMPTS`, `OATH_GIT_RETRY_DELAY_MS`,
 Exhausted clone, fetch, or reference retries remain evidence failures. The
 artifact records the phase, attempt count, and process error; infrastructure
 loss must be rerun and may never be counted as a compatibility pass.
+
+## Immutable dependency inputs
+
+`tests/compat/projects.lock.json` binds every source commit to an exact,
+checked-in gzip-compressed npm lockfile under `tests/compat/project-locks/`.
+Corpus execution verifies the decompressed SHA-256 before either installer
+runs, gives npm and Oath the same bytes, and fails if npm mutates the pinned
+lock. Ordinary evidence runs never regenerate dependency resolution from
+mutable registry metadata. A corpus refresh emits new lock artifacts, but they
+become release inputs only through a reviewed source change.

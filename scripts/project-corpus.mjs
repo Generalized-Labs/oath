@@ -239,13 +239,21 @@ async function selfTest() {
     assert.equal(expectedLockSha256, parityEvidence.reference.lock_sha256);
     assert.equal(expectedLockSha256, parityEvidence.reference.pinned_lock_sha256);
     assert.equal(parityEvidence.reference.pinned_lock_preserved, true);
+    const tampered = run(process.execPath, [resolve("scripts/npm-parity.mjs"), source], process.cwd(), {
+      OATH_BIN: process.execPath,
+      OATH_PINNED_LOCK_PATH: pinnedLockPath,
+      OATH_PINNED_LOCK_SHA256: "0".repeat(64)
+    });
+    assert.notEqual(tampered.status, 0);
+    assert.match(tampered.stderr, /pinned lock digest mismatch/);
     console.log(JSON.stringify({
       stable_lock_basename: true,
       stable_npm_basename: true,
       git_metadata_excluded: true,
       parity_lock_digest_matched: true,
       pinned_lock_digest_matched: true,
-      pinned_lock_preserved: true
+      pinned_lock_preserved: true,
+      tampered_lock_rejected: true
     }, null, 2));
   } finally {
     await rm(root, { recursive: true, force: true });

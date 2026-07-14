@@ -18,7 +18,9 @@ Oath has two independent release programs:
 1. Compatibility runs 100 pinned, npm-11.12.1-eligible projects in 20 shards on
    the approved Blacksmith `blacksmith-16vcpu-ubuntu-2404` runner pool. npm and
    Oath trees are materialized sequentially. A final aggregation job requires
-   100 unique exact comparisons at the pinned commit and lock hash.
+   100 unique exact comparisons at the pinned commit and immutable lock
+   artifact. Each compressed lock is checked in, digest-verified before use,
+   shared by npm and Oath, and required to remain byte-stable after npm install.
 2. Native security runs on Ubuntu 22.04, Ubuntu 24.04, Windows Server 2022, and
    Windows Server 2025. Strict Linux mode runs only when the launcher verifies
    its required namespaces, seccomp, Landlock, resource, filesystem, and
@@ -37,7 +39,9 @@ eligibility preflight happen in a separate canary process.
 - Cross-compilation is useful developer feedback but cannot satisfy native
   security gates.
 - The checked-in pinned corpus becomes release-critical evidence and requires
-  review when commits or lock hashes change.
+  review when commits or lock artifacts change. Regenerating a lock from a
+  package manifest during an evidence run is forbidden because registry state
+  can change without a source commit changing.
 - The corpus execution boundary includes Blacksmith as an approved third-party
   runner provider; job permissions and credentials remain minimized.
 

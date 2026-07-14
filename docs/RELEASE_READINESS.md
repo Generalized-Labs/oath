@@ -1,6 +1,6 @@
 # v0.2.0 release readiness
 
-Audit date: 2026-07-13
+Audit date: 2026-07-14
 
 ## Decision
 
@@ -13,6 +13,17 @@ Oath is **not GA**. The hosted registry is a business-beta control plane for
 isolated design-partner deployments with an operator. Detection quality,
 service SLOs, code signing, external review, operational drills, and commercial
 adoption have not met the complete GA contract.
+
+## Repository governance
+
+Oath currently has one active maintainer. Protected `master` therefore requires
+pull requests with zero human approvals during this phase; requiring an
+independent approval would deadlock every maintainer-authored change. The
+repository still enforces all 19 required cross-platform checks, strict branch
+freshness, verified commit signatures, linear history, conversation resolution,
+administrator enforcement, and force-push/deletion blocking. Independent
+approval becomes mandatory when a second active Oath maintainer is onboarded
+and remains a GA governance gate.
 
 ## Last signed candidate evidence
 
@@ -51,6 +62,10 @@ and 100-project gates for the exact release commit.
   revocation rollback, OSV quarantine output, and Merkle proof verification.
 - These are local source checks. The exact post-merge CI run remains required
   before the developer-preview tag.
+- The real-project corpus now commits and digest-verifies 100 compressed npm
+  lockfiles. Evidence runs no longer regenerate dependency resolution from
+  mutable registry state; npm and Oath consume the same pinned bytes and lock
+  mutation is a hard failure.
 
 ## Honest measured limits
 

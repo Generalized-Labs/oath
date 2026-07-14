@@ -10,7 +10,7 @@ reviewed security divergence), and all real-project runs include commit SHA,
 npm version, Oath version, platform, duration, graph/layout comparison, and
 logs/checksums.
 
-## Current evidence snapshot (2026-07-13)
+## Current evidence snapshot (2026-07-14)
 
 - The post-placement-contract stress run executed 500 generated cases: 500 were
   equivalent and zero failed. These are repetitions of three independent
@@ -31,6 +31,12 @@ logs/checksums.
   aggregate contains zero failures. Repositories rejected by reference npm or
   requiring another package manager are not eligible for the locked corpus and
   never count as passes.
+- Corpus manifest version 2 stores the exact compressed npm lockfile for each
+  project. The harness verifies the decompressed digest, supplies identical
+  bytes to npm and Oath, and rejects lock mutation. This replaced the earlier
+  hash-only design after exact-master run `29310661010` correctly blocked on
+  Express and Ant Design lock drift caused by mutable registry resolution even
+  though both npm/Oath trees were identical.
 - Next.js HEAD was replaced by the npm-eligible
   `NextJSTemplates/play-nextjs` commit
   `f0a5c55ef1d6198c41ac6354595adadc4c41b924`, which passed exact comparison.
