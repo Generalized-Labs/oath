@@ -1,0 +1,11 @@
+{
+  "name": "oath-compat-override",
+  "version": "1.0.0",
+  "private": true,
+  "dependencies": {
+    "is-odd": "3.0.1"
+  },
+  "overrides": {
+    "is-number": "7.0.0"
+  }
+}

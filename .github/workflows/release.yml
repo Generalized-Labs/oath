@@ -188,8 +188,10 @@ jobs:
   release:
     needs: build
     runs-on: ubuntu-latest
+    environment: release
     permissions:
       contents: write
+      actions: read
       id-token: write
       attestations: write
 
@@ -209,6 +211,28 @@ jobs:
           cat ./*.sha256 > checksums.txt
           echo "=== checksums.txt ==="
           cat checksums.txt
+
+      - name: Download exact-commit GA evidence manifest
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          run_id=$(gh run list \
+            --repo "$GITHUB_REPOSITORY" \
+            --workflow ci.yml \
+            --commit "$GITHUB_SHA" \
+            --event workflow_dispatch \
+            --status success \
+            --limit 100 \
+            --json databaseId \
+            --jq '.[0].databaseId')
+          test -n "$run_id"
+          gh run download "$run_id" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name ga-evidence-manifest \
+            --dir release-evidence
+          (cd release-evidence && sha256sum --check ga-evidence-manifest.json.sha256)
+          test "$(jq -r .commit release-evidence/ga-evidence-manifest.json)" = "$GITHUB_SHA"
 
       - name: Attest release binaries
         uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
@@ -240,4 +264,6 @@ jobs:
             oath-windows-x64.exe.sha256 \
             oath-windows-arm64.exe \
             oath-windows-arm64.exe.sha256 \
-            checksums.txt
+            checksums.txt \
+            release-evidence/ga-evidence-manifest.json \
+            release-evidence/ga-evidence-manifest.json.sha256

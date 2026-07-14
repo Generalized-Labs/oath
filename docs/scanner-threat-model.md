@@ -81,7 +81,7 @@ replace — registry reputation, lockfile pinning, the `--min-age` cooldown, and
 running install scripts only for trusted packages.
 
 These historical numbers do not meet Oath's GA detection contract of at least
-98% known-malware recall, at least 95% private-adversarial recall, and at most
+99% known-malware recall, at least 95% private-adversarial recall, and at most
 0.5% false positives. The CLI may ship as a developer preview with this limit;
 the scanner must not be marketed as GA-grade malware detection.
 
@@ -91,5 +91,10 @@ the scanner must not be marketed as GA-grade malware detection.
 # benign corpus = your local store of installed popular packages
 cargo run --release -p oath-analyze --example bench -- ~/.oath/store <malware_dir>
 ```
+Add `--json` after `--` for the versioned evidence document. The benchmark
+emits all denominators, scan errors, and Wilson 95% intervals, then exits
+nonzero when either corpus is empty, any scan fails, or a GA point threshold is
+missed.
+
 The malware corpus (DataDog, Apache-2.0) is cloned separately and extracted
 read-only; nothing in it is ever executed.

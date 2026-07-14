@@ -19,10 +19,14 @@ The installed package names and package contents must still be identical.
 The required fixture corpus grows monotonically. Each fixed compatibility bug
 must add a fixture before release.
 
-The current independent matrix covers a pinned ordinary dependency, npm aliases,
-and a local workspace. CI executes every case independently on Linux, macOS, and
-Windows. These are three reviewed behaviors, not proof of complete npm workflow
-coverage; generated stress repetitions are reported separately.
+The source matrix covers ten named behaviors: production and development
+dependencies, optional dependencies, a peer pair, root overrides, nested
+version placement, scoped packages, dist-tags, npm aliases, and a local
+workspace. CI executes every case independently on Linux, macOS, and Windows.
+The last signed baseline covers the original three; the expanded denominator is
+not public release evidence until the exact-commit cross-platform run passes.
+Ten reviewed behaviors are not proof of complete npm workflow coverage;
+generated stress repetitions are reported separately.
 
 Known intentional fail-closed boundary: git dependencies must use an exact branch,
 tag, or commit. npm-style `#semver:` git selectors are rejected with a stable

@@ -4,7 +4,7 @@ use anyhow::{Context, Result};
 use axum::{
     Json, Router,
     body::Bytes,
-    extract::{DefaultBodyLimit, Path as AxumPath, Request, State},
+    extract::{DefaultBodyLimit, Path as AxumPath, Query, Request, State},
     http::{HeaderMap, StatusCode, header},
     middleware::{self, Next},
     response::{Html, IntoResponse, Response},
@@ -28,7 +28,7 @@ use crate::{
     control_plane::PostgresControlPlane,
     hex_sha256,
     identity::{InvitationMailer, OidcVerifier},
-    merkle_root,
+    merkle_inclusion_proof, merkle_root,
     metrics::RegistryMetrics,
     now,
     object_backend::ArtifactStore,
@@ -47,6 +47,7 @@ pub struct PostgresRegistry {
     max_stage_request_bytes: usize,
     metrics: RegistryMetrics,
     billing: Option<StripeBilling>,
+    require_step_up_approval: bool,
 }
 
 impl PostgresRegistry {
@@ -117,10 +118,19 @@ impl PostgresRegistry {
             max_stage_request_bytes,
             metrics: RegistryMetrics::default(),
             billing,
+            require_step_up_approval: std::env::var("OATH_REQUIRE_STEP_UP_APPROVAL")
+                .ok()
+                .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
+                .unwrap_or(false),
         })
     }
 
-    async fn issue_identity_token(&self, organization: &str, role: &str) -> Result<String> {
+    async fn issue_identity_token(
+        &self,
+        organization: &str,
+        role: &str,
+        step_up: bool,
+    ) -> Result<String> {
         let mut random = [0u8; 32];
         getrandom::fill(&mut random).map_err(|error| anyhow::anyhow!(error))?;
         let token = base64::engine::general_purpose::URL_SAFE_NO_PAD.encode(random);
@@ -130,6 +140,7 @@ impl PostgresRegistry {
                 organization,
                 role,
                 now().saturating_add(3600) as i64,
+                if step_up { "oidc-mfa" } else { "oidc" },
             )
             .await?;
         Ok(token)
@@ -218,12 +229,21 @@ impl PostgresRegistry {
         Ok(principal.organization.clone())
     }
 
-    async fn append_event(&self, event: &Value) -> Result<()> {
+    async fn append_event_keyed(&self, event_key: &str, event: &Value) -> Result<()> {
         let mut tx = self.control.pool().begin().await?;
         query("SELECT pg_advisory_xact_lock($1)")
             .bind(0x4f41_5448_i64)
             .execute(&mut *tx)
             .await?;
+        if query_scalar::<_, i32>("SELECT 1 FROM registry_events WHERE event_key=$1")
+            .bind(event_key)
+            .fetch_optional(&mut *tx)
+            .await?
+            .is_some()
+        {
+            tx.commit().await?;
+            return Ok(());
+        }
         let previous: String =
             query_scalar("SELECT event_hash FROM registry_events ORDER BY sequence DESC LIMIT 1")
                 .fetch_optional(&mut *tx)
@@ -233,7 +253,8 @@ impl PostgresRegistry {
         let event_hash = hex_sha256(format!("{previous}{event_json}").as_bytes());
         let signature = base64::engine::general_purpose::STANDARD
             .encode(self.signing_key.sign(event_hash.as_bytes()).to_bytes());
-        query("INSERT INTO registry_events(event_json,previous_hash,event_hash,signature,created_at) VALUES ($1,$2,$3,$4,$5)")
+        query("INSERT INTO registry_events(event_key,event_json,previous_hash,event_hash,signature,created_at) VALUES ($1,$2,$3,$4,$5,$6)")
+            .bind(event_key)
             .bind(event_json)
             .bind(previous)
             .bind(event_hash)
@@ -243,6 +264,32 @@ impl PostgresRegistry {
             .await?;
         tx.commit().await?;
         Ok(())
+    }
+
+    async fn append_event(&self, event: &Value) -> Result<()> {
+        let event_key = format!(
+            "direct:{}",
+            hex_sha256(serde_json::to_string(event)?.as_bytes())
+        );
+        self.append_event_keyed(&event_key, event).await
+    }
+
+    pub async fn drain_outbox(&self) -> Result<usize> {
+        let pending = self.control.pending_outbox(100).await?;
+        let mut delivered = 0;
+        for (id, event_key, event) in pending {
+            match self.append_event_keyed(&event_key, &event).await {
+                Ok(()) => {
+                    self.control.mark_outbox_delivered(id).await?;
+                    delivered += 1;
+                }
+                Err(error) => {
+                    self.control.retry_outbox(id).await?;
+                    tracing::warn!(outbox_id = id, %error, "registry audit event delivery failed");
+                }
+            }
+        }
+        Ok(delivered)
     }
 }
 
@@ -346,10 +393,19 @@ fn manifest_from_tarball(
     Ok(manifest)
 }
 
-async fn health() -> Json<Value> {
-    Json(
-        json!({"status":"ok","service":"oath-registry","control_plane":"postgresql","schema_version":1}),
-    )
+async fn livez() -> Json<Value> {
+    Json(json!({"status":"ok","service":"oath-registry","schema_version":1}))
+}
+
+async fn readyz(State(registry): State<Arc<PostgresRegistry>>) -> Result<Json<Value>, ApiError> {
+    registry.control.ready().await.map_err(ApiError::internal)?;
+    registry.objects.ready().await.map_err(ApiError::internal)?;
+    Ok(Json(json!({
+        "status":"ready",
+        "service":"oath-registry",
+        "dependencies":{"postgresql":"ready","object_store":"ready"},
+        "schema_version":2
+    })))
 }
 
 async fn create_stage(
@@ -381,6 +437,19 @@ async fn create_stage(
         .map_err(|_| ApiError::bad("invalid tarball base64"))?;
     let manifest = manifest_from_tarball(&tarball, &request.name, &request.version)?;
     let digest = hex_sha256(&tarball);
+    let mut server_bundle = crate::assessment::assess_tarball(
+        &tarball,
+        &manifest,
+        &request.name,
+        &request.version,
+        &principal.organization,
+        &registry.public_url,
+    )
+    .map_err(|error| ApiError::bad(format!("server assessment failed: {error}")))?;
+    server_bundle.verdict.signature = Some(
+        oath_contracts::sign_json(&server_bundle.verdict, &registry.signing_key)
+            .map_err(ApiError::internal)?,
+    );
     registry
         .objects
         .put_immutable(&digest, &tarball)
@@ -403,15 +472,23 @@ async fn create_stage(
         status: "staged".into(),
         private: request.private,
         manifest,
-        assessment: request.assessment,
+        publisher_assessment: request.assessment,
+        assessment: serde_json::to_value(server_bundle.verdict).map_err(ApiError::internal)?,
+        server_evidence: server_bundle.evidence,
+        sbom: server_bundle.sbom,
+        provenance: server_bundle.provenance,
         created_at,
     };
+    let event = json!({"type":"stage.created","id":stage.id,"organization":stage.organization,"actor_org":principal.organization,"name":stage.name,"version":stage.version,"digest":stage.digest});
+    let event_key = format!("stage.created:{}", stage.id);
     registry
         .control
-        .create_stage(&stage)
+        .create_stage(&stage, &event_key, &event)
         .await
         .map_err(ApiError::internal)?;
-    registry.append_event(&json!({"type":"stage.created","id":stage.id,"organization":stage.organization,"actor_org":principal.organization,"name":stage.name,"version":stage.version,"digest":stage.digest})).await.map_err(ApiError::internal)?;
+    if let Err(error) = registry.drain_outbox().await {
+        tracing::warn!(%error, "registry audit outbox will retry stage event");
+    }
     registry.metrics.stage();
     Ok((StatusCode::CREATED, Json(stage)))
 }
@@ -473,6 +550,11 @@ async fn decide(
     if principal.role != "admin" {
         return Err(ApiError::forbidden("admin approval required"));
     }
+    if approve && registry.require_step_up_approval && principal.kind != "oidc-mfa" {
+        return Err(ApiError::forbidden(
+            "approval requires a fresh OIDC identity with MFA or phishing-resistant authentication",
+        ));
+    }
     let stage = registry
         .control
         .read_stage(&id)
@@ -484,15 +566,27 @@ async fn decide(
             "only the owning organization may approve or reject a stage",
         ));
     }
+    if approve && stage.assessment.get("decision").and_then(Value::as_str) == Some("deny") {
+        return Err(ApiError::conflict(
+            "server assessment denied this exact artifact; approval is not permitted",
+        ));
+    }
+    let event = json!({"type":if approve {"stage.approved"} else {"stage.rejected"},"id":id,"organization":principal.organization,"name":stage.name,"version":stage.version,"reason":reason});
+    let event_key = format!(
+        "stage.{}:{id}",
+        if approve { "approved" } else { "rejected" }
+    );
     if !registry
         .control
-        .decide_stage(&stage, approve, reason.as_deref())
+        .decide_stage(&stage, approve, reason.as_deref(), &event_key, &event)
         .await
         .map_err(ApiError::internal)?
     {
         return Err(ApiError::conflict("stage has already been decided"));
     }
-    registry.append_event(&json!({"type":if approve {"stage.approved"} else {"stage.rejected"},"id":id,"organization":principal.organization,"name":stage.name,"version":stage.version,"reason":reason})).await.map_err(ApiError::internal)?;
+    if let Err(error) = registry.drain_outbox().await {
+        tracing::warn!(%error, "registry audit outbox will retry stage decision event");
+    }
     Ok(Json(
         registry
             .control
@@ -574,7 +668,20 @@ async fn package_metadata(
         );
         object.insert(
             "oath".into(),
-            json!({"status":row.status,"private":row.private,"publisher_organization":row.organization,"assessment":row.assessment,"published_at":row.published_at}),
+            json!({
+                "status":row.status,
+                "private":row.private,
+                "publisher_organization":row.organization,
+                "published_at":row.published_at,
+                "release_age_seconds":(now() as i64).saturating_sub(row.published_at),
+                "downloads":row.download_count,
+                "source_available":row.assessment["package"]["repository"].is_string(),
+                "risk_score":row.assessment["risk_score"],
+                "assessment":row.assessment,
+                "server_evidence":row.server_evidence,
+                "sbom":row.sbom,
+                "provenance":row.provenance
+            }),
         );
         versions.insert(version, version_metadata);
     }
@@ -607,12 +714,15 @@ async fn revoke_version(
     } else {
         "revoked"
     };
-    let payload = json!({"name":name,"version":version,"status":status,"reason":request.reason,"actor_org":principal.organization,"created_at":now()});
-    let bytes = serde_json::to_vec(&payload).map_err(ApiError::internal)?;
+    let created_at = now();
+    let payload = json!({"name":name,"version":version,"status":status,"reason":request.reason,"actor_org":principal.organization,"created_at":created_at});
+    let bytes = oath_contracts::canonical_json_bytes(&payload).map_err(ApiError::internal)?;
     let signature = base64::engine::general_purpose::STANDARD
         .encode(registry.signing_key.sign(&bytes).to_bytes());
     let public_key = base64::engine::general_purpose::STANDARD
         .encode(registry.signing_key.verifying_key().to_bytes());
+    let event = json!({"type":"version.revoked","tombstone":payload.clone(),"signature":signature,"public_key":public_key});
+    let event_key = format!("version.{status}:{name}@{version}");
     if !registry
         .control
         .revoke_version(
@@ -621,18 +731,29 @@ async fn revoke_version(
             status,
             &request.reason,
             &principal.organization,
+            created_at as i64,
             &signature,
             &public_key,
+            &event_key,
+            &event,
         )
         .await
         .map_err(ApiError::internal)?
     {
         return Err(ApiError::not_found("package version not found"));
     }
-    registry.append_event(&json!({"type":"version.revoked","tombstone":payload,"signature":signature,"public_key":public_key})).await.map_err(ApiError::internal)?;
-    Ok(Json(
-        json!({"name":name,"version":version,"status":status,"reason":request.reason,"signature":signature,"public_key":public_key}),
-    ))
+    if let Err(error) = registry.drain_outbox().await {
+        tracing::warn!(%error, "registry audit outbox will retry revocation event");
+    }
+    Ok(Json(json!({
+        "tombstone": {
+            "payload": payload,
+            "algorithm": "ed25519",
+            "canonicalization": "oath-json-v1",
+            "signature": signature,
+            "public_key": public_key
+        }
+    })))
 }
 
 async fn download_version(
@@ -659,6 +780,11 @@ async fn download_version(
     let bytes = registry
         .objects
         .get(&row.digest)
+        .await
+        .map_err(ApiError::internal)?;
+    registry
+        .control
+        .record_download(&name, &version)
         .await
         .map_err(ApiError::internal)?;
     registry.metrics.download();
@@ -701,17 +827,196 @@ async fn checkpoint(
         .await
         .map_err(ApiError::internal)?;
     let root = merkle_root(hashes.clone());
-    let signature = base64::engine::general_purpose::STANDARD
-        .encode(registry.signing_key.sign(root.as_bytes()).to_bytes());
+    let payload = json!({
+        "schema_version": 2,
+        "event_count": hashes.len(),
+        "merkle_root": root,
+        "latest_hash": hashes.last(),
+    });
+    let signature = base64::engine::general_purpose::STANDARD.encode(
+        registry
+            .signing_key
+            .sign(&oath_contracts::canonical_json_bytes(&payload).map_err(ApiError::internal)?)
+            .to_bytes(),
+    );
     Ok(Json(TransparencyCheckpoint {
-        schema_version: 1,
+        schema_version: 2,
         event_count: hashes.len(),
         merkle_root: root,
         latest_hash: hashes.last().cloned(),
+        canonicalization: "oath-json-v1".into(),
         public_key: base64::engine::general_purpose::STANDARD
             .encode(registry.signing_key.verifying_key().to_bytes()),
         signature,
     }))
+}
+
+async fn inclusion_proof(
+    State(registry): State<Arc<PostgresRegistry>>,
+    AxumPath(sequence): AxumPath<usize>,
+) -> Result<Json<Value>, ApiError> {
+    if sequence == 0 {
+        return Err(ApiError::bad("event sequence starts at 1"));
+    }
+    let hashes = registry
+        .control
+        .event_hashes()
+        .await
+        .map_err(ApiError::internal)?;
+    let index = sequence - 1;
+    let leaf = hashes
+        .get(index)
+        .cloned()
+        .ok_or_else(|| ApiError::not_found("transparency event not found"))?;
+    let root = merkle_root(hashes.clone());
+    let proof = merkle_inclusion_proof(hashes.clone(), index)
+        .ok_or_else(|| ApiError::internal("cannot build inclusion proof"))?;
+    Ok(Json(json!({
+        "schema_version":1,
+        "sequence":sequence,
+        "tree_size":hashes.len(),
+        "leaf_hash":leaf,
+        "merkle_root":root,
+        "proof":proof
+    })))
+}
+
+#[derive(Deserialize)]
+struct ConsistencyQuery {
+    from: usize,
+}
+
+async fn consistency_proof(
+    State(registry): State<Arc<PostgresRegistry>>,
+    Query(query): Query<ConsistencyQuery>,
+) -> Result<Json<Value>, ApiError> {
+    let hashes = registry
+        .control
+        .event_hashes()
+        .await
+        .map_err(ApiError::internal)?;
+    if query.from > hashes.len() {
+        return Err(ApiError::bad("from tree size exceeds current tree size"));
+    }
+    Ok(Json(json!({
+        "schema_version":1,
+        "proof_type":"full-leaf-set-v1",
+        "from_size":query.from,
+        "to_size":hashes.len(),
+        "from_root":merkle_root(hashes[..query.from].to_vec()),
+        "to_root":merkle_root(hashes.clone()),
+        "leaf_hashes":hashes,
+        "limitation":"This complete-leaf bundle is verifiable but not a compact RFC 6962 consistency proof."
+    })))
+}
+
+async fn verdict_bundle(
+    State(registry): State<Arc<PostgresRegistry>>,
+    headers: HeaderMap,
+    AxumPath((name, version)): AxumPath<(String, String)>,
+) -> Result<Json<Value>, ApiError> {
+    let record = registry
+        .control
+        .version_bundle(&name, &version)
+        .await
+        .map_err(ApiError::internal)?
+        .ok_or_else(|| ApiError::not_found("package version not found"))?;
+    if record.private {
+        let principal = registry.authenticate(&headers).await?;
+        registry.authorize_name(&principal, &name, false).await?;
+    }
+    let hashes = registry
+        .control
+        .event_hashes()
+        .await
+        .map_err(ApiError::internal)?;
+    let root = merkle_root(hashes.clone());
+    let checkpoint_payload = json!({
+        "schema_version":2,
+        "event_count":hashes.len(),
+        "merkle_root":root,
+        "latest_hash":hashes.last(),
+    });
+    let checkpoint_signature = base64::engine::general_purpose::STANDARD.encode(
+        registry
+            .signing_key
+            .sign(
+                &oath_contracts::canonical_json_bytes(&checkpoint_payload)
+                    .map_err(ApiError::internal)?,
+            )
+            .to_bytes(),
+    );
+    let tombstone = record.tombstone.map(tombstone_bundle).transpose()?;
+    Ok(Json(json!({
+        "schema_version":1,
+        "package":{"name":name,"version":version,"organization":record.organization},
+        "digest":format!("sha256:{}",record.digest),
+        "status":record.status,
+        "published_at":record.published_at,
+        "downloads":record.download_count,
+        "verdict":record.assessment,
+        "server_evidence":record.server_evidence,
+        "sbom":record.sbom,
+        "provenance":record.provenance,
+        "tombstone":tombstone,
+        "checkpoint":{
+            "payload":checkpoint_payload,
+            "algorithm":"ed25519",
+            "canonicalization":"oath-json-v1",
+            "public_key":base64::engine::general_purpose::STANDARD.encode(registry.signing_key.verifying_key().to_bytes()),
+            "signature":checkpoint_signature,
+        }
+    })))
+}
+
+fn tombstone_bundle(value: Value) -> Result<Value, ApiError> {
+    let field = |name: &str| {
+        value
+            .get(name)
+            .cloned()
+            .ok_or_else(|| ApiError::internal(format!("stored tombstone has no {name}")))
+    };
+    Ok(json!({
+        "payload": {
+            "name": field("name")?,
+            "version": field("version")?,
+            "status": field("status")?,
+            "reason": field("reason")?,
+            "actor_org": field("actor_org")?,
+            "created_at": field("created_at")?
+        },
+        "algorithm": "ed25519",
+        "canonicalization": "oath-json-v1",
+        "signature": field("signature")?,
+        "public_key": field("public_key")?
+    }))
+}
+
+async fn osv_feed(State(registry): State<Arc<PostgresRegistry>>) -> Result<Json<Value>, ApiError> {
+    let rows = registry
+        .control
+        .public_quarantines()
+        .await
+        .map_err(ApiError::internal)?;
+    let entries = rows.into_iter().map(|(name, version, reason, created_at)| {
+        let modified = chrono::DateTime::from_timestamp(created_at, 0)
+            .unwrap_or(chrono::DateTime::UNIX_EPOCH)
+            .to_rfc3339();
+        json!({
+            "schema_version":"1.6.0",
+            "id":format!("OATH-MAL-{}",hex_sha256(format!("{name}@{version}").as_bytes())[..16].to_uppercase()),
+            "modified":modified,
+            "published":modified,
+            "summary":format!("Oath quarantined {name}@{version}"),
+            "details":reason,
+            "affected":[{
+                "package":{"ecosystem":"npm","name":name},
+                "versions":[version],
+                "database_specific":{"source":"oath-registry","status":"quarantined"}
+            }]
+        })
+    }).collect::<Vec<_>>();
+    Ok(Json(json!({"schema_version":1,"vulns":entries})))
 }
 
 async fn issue_token(
@@ -741,6 +1046,7 @@ async fn issue_token(
             &principal.organization,
             &request.role,
             now().saturating_add(request.ttl_secs) as i64,
+            "service",
         )
         .await
         .map_err(ApiError::internal)?;
@@ -905,6 +1211,7 @@ async fn accept_invitation(
     if !claims.email_verified {
         return Err(ApiError::forbidden("OIDC email is not verified"));
     }
+    let step_up = claims.has_step_up_authentication();
     let email = claims
         .email
         .ok_or_else(|| ApiError::forbidden("OIDC identity has no email"))?;
@@ -916,7 +1223,7 @@ async fn accept_invitation(
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::not_found("active invitation not found"))?;
     let token = registry
-        .issue_identity_token(&invitation.organization, &invitation.role)
+        .issue_identity_token(&invitation.organization, &invitation.role, step_up)
         .await
         .map_err(ApiError::internal)?;
     registry.append_event(&json!({"type":"invitation.accepted","organization":invitation.organization,"subject_hash":hex_sha256(claims.sub.as_bytes()),"email_hash":hex_sha256(email.as_bytes()),"role":invitation.role})).await.map_err(ApiError::internal)?;
@@ -944,7 +1251,7 @@ async fn sso_exchange(
         .map_err(ApiError::internal)?
         .ok_or_else(|| ApiError::forbidden("identity is not an organization member"))?;
     let token = registry
-        .issue_identity_token(&organization, &role)
+        .issue_identity_token(&organization, &role, claims.has_step_up_authentication())
         .await
         .map_err(ApiError::internal)?;
     Ok(Json(
@@ -1020,7 +1327,9 @@ pub fn router(registry: PostgresRegistry) -> Router {
     let metrics_state = registry.metrics.clone();
     let max_stage_request_bytes = registry.max_stage_request_bytes;
     Router::new()
-        .route("/health", get(health))
+        .route("/health", get(readyz))
+        .route("/livez", get(livez))
+        .route("/readyz", get(readyz))
         .route(
             "/-/oath/stages",
             post(create_stage)
@@ -1037,6 +1346,13 @@ pub fn router(registry: PostgresRegistry) -> Router {
         )
         .route("/-/oath/tarballs/{name}/{version}", get(download_version))
         .route("/-/oath/transparency/checkpoint", get(checkpoint))
+        .route(
+            "/-/oath/transparency/inclusion/{sequence}",
+            get(inclusion_proof),
+        )
+        .route("/-/oath/transparency/consistency", get(consistency_proof))
+        .route("/v1/verdicts/{name}/{version}", get(verdict_bundle))
+        .route("/v1/security/osv", get(osv_feed))
         .route("/-/oath/tokens", post(issue_token))
         .route("/metrics", get(metrics))
         .route("/-/oath/admin/summary", get(admin_summary))
@@ -1206,9 +1522,50 @@ mod tests {
             .await
             .unwrap();
         let registry_assertions = registry.clone();
+        let mut guarded_registry = registry.clone();
+        guarded_registry.require_step_up_approval = true;
+        let guarded_app = router(guarded_registry);
+        let guarded = stage(&guarded_app, "secret", "step-up-tool", "1.0.0", true).await;
+        assert_eq!(
+            approve(&guarded_app, "secret", &guarded.id).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            call(
+                &guarded_app,
+                post_request(
+                    &format!("/-/oath/stages/{}/reject", guarded.id),
+                    "secret",
+                    json!({"reason": "step-up test complete"}),
+                ),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
         let app = router(registry);
 
+        for path in ["/livez", "/readyz", "/health"] {
+            assert_eq!(
+                call(&app, get_request(path, None)).await.status(),
+                StatusCode::OK
+            );
+        }
+
         let first = stage(&app, "secret", "private-tool", "1.0.0", true).await;
+        assert_eq!(first.publisher_assessment["decision"], "allow");
+        assert_eq!(first.assessment["schema_version"], 1);
+        assert_eq!(first.assessment["package"]["publisher"], "acme");
+        assert_eq!(first.server_evidence["schema_version"], 1);
+        assert_eq!(first.sbom["spdxVersion"], "SPDX-2.3");
+        assert_eq!(
+            first.provenance["predicateType"],
+            "https://oath.dev/attestation/registry-assessment/v1"
+        );
+        assert_ne!(first.assessment, first.publisher_assessment);
+        let first_verdict: oath_contracts::RegistryVerdictV1 =
+            serde_json::from_value(first.assessment.clone()).unwrap();
+        oath_contracts::verify_registry_verdict(&first_verdict).unwrap();
 
         let response = call(&app, get_request("/-/oath/stages", Some("rival-secret"))).await;
         assert_eq!(response.status(), StatusCode::OK);
@@ -1253,6 +1610,50 @@ mod tests {
             approve(&app, "secret", &first.id).await.status(),
             StatusCode::CONFLICT
         );
+
+        let private_verdict = "/v1/verdicts/private-tool/1.0.0";
+        assert_eq!(
+            call(&app, get_request(private_verdict, None))
+                .await
+                .status(),
+            StatusCode::UNAUTHORIZED
+        );
+        assert_eq!(
+            call(&app, get_request(private_verdict, Some("rival-secret")))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+        let response = call(&app, get_request(private_verdict, Some("secret"))).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let private_bundle: Value =
+            serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        assert_eq!(private_bundle["status"], "active");
+        assert_eq!(private_bundle["server_evidence"]["schema_version"], 1);
+        assert_eq!(private_bundle["sbom"]["spdxVersion"], "SPDX-2.3");
+        let checkpoint_signature = oath_contracts::DetachedSignature {
+            algorithm: private_bundle["checkpoint"]["algorithm"]
+                .as_str()
+                .unwrap()
+                .into(),
+            canonicalization: private_bundle["checkpoint"]["canonicalization"]
+                .as_str()
+                .unwrap()
+                .into(),
+            public_key: private_bundle["checkpoint"]["public_key"]
+                .as_str()
+                .unwrap()
+                .into(),
+            signature: private_bundle["checkpoint"]["signature"]
+                .as_str()
+                .unwrap()
+                .into(),
+        };
+        oath_contracts::verify_json(
+            &private_bundle["checkpoint"]["payload"],
+            &checkpoint_signature,
+        )
+        .unwrap();
 
         assert_eq!(
             call(&app, get_request("/private-tool", None))
@@ -1342,19 +1743,49 @@ mod tests {
         assert!(metadata["versions"].get("2.0.0").is_none());
         assert!(metadata["versions"].get("1.0.0").is_some());
 
+        let response = call(
+            &app,
+            post_request(
+                "/-/oath/versions/private-tool/1.0.0/revoke",
+                "secret",
+                json!({"reason": "retired"}),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let revocation: Value = serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        let detached = oath_contracts::DetachedSignature {
+            algorithm: revocation["tombstone"]["algorithm"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            canonicalization: revocation["tombstone"]["canonicalization"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            public_key: revocation["tombstone"]["public_key"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+            signature: revocation["tombstone"]["signature"]
+                .as_str()
+                .unwrap()
+                .to_owned(),
+        };
+        oath_contracts::verify_json(&revocation["tombstone"]["payload"], &detached).unwrap();
+        let response = call(
+            &app,
+            get_request("/v1/verdicts/private-tool/1.0.0", Some("secret")),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let revoked_bundle: Value =
+            serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
         assert_eq!(
-            call(
-                &app,
-                post_request(
-                    "/-/oath/versions/private-tool/1.0.0/revoke",
-                    "secret",
-                    json!({"reason": "retired"}),
-                ),
-            )
-            .await
-            .status(),
-            StatusCode::OK
+            revoked_bundle["tombstone"]["payload"],
+            revocation["tombstone"]["payload"]
         );
+        oath_contracts::verify_json(&revoked_bundle["tombstone"]["payload"], &detached).unwrap();
         let response = call(&app, get_request("/private-tool", Some("secret"))).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
         assert_eq!(
@@ -1387,6 +1818,15 @@ mod tests {
         );
         let packument: oath_fetch::packument::Packument = serde_json::from_value(metadata).unwrap();
         assert_eq!(packument.latest_version(), Some("1.0.0"));
+
+        let response = call(&app, get_request("/v1/verdicts/public-tool/1.0.0", None)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let public_bundle: Value =
+            serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        assert_eq!(public_bundle["verdict"]["decision"], "allow");
+        let public_verdict: oath_contracts::RegistryVerdictV1 =
+            serde_json::from_value(public_bundle["verdict"].clone()).unwrap();
+        oath_contracts::verify_registry_verdict(&public_verdict).unwrap();
         assert_eq!(
             packument
                 .version_info("1.0.0")
@@ -1404,6 +1844,15 @@ mod tests {
             .await
             .status(),
             StatusCode::OK
+        );
+        assert_eq!(
+            query_scalar::<_, i64>(
+                "SELECT download_count FROM versions WHERE name='public-tool' AND version='1.0.0'"
+            )
+            .fetch_one(registry_assertions.control.pool())
+            .await
+            .unwrap(),
+            1
         );
         assert_eq!(
             call(&app, get_request("/public-tool", Some("invalid")))
@@ -1447,6 +1896,15 @@ mod tests {
             call(
                 &app,
                 get_request("/-/oath/tarballs/%40acme%2Fscoped/1.0.0", None)
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        assert_eq!(
+            call(
+                &app,
+                get_request("/v1/verdicts/%40acme%2Fscoped/1.0.0", None)
             )
             .await
             .status(),
@@ -1504,6 +1962,76 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let checkpoint: Value = serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
         assert_eq!(checkpoint["event_count"], rows.len());
+
+        let response = call(&app, get_request("/-/oath/transparency/inclusion/1", None)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let inclusion: Value = serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        assert!(crate::verify_merkle_inclusion(
+            inclusion["leaf_hash"].as_str().unwrap(),
+            0,
+            &inclusion["proof"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|value| value.as_str().unwrap().to_owned())
+                .collect::<Vec<_>>(),
+            inclusion["merkle_root"].as_str().unwrap(),
+        ));
+
+        let response = call(
+            &app,
+            get_request("/-/oath/transparency/consistency?from=1", None),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let consistency: Value = serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        assert_eq!(consistency["from_size"], 1);
+        assert_eq!(
+            consistency["to_size"],
+            consistency["leaf_hashes"].as_array().unwrap().len()
+        );
+
+        assert_eq!(
+            call(
+                &app,
+                post_request(
+                    "/-/oath/versions/public-tool/1.0.0/revoke",
+                    "secret",
+                    json!({"reason": "confirmed malicious release", "quarantine": true}),
+                ),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
+        let response = call(&app, get_request("/v1/security/osv", None)).await;
+        assert_eq!(response.status(), StatusCode::OK);
+        let osv: Value = serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
+        assert_eq!(osv["vulns"].as_array().unwrap().len(), 1);
+        assert_eq!(
+            osv["vulns"][0]["affected"][0]["package"]["name"],
+            "public-tool"
+        );
+
+        assert_eq!(
+            query_scalar::<_, i64>(
+                "SELECT COUNT(*) FROM registry_outbox WHERE delivered_at IS NULL"
+            )
+            .fetch_one(registry_assertions.control.pool())
+            .await
+            .unwrap(),
+            0
+        );
+        let keyed_events = query(
+            "SELECT COUNT(*) AS total, COUNT(DISTINCT event_key) AS unique_total FROM registry_events WHERE event_key IS NOT NULL",
+        )
+        .fetch_one(registry_assertions.control.pool())
+        .await
+        .unwrap();
+        assert_eq!(
+            keyed_events.get::<i64, _>("total"),
+            keyed_events.get::<i64, _>("unique_total")
+        );
 
         let response = call(&app, get_request("/metrics", None)).await;
         assert_eq!(response.status(), StatusCode::OK);

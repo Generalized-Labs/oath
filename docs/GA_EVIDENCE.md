@@ -1,7 +1,7 @@
 # GA evidence contract
 
-GA requires a reviewed independent behavioral contract, 500 generated stress
-executions, and 100 named real projects. The stress and project targets are
+GA requires a reviewed independent behavioral contract, 10,000 generated stress
+executions, and 250 named real projects. The stress and project targets are
 enforced by `scripts/compat-scale.mjs`; independent behavior IDs live in
 `tests/compat/behavioral-contract.json`. Changing any denominator requires a
 reviewed contract change. A manifest is not a passing result. GA is green only
@@ -21,6 +21,12 @@ logs/checksums.
   release artifacts and public metrics. The current independent behavioral
   baseline is 3/3; GA requires the workflow contract in this document, not a
   generated-case count by itself.
+- The source contract now contains ten reviewed behavior IDs. A local macOS run
+  on this candidate matched all 10/10 against npm 11.12.1, including peers,
+  optionals, overrides, scoped packages, dist-tags, nested placement, aliases,
+  workspaces, production dependencies, and development dependencies. This is
+  useful pre-merge evidence, but it does not replace the signed cross-platform
+  CI artifact and therefore does not change the public 3/3 baseline above.
 - The pinned corpus now has 100/100 exact npm/Oath tree equivalents. The
   aggregate contains zero failures. Repositories rejected by reference npm or
   requiring another package manager are not eligible for the locked corpus and
@@ -36,9 +42,10 @@ logs/checksums.
   ABI is unavailable. Native Windows AppContainer, restricted-token, ACL, Job
   Object, environment, filesystem, and network-denial checks passed on Windows
   Server 2022 and 2025 in PRs 16 and 17.
-- Manual release-evidence run
-  [`29240267897`](https://github.com/Generalized-Labs/oath/actions/runs/29240267897)
-  passed at commit `ad9071e10ae6c02412e8a7d3263793c9b60a7915`. It published
+- Final v0.2 release-candidate evidence run
+  [`29292367523`](https://github.com/Generalized-Labs/oath/actions/runs/29292367523)
+  passed all 53 jobs at commit
+  `8e49d586040be3582262d3405a80dcf5d37e1507`. It published
   GitHub OIDC attestations for the Linux and Windows capability reports. Ubuntu
   24.04 reported the strict Landlock/seccomp backend active; Ubuntu 22.04
   reported an explicit fail-closed degradation; Windows Server 2022 and 2025
@@ -49,3 +56,9 @@ runs the independent behavioral baseline and native enforcement checks. Public
 metrics must report evidence class, independent-behavior denominator, generated
 stress denominator, failures, confidence intervals, and skipped projects;
 skipped or network-failed runs never count as passes.
+
+Successful full-evidence runs now produce `ga-evidence-manifest.json`. The
+manifest hashes every input summary, binds them to the exact commit and run,
+lists every still-open external GA gate, receives a GitHub OIDC artifact
+attestation, and is attached to the corresponding release. This document is a
+human index; the signed manifest is the release claim source of truth.

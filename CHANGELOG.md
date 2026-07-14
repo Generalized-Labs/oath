@@ -11,17 +11,33 @@ All notable changes to oath are documented here. Format follows
   and transactional linking.
 - Versioned `ExecAssessment`, approval binding, sandbox plans, capability reports,
   and machine-readable agent verdicts with stable reason codes.
+- Signed `ExecAssessment v3`, `PublishAssessment v2`, and `RegistryVerdict v1`
+  contracts with JSON Schemas, Rust/TypeScript types, expiry, evidence/policy
+  digests, limitations, stable decisions, cross-language `oath-json-v1`
+  canonicalization, and explicit legacy schema selection.
 - Native Linux containment with namespaces, Landlock, seccomp, `no_new_privs`,
   resource limits, and fail-closed capability detection; native Windows
   containment with restricted tokens, AppContainer profiles, ACL-scoped roots,
   Job Objects, and process-tree termination.
 - Publish assessments based on npm's authoritative packlist, previous-release
-  diffs, SPDX SBOMs, provenance, signed evidence, staged-publishing adapters,
-  and signed package-transfer capsules.
+  diffs, SPDX SBOMs, in-toto assessment attestations, signed evidence,
+  staged-publishing adapters, and signed package-transfer capsules.
 - PostgreSQL registry control plane with staged promotion, private-package roles,
   short-lived tokens, OIDC, signed revocation tombstones, dist-tag rollback,
   replicated object storage, billing webhook verification, metrics, and signed
   transparency checkpoints.
+- Server-owned assessment of exact staged tarballs with separately retained
+  publisher claims, replayable evidence, risk score, SPDX SBOM,
+  registry-observation provenance, per-version download counts, and approval
+  denial for server-rejected artifacts.
+- Transactional package-event outbox delivery, dependency-aware liveness and
+  readiness, signed revocation bundles, public-only OSV quarantine feed, and
+  Merkle inclusion plus complete-leaf consistency endpoints.
+- Signed, exact-commit GA evidence manifests generated from CI artifacts and
+  attached to releases with every still-open external gate recorded.
+- Ten reviewed npm behavior fixtures covering dependencies, development and
+  optional dependencies, peers, overrides, nested conflicts, scopes, aliases,
+  workspaces, and dist-tags.
 - Public release evidence for 500 generated stress executions, 100 pinned
   real-project tree comparisons, three reviewed independent behaviors, Linux and
   Windows native-capability reports, and installer benchmarks.
@@ -38,6 +54,8 @@ All notable changes to oath are documented here. Format follows
   assets.
 - CI action dependencies are commit-pinned, and dependency-audit warnings are
   release failures.
+- `oath exec --json` now defaults to signed assessment v3, including fail-closed
+  release-age denials; `oath publish --json` emits one clean JSON document.
 
 ### Fixed
 - `oath ci` now removes stale `node_modules` content and rematerializes the
@@ -83,6 +101,8 @@ All notable changes to oath are documented here. Format follows
   transparency appends are serialized into one hash chain, request metrics now
   cover every route outcome, and Stripe webhook signatures use constant-time
   HMAC verification with timestamp-expiry tests.
+- Exec and publish signing-key creation now use atomic winner selection, and
+  hosted stage approval can require fresh OIDC MFA/WebAuthn assurance.
 - Removed the unused placeholder index crate and its SQLite dependency graph from
   the registry build.
 - Locked `crc-fast` to 1.7.0, the newest compatible release before its dependency

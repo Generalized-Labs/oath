@@ -21,6 +21,12 @@ Email security@generalizedlabs.com with:
 We aim to acknowledge reports within 3 business days and will coordinate a fix,
 release, and credit before public disclosure.
 
+Good-faith research that follows this policy is authorized. We will not pursue
+legal action for accidental, proportionate access needed to demonstrate an
+in-scope vulnerability when the researcher avoids privacy violations, service
+disruption, persistence, extortion, and public disclosure before remediation.
+Stop testing and report immediately if you encounter customer data.
+
 ## Scope
 
 In scope:
@@ -42,3 +48,6 @@ Out of scope:
 
 After a fix is released, we will publish a security advisory when the impact
 warrants one. Please give users time to upgrade before sharing exploit details.
+Our target is to remediate confirmed critical vulnerabilities within 7 days,
+high severity within 30 days, and other accepted reports within 90 days. These
+are security-response targets, not a preview-service SLA.

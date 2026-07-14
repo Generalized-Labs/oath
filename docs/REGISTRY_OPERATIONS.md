@@ -15,10 +15,10 @@ OATH_REGISTRY_DATA=/var/lib/oath-registry \
 ./target/release/oath-registry
 ```
 
-The process listens on `0.0.0.0:4873`. Put it behind a TLS-terminating reverse
-proxy, restrict the admin and metrics routes, and set request-size and rate
-limits there.
-Do not expose the service directly to the internet.
+The process listens on `OATH_REGISTRY_BIND` (default `0.0.0.0:4873`). Put it
+behind a TLS-terminating reverse proxy, restrict the admin and metrics routes,
+and set request-size and rate limits there. Do not expose the service directly
+to the internet.
 
 Required configuration:
 
@@ -27,6 +27,8 @@ Required configuration:
 | `DATABASE_URL` | PostgreSQL control plane. Startup migrations run automatically and fail closed on ambiguous historical package ownership or visibility. |
 | `OATH_REGISTRY_DATA` | Durable signing-key and local-object root. The generated `registry-signing.key` is mode `0600` on Unix and must be backed up securely. |
 | `OATH_PUBLIC_URL` | External HTTPS origin used in tarball metadata. It defaults to `http://localhost:4873` for local development and must be set in a deployed beta. |
+| `OATH_REGISTRY_BIND` | Listener address and port. Defaults to `0.0.0.0:4873`. |
+| `OATH_REQUIRE_STEP_UP_APPROVAL` | Set to `true` in every hosted deployment. Approval then requires a fresh OIDC token whose `amr`/`acr` proves MFA, OTP, hardware-key, FIDO, or WebAuthn authentication. |
 
 One-time bootstrap configuration:
 
@@ -85,8 +87,16 @@ transactional and an already-decided stage returns a conflict. Artifacts are
 content-addressed and immutable. The registry reads `package/package.json` from
 the staged npm tarball, bounds manifest extraction, verifies its name and
 version against the request, and derives the npm packument from that manifest.
-The caller-provided assessment remains evidence supplied by the publisher; the
-beta service does not independently reproduce or attest it.
+Publisher claims are retained as `publisher_assessment`. The service safely
+extracts and scans the exact uploaded archive, computes and signs its own
+`RegistryVerdict v1`, and stores that authoritative result as `assessment`.
+It also retains the exact server evidence, a server-generated SPDX SBOM, and an
+in-toto registry-observation statement. That statement intentionally does not
+claim source-build provenance. npm metadata and `/v1/verdicts/{name}/{version}`
+expose publisher organization, publish time/age, per-version downloads, source
+availability, risk score, evidence, SBOM, provenance, and signature material.
+Server-denied artifacts cannot be approved. A `review` verdict requires the
+existing explicit administrator approval; it is not silently promoted.
 
 Revocation preserves the artifact and version record, writes a signed tombstone,
 and moves affected dist-tags to the highest remaining active semantic version.
@@ -95,13 +105,20 @@ paths after every production revocation and record the transparency checkpoint.
 
 ## Observability
 
-- `GET /health` reports process and schema health; it does not prove dependency
-  or object-store health.
+- `GET /livez` proves the process can serve requests.
+- `GET /readyz` and the compatibility alias `GET /health` query PostgreSQL and
+  list every configured object store; dependency failures return a 5xx.
 - `GET /metrics` exposes Prometheus counters for requests, stages, downloads,
   and denied operations.
 - `GET /-/oath/transparency/checkpoint` returns the signed current Merkle root.
-- Registry events are hash chained in PostgreSQL. Export and monitor them; the
-  beta service does not yet publish witnessed consistency proofs.
+- Core package mutations write audit intent transactionally to a PostgreSQL
+  outbox. The retrying worker appends idempotent signed hash-chain events.
+- The checkpoint and inclusion endpoints expose Merkle roots and sibling
+  proofs. The consistency endpoint currently returns a complete leaf bundle,
+  which is independently recomputable but explicitly not a compact RFC 6962
+  proof or an externally witnessed checkpoint.
+- `GET /v1/security/osv` exposes quarantined public packages in OSV shape and
+  excludes private package identities.
 
 Alert on elevated 5xx responses, denied-request anomalies, database saturation,
 object read failures, replica write failures, stale checkpoints, and failed
@@ -124,12 +141,11 @@ failover.
 
 - No built-in TLS, invitation browser UI, SCIM, customer-managed keys, regional
   routing, CDN invalidation controller, or air-gap mirror service.
-- The HTTP bind address and port are not yet configurable.
 - OIDC membership exchange selects one organization per subject.
-- Package mutation and transparency-event append use separate database
-  transactions, so the full process-kill atomicity drill remains mandatory.
-- Publisher-supplied assessment evidence is stored but is not yet independently
-  reproduced, schema-attested, or policy-signed by the hosted service.
+- Non-package account and billing audit events have not all migrated to the
+  transactional outbox yet.
+- Compact consistency proofs, external witnesses, KMS signing, and Rekor-backed
+  attestations remain GA work.
 - Service SLOs, restore targets, revocation propagation, external security
   review, and design-partner adoption have not yet met the GA gates.
 

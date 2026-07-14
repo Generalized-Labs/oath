@@ -3,20 +3,28 @@ use base64::Engine;
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
-use std::path::{Path, PathBuf};
+use std::{
+    fs::OpenOptions,
+    io::Write,
+    path::{Path, PathBuf},
+};
 
-pub const PUBLISH_ASSESSMENT_VERSION: u32 = 1;
+pub const PUBLISH_ASSESSMENT_VERSION: u32 = 2;
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishFile {
     pub path: String,
     pub bytes: u64,
     pub sha256: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishAssessment {
     pub schema_version: u32,
+    #[serde(default)]
+    pub generated_at: u64,
+    #[serde(default)]
+    pub expires_at: u64,
     pub name: String,
     pub version: String,
     pub tag: String,
@@ -32,9 +40,19 @@ pub struct PublishAssessment {
     pub decision: String,
     pub reason_code: String,
     pub previous_release: Option<PublishDiff>,
+    #[serde(default)]
+    pub policy_digest: String,
+    #[serde(default)]
+    pub evidence_digest: String,
+    #[serde(default)]
+    pub rule_bundle_version: String,
+    #[serde(default)]
+    pub limitations: Vec<String>,
+    #[serde(default)]
+    pub signature: Option<DetachedSignature>,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PublishDiff {
     pub previous_version: String,
     pub added_files: Vec<String>,
@@ -53,19 +71,46 @@ pub struct PersistedEvidence {
     pub provenance_path: String,
 }
 
-#[derive(Debug, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct DetachedSignature {
     pub algorithm: String,
+    pub canonicalization: String,
     pub signature: String,
     pub public_key: String,
 }
 
+pub fn legacy_v1(assessment: &PublishAssessment) -> serde_json::Value {
+    serde_json::json!({
+        "schema_version": 1,
+        "name": assessment.name,
+        "version": assessment.version,
+        "tag": assessment.tag,
+        "access": assessment.access,
+        "package_digest": assessment.package_digest,
+        "unpacked_bytes": assessment.unpacked_bytes,
+        "files": assessment.files,
+        "dependency_count": assessment.dependency_count,
+        "lifecycle_hooks": assessment.lifecycle_hooks,
+        "capabilities": assessment.capabilities,
+        "source_available": assessment.source_available,
+        "secret_findings": assessment.secret_findings,
+        "decision": if assessment.decision == "deny" { "block" } else { &assessment.decision },
+        "reason_code": assessment.reason_code,
+        "previous_release": assessment.previous_release,
+    })
+}
+
 pub fn sign_json(value: &impl Serialize) -> Result<DetachedSignature> {
     let key = signing_key()?;
-    let canonical = serde_json::to_vec(value)?;
+    sign_json_with_key(value, &key)
+}
+
+fn sign_json_with_key(value: &impl Serialize, key: &SigningKey) -> Result<DetachedSignature> {
+    let canonical = oath_contracts::canonical_json_bytes(value)?;
     let signature = key.sign(&canonical);
     Ok(DetachedSignature {
         algorithm: "ed25519".to_string(),
+        canonicalization: "oath-json-v1".to_string(),
         signature: base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
         public_key: base64::engine::general_purpose::STANDARD
             .encode(key.verifying_key().to_bytes()),
@@ -78,6 +123,11 @@ pub fn verify_json_signature(value: &impl Serialize, signature: &DetachedSignatu
         "unsupported signature algorithm {}",
         signature.algorithm
     );
+    anyhow::ensure!(
+        signature.canonicalization == "oath-json-v1",
+        "unsupported signature canonicalization {}",
+        signature.canonicalization
+    );
     let public_key: [u8; 32] = base64::engine::general_purpose::STANDARD
         .decode(&signature.public_key)?
         .try_into()
@@ -89,7 +139,7 @@ pub fn verify_json_signature(value: &impl Serialize, signature: &DetachedSignatu
     let verifying_key = VerifyingKey::from_bytes(&public_key)?;
     let signature = Signature::from_bytes(&signature_bytes);
     verifying_key
-        .verify(&serde_json::to_vec(value)?, &signature)
+        .verify(&oath_contracts::canonical_json_bytes(value)?, &signature)
         .context("Ed25519 signature verification failed")
 }
 
@@ -115,14 +165,20 @@ pub fn spdx_sbom(package: &serde_json::Value, assessment: &PublishAssessment) ->
     })
 }
 
-pub fn slsa_provenance(assessment: &PublishAssessment) -> serde_json::Value {
+pub fn assessment_attestation(assessment: &PublishAssessment) -> serde_json::Value {
     serde_json::json!({
         "_type": "https://in-toto.io/Statement/v1",
         "subject": [{ "name": format!("{}@{}", assessment.name, assessment.version), "digest": { "sha256": assessment.package_digest.trim_start_matches("sha256:") } }],
-        "predicateType": "https://slsa.dev/provenance/v1",
+        "predicateType": "https://oath.dev/attestation/publish-assessment/v1",
         "predicate": {
-            "buildDefinition": { "buildType": "https://oath.dev/buildtypes/npm-package/v1", "externalParameters": { "tag": assessment.tag, "access": assessment.access }, "internalParameters": {}, "resolvedDependencies": [] },
-            "runDetails": { "builder": { "id": format!("https://github.com/Generalized-Labs/oath@{}", env!("CARGO_PKG_VERSION")) }, "metadata": { "invocationId": assessment.package_digest } }
+            "assessor": format!("oath/{}", env!("CARGO_PKG_VERSION")),
+            "assessment_time": assessment.generated_at,
+            "tag": assessment.tag,
+            "access": assessment.access,
+            "decision": assessment.decision,
+            "reason_code": assessment.reason_code,
+            "evidence_digest": assessment.evidence_digest,
+            "note": "This attests the local package snapshot and assessment, not source-build provenance."
         }
     })
 }
@@ -137,12 +193,19 @@ fn atomic_json(path: &Path, value: &impl Serialize) -> Result<()> {
 fn signing_key() -> Result<SigningKey> {
     let home =
         oath_core::home_dir().context("HOME or USERPROFILE is required for publish signing")?;
-    let path = home.join(".oath").join("publish-signing.key");
-    if path.exists() {
-        let bytes: [u8; 32] = std::fs::read(&path)?
+    load_or_create_signing_key(&home.join(".oath").join("publish-signing.key"))
+}
+
+fn load_or_create_signing_key(path: &Path) -> Result<SigningKey> {
+    fn read_key(path: &Path) -> Result<SigningKey> {
+        let bytes: [u8; 32] = std::fs::read(path)?
             .try_into()
             .map_err(|_| anyhow::anyhow!("invalid publish signing key length"))?;
-        return Ok(SigningKey::from_bytes(&bytes));
+        Ok(SigningKey::from_bytes(&bytes))
+    }
+
+    if path.exists() {
+        return read_key(path);
     }
     if let Some(parent) = path.parent() {
         std::fs::create_dir_all(parent)?;
@@ -150,13 +213,26 @@ fn signing_key() -> Result<SigningKey> {
     let mut bytes = [0u8; 32];
     getrandom::fill(&mut bytes)
         .map_err(|error| anyhow::anyhow!("failed to generate publish signing key: {error}"))?;
-    std::fs::write(&path, bytes)?;
+    let suffix = u64::from_le_bytes(bytes[..8].try_into().expect("eight-byte key prefix"));
+    let temp_path = path.with_extension(format!("{suffix:016x}.tmp"));
+    let mut options = OpenOptions::new();
+    options.write(true).create_new(true);
     #[cfg(unix)]
     {
-        use std::os::unix::fs::PermissionsExt;
-        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
     }
-    Ok(SigningKey::from_bytes(&bytes))
+    let mut file = options.open(&temp_path)?;
+    file.write_all(&bytes)?;
+    file.sync_all()?;
+    drop(file);
+    let result = match std::fs::hard_link(&temp_path, path) {
+        Ok(()) => Ok(SigningKey::from_bytes(&bytes)),
+        Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => read_key(path),
+        Err(error) => Err(error.into()),
+    };
+    let _ = std::fs::remove_file(temp_path);
+    result
 }
 
 fn publish_assessment_root(root: &Path) -> Result<PathBuf> {
@@ -195,16 +271,16 @@ pub fn persist_signed(
     let provenance_path = directory.join("provenance.intoto.json");
     atomic_json(&assessment_path, assessment)?;
     atomic_json(&sbom_path, &spdx_sbom(package, assessment))?;
-    atomic_json(&provenance_path, &slsa_provenance(assessment))?;
+    atomic_json(&provenance_path, &assessment_attestation(assessment))?;
     let key = signing_key()?;
-    let canonical = serde_json::to_vec(assessment)?;
+    let canonical = oath_contracts::canonical_json_bytes(assessment)?;
     let signature = key.sign(&canonical);
     let encoded_signature = base64::engine::general_purpose::STANDARD.encode(signature.to_bytes());
     let public_key =
         base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes());
     atomic_json(
         &directory.join("signature.json"),
-        &serde_json::json!({ "algorithm": "ed25519", "signature": encoded_signature, "public_key": public_key, "subject": "assessment.json" }),
+        &serde_json::json!({ "algorithm": "ed25519", "canonicalization": "oath-json-v1", "signature": encoded_signature, "public_key": public_key, "subject": "assessment.json" }),
     )?;
     Ok(PersistedEvidence {
         directory: directory.display().to_string(),
@@ -271,6 +347,18 @@ pub fn assess(
     package: &serde_json::Value,
     tag: &str,
     access: Option<&str>,
+) -> Result<PublishAssessment> {
+    let key = signing_key()?;
+    assess_with_signing_key(root, files, package, tag, access, &key)
+}
+
+fn assess_with_signing_key(
+    root: &Path,
+    files: &[PathBuf],
+    package: &serde_json::Value,
+    tag: &str,
+    access: Option<&str>,
+    signing_key: &SigningKey,
 ) -> Result<PublishAssessment> {
     let name = package
         .get("name")
@@ -339,8 +427,26 @@ pub fn assess(
         .sum();
     let blocked = !secret_findings.is_empty();
     let capabilities = inferred_capabilities(&contents);
-    Ok(PublishAssessment {
+    let generated_at = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|duration| duration.as_secs())
+        .unwrap_or(0);
+    let policy_digest = oath_contracts::digest_json(&serde_json::json!({
+        "secrets": "deny",
+        "lifecycle_hooks": "review",
+        "tag": tag,
+        "access": access,
+    }))?;
+    let evidence_digest = oath_contracts::digest_json(&serde_json::json!({
+        "files": manifest,
+        "capabilities": capabilities,
+        "secret_findings": secret_findings,
+        "lifecycle_hooks": lifecycle_hooks,
+    }))?;
+    let mut assessment = PublishAssessment {
         schema_version: PUBLISH_ASSESSMENT_VERSION,
+        generated_at,
+        expires_at: generated_at.saturating_add(3600),
         name: name.into(),
         version: version.into(),
         tag: tag.into(),
@@ -354,7 +460,7 @@ pub fn assess(
         source_available: package.get("repository").is_some(),
         secret_findings,
         decision: if blocked {
-            "block".into()
+            "deny".into()
         } else {
             "allow".into()
         },
@@ -364,17 +470,39 @@ pub fn assess(
             "OATH_PUBLISH_ALLOWED".into()
         },
         previous_release: None,
-    })
+        policy_digest,
+        evidence_digest,
+        rule_bundle_version: format!("oath-rules/{}", env!("CARGO_PKG_VERSION")),
+        limitations: vec![
+            "Static analysis cannot prove package safety".into(),
+            "Opaque binaries and remote second-stage payloads require containment".into(),
+        ],
+        signature: None,
+    };
+    assessment.signature = Some(sign_json_with_key(&assessment, signing_key)?);
+    Ok(assessment)
 }
 
 pub fn attach_previous_release(root: &Path, assessment: &mut PublishAssessment) -> Result<()> {
+    let key = signing_key()?;
+    attach_previous_release_from_bases(
+        &[
+            publish_assessment_root(root)?,
+            root.join(".oath").join("publish-assessments"),
+        ],
+        assessment,
+        &key,
+    )
+}
+
+fn attach_previous_release_from_bases(
+    bases: &[PathBuf],
+    assessment: &mut PublishAssessment,
+    signing_key: &SigningKey,
+) -> Result<()> {
     let current = assessment.version.parse::<node_semver::Version>().ok();
     let mut candidates = Vec::new();
-    let bases = [
-        publish_assessment_root(root)?,
-        root.join(".oath").join("publish-assessments"),
-    ];
-    for base in bases.into_iter().filter(|base| base.exists()) {
+    for base in bases.iter().filter(|base| base.exists()) {
         for entry in std::fs::read_dir(base)?.flatten() {
             let path = entry.path().join("assessment.json");
             let Ok(bytes) = std::fs::read(path) else {
@@ -446,14 +574,41 @@ pub fn attach_previous_release(root: &Path, assessment: &mut PublishAssessment) 
         capabilities_added,
         capabilities_removed,
     });
+    assessment.signature = None;
+    assessment.signature = Some(sign_json_with_key(assessment, signing_key)?);
     Ok(())
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn concurrent_key_creation_converges() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("publish.key");
+        let barrier = std::sync::Arc::new(std::sync::Barrier::new(8));
+        let handles = (0..8)
+            .map(|_| {
+                let path = path.clone();
+                let barrier = barrier.clone();
+                std::thread::spawn(move || {
+                    barrier.wait();
+                    load_or_create_signing_key(&path).unwrap().to_bytes()
+                })
+            })
+            .collect::<Vec<_>>();
+        let keys = handles
+            .into_iter()
+            .map(|handle| handle.join().unwrap())
+            .collect::<Vec<_>>();
+        assert!(keys.iter().all(|key| key == &keys[0]));
+        assert_eq!(std::fs::read(path).unwrap().len(), 32);
+    }
+
     #[test]
     fn assessment_is_deterministic_and_blocks_private_keys() {
+        let signing_key = SigningKey::from_bytes(&[7; 32]);
         let dir = tempfile::tempdir().unwrap();
         let package_path = dir.path().join("package.json");
         let key_path = dir.path().join("secret.pem");
@@ -461,28 +616,42 @@ mod tests {
         std::fs::write(&key_path, "-----BEGIN PRIVATE KEY-----").unwrap();
         let package: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&package_path).unwrap()).unwrap();
-        let assessment = assess(
+        let assessment = assess_with_signing_key(
             dir.path(),
             &[package_path, key_path],
             &package,
             "latest",
             None,
+            &signing_key,
         )
         .unwrap();
-        assert_eq!(assessment.decision, "block");
+        assert_eq!(assessment.decision, "deny");
         assert_eq!(assessment.reason_code, "OATH_PUBLISH_SECRET_DETECTED");
         assert!(assessment.package_digest.starts_with("sha256:"));
+        let signature = assessment.signature.clone().unwrap();
+        let mut unsigned = assessment.clone();
+        unsigned.signature = None;
+        verify_json_signature(&unsigned, &signature).unwrap();
+        unsigned.reason_code = "tampered".into();
+        assert!(verify_json_signature(&unsigned, &signature).is_err());
         let sbom = spdx_sbom(&package, &assessment);
         assert_eq!(sbom["spdxVersion"], "SPDX-2.3");
-        let provenance = slsa_provenance(&assessment);
+        let provenance = assessment_attestation(&assessment);
         assert_eq!(
             provenance["predicateType"],
-            "https://slsa.dev/provenance/v1"
+            "https://oath.dev/attestation/publish-assessment/v1"
+        );
+        assert!(
+            provenance["predicate"]["note"]
+                .as_str()
+                .unwrap()
+                .contains("not source-build provenance")
         );
     }
 
     #[test]
     fn previous_release_reports_file_and_capability_changes() {
+        let signing_key = SigningKey::from_bytes(&[9; 32]);
         let dir = tempfile::tempdir().unwrap();
         let package_path = dir.path().join("package.json");
         let source_path = dir.path().join("index.js");
@@ -490,12 +659,13 @@ mod tests {
         std::fs::write(&source_path, "module.exports = 1").unwrap();
         let package: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&package_path).unwrap()).unwrap();
-        let previous = assess(
+        let previous = assess_with_signing_key(
             dir.path(),
             &[package_path.clone(), source_path.clone()],
             &package,
             "latest",
             None,
+            &signing_key,
         )
         .unwrap();
         let previous_dir = dir.path().join(".oath/publish-assessments/demo-1");
@@ -513,15 +683,21 @@ mod tests {
         .unwrap();
         let package: serde_json::Value =
             serde_json::from_slice(&std::fs::read(&package_path).unwrap()).unwrap();
-        let mut current = assess(
+        let mut current = assess_with_signing_key(
             dir.path(),
             &[package_path, source_path],
             &package,
             "latest",
             None,
+            &signing_key,
         )
         .unwrap();
-        attach_previous_release(dir.path(), &mut current).unwrap();
+        attach_previous_release_from_bases(
+            &[dir.path().join(".oath/publish-assessments")],
+            &mut current,
+            &signing_key,
+        )
+        .unwrap();
         let diff = current.previous_release.unwrap();
         assert_eq!(diff.previous_version, "1.0.0");
         assert!(diff.changed_files.contains(&"index.js".into()));

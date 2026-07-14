@@ -1,0 +1,104 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oath.dev/schemas/exec-assessment-v3.json",
+  "title": "Oath ExecAssessment v3",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "generated_at", "expires_at", "identity", "evidence", "policy", "sandbox", "policy_digest", "evidence_digest", "rule_bundle_version", "signature"],
+  "properties": {
+    "schema_version": { "const": 3 },
+    "generated_at": { "type": "integer", "minimum": 0 },
+    "expires_at": { "type": "integer", "minimum": 0 },
+    "identity": { "$ref": "#/$defs/identity" },
+    "evidence": { "$ref": "#/$defs/evidence" },
+    "policy": { "$ref": "#/$defs/policy" },
+    "sandbox": { "$ref": "#/$defs/sandbox" },
+    "policy_digest": { "$ref": "#/$defs/digest" },
+    "evidence_digest": { "$ref": "#/$defs/digest" },
+    "rule_bundle_version": { "type": "string", "minLength": 1 },
+    "signature": { "$ref": "#/$defs/signature" }
+  },
+  "$defs": {
+    "digest": { "type": "string", "pattern": "^sha256:[a-f0-9]{64}$" },
+    "nullableString": { "type": ["string", "null"] },
+    "decision": { "enum": ["allow", "deny", "review", "unknown"] },
+    "identity": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "version", "registry", "integrity", "publisher", "publish_age_days", "repository"],
+      "properties": {
+        "name": { "type": "string", "minLength": 1 },
+        "version": { "type": "string", "minLength": 1 },
+        "registry": { "type": "string", "minLength": 1 },
+        "integrity": { "$ref": "#/$defs/nullableString" },
+        "publisher": { "$ref": "#/$defs/nullableString" },
+        "publish_age_days": { "type": ["integer", "null"], "minimum": 0 },
+        "repository": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "versionDiff": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["previous_version", "previous_integrity", "publisher_changed", "lifecycle_hooks_changed"],
+      "properties": {
+        "previous_version": { "type": "string" },
+        "previous_integrity": { "$ref": "#/$defs/nullableString" },
+        "publisher_changed": { "type": ["boolean", "null"] },
+        "lifecycle_hooks_changed": { "type": "boolean" }
+      }
+    },
+    "evidence": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["unpacked_bytes", "dependency_count", "readable_source", "obfuscated", "native_code", "lifecycle_hooks", "capabilities", "findings", "limitations", "version_diff"],
+      "properties": {
+        "unpacked_bytes": { "type": "integer", "minimum": 0 },
+        "dependency_count": { "type": "integer", "minimum": 0 },
+        "readable_source": { "type": "boolean" },
+        "obfuscated": { "type": "boolean" },
+        "native_code": { "type": "boolean" },
+        "lifecycle_hooks": { "type": "boolean" },
+        "capabilities": { "type": "array", "items": { "type": "string" }, "uniqueItems": true },
+        "findings": { "type": "array", "items": { "type": "string" } },
+        "limitations": { "type": "array", "items": { "type": "string" }, "minItems": 1 },
+        "version_diff": { "oneOf": [{ "$ref": "#/$defs/versionDiff" }, { "type": "null" }] }
+      }
+    },
+    "policy": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["decision", "reason_code", "grade", "score"],
+      "properties": {
+        "decision": { "$ref": "#/$defs/decision" },
+        "reason_code": { "type": "string", "pattern": "^OATH_[A-Z0-9_]+$" },
+        "grade": { "type": "string" },
+        "score": { "type": "integer", "minimum": 0, "maximum": 100 }
+      }
+    },
+    "sandbox": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["backend", "available", "filesystem_isolation", "network_isolation", "process_isolation", "resource_limits", "degraded_reason"],
+      "properties": {
+        "backend": { "type": "string" },
+        "available": { "type": "boolean" },
+        "filesystem_isolation": { "type": "boolean" },
+        "network_isolation": { "type": "boolean" },
+        "process_isolation": { "type": "boolean" },
+        "resource_limits": { "type": "boolean" },
+        "degraded_reason": { "$ref": "#/$defs/nullableString" }
+      }
+    },
+    "signature": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["algorithm", "canonicalization", "public_key", "signature"],
+      "properties": {
+        "algorithm": { "const": "ed25519" },
+        "canonicalization": { "const": "oath-json-v1" },
+        "public_key": { "type": "string" },
+        "signature": { "type": "string" }
+      }
+    }
+  }
+}

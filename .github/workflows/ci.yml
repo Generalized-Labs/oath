@@ -189,11 +189,8 @@ jobs:
           name: sandbox-capabilities-${{ runner.os }}
           path: sandbox-capabilities-${{ runner.os }}.json
 
-      - name: npm parity smoke
-        run: |
-          node scripts/npm-parity.mjs tests/compat/fixtures/basic
-          node scripts/npm-parity.mjs tests/compat/fixtures/alias
-          node scripts/npm-parity.mjs tests/compat/fixtures/workspace
+      - name: Reviewed npm workflow parity
+        run: node scripts/compat-behavioral.mjs --execute
         env:
           OATH_BIN: ${{ runner.os == 'Windows' && 'target/release/oath.exe' || 'target/release/oath' }}
 
@@ -203,7 +200,9 @@ jobs:
         run: |
           ./target/release/oath.exe --version
           ./target/release/oath.exe exec --dry-run --json is-number | Out-File exec.json
-          node -e "const a=require('./exec.json').assessment;if(a.schema_version!==2)process.exit(1)"
+          node -e "const a=require('./exec.json').assessment;if(a.schema_version!==3||!a.signature)process.exit(1)"
+          ./target/release/oath.exe exec --dry-run --json --schema-version 2 is-number | Out-File exec-v2.json
+          node -e "const a=require('./exec-v2.json').assessment;if(a.schema_version!==2)process.exit(1)"
 
   windows-artifacts:
     strategy:
@@ -504,3 +503,45 @@ jobs:
         with:
           name: reliability-drill
           path: reliability-drill.json
+
+  ga-evidence-manifest:
+    if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
+    needs: release-evidence-gate
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: compatibility-independent-behavioral-*
+          path: evidence-download/behavioral
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: compatibility-fixtures-*
+          path: evidence-download/stress
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: compatibility-project-summary
+          path: evidence-download/projects
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          pattern: native-*
+          path: evidence-download/containment
+      - uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093
+        with:
+          name: reliability-drill
+          path: evidence-download/reliability
+      - run: node scripts/generate-ga-evidence.mjs evidence-download ga-evidence-manifest.json
+      - run: sha256sum ga-evidence-manifest.json > ga-evidence-manifest.json.sha256
+      - uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be
+        with:
+          subject-path: ga-evidence-manifest.json
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02
+        with:
+          name: ga-evidence-manifest
+          path: |
+            ga-evidence-manifest.json
+            ga-evidence-manifest.json.sha256

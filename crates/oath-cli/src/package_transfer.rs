@@ -364,6 +364,10 @@ pub fn verify_capsule(
             .as_str()
             .unwrap_or_default()
             .to_string(),
+        canonicalization: assessment_signature["canonicalization"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
         signature: assessment_signature["signature"]
             .as_str()
             .unwrap_or_default()

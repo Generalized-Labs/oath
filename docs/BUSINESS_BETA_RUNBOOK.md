@@ -8,8 +8,8 @@
   least 99.9% over a rolling 30-day window.
 - Every billed organization has an auditable Stripe event, entitlement, owner,
   and support contact. Webhook signature or replay failures page the operator.
-- Compatibility evidence contains 500 fixture results and 100 project results;
-  manifests without executed results do not satisfy the gate.
+- Compatibility evidence contains 10,000 generated executions and 250 pinned
+  project results; manifests without executed results do not satisfy the gate.
 
 ## Operational ownership
 

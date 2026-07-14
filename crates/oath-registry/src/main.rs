@@ -26,10 +26,21 @@ async fn main() -> anyhow::Result<()> {
             .bootstrap_token(&organization, &token, "admin")
             .await?;
     }
+    let outbox_registry = registry.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
+        loop {
+            interval.tick().await;
+            if let Err(error) = outbox_registry.drain_outbox().await {
+                tracing::warn!(%error, "registry audit outbox worker failed");
+            }
+        }
+    });
     let app = oath_registry::postgres_api::router(registry);
 
-    let listener = tokio::net::TcpListener::bind("0.0.0.0:4873").await?;
-    tracing::info!("oath-registry listening on :4873");
+    let bind = std::env::var("OATH_REGISTRY_BIND").unwrap_or_else(|_| "0.0.0.0:4873".into());
+    let listener = tokio::net::TcpListener::bind(&bind).await?;
+    tracing::info!(%bind, "oath-registry listening");
     axum::serve(listener, app).await?;
     Ok(())
 }

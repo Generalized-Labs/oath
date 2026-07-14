@@ -10,6 +10,8 @@ name = "oath-registry"
 path = "src/main.rs"
 
 [dependencies]
+oath-contracts = { path = "../oath-contracts" }
+oath-analyze = { path = "../oath-analyze" }
 axum.workspace = true
 tokio.workspace = true
 serde.workspace = true
@@ -30,6 +32,8 @@ jsonwebtoken.workspace = true
 hmac.workspace = true
 hex.workspace = true
 reqwest.workspace = true
+futures-util.workspace = true
+chrono = { version = "0.4", default-features = false, features = ["std"] }
 url.workspace = true
 flate2.workspace = true
 tar.workspace = true
