@@ -215,6 +215,16 @@ impl PostgresControlPlane {
         Ok(count <= maximum)
     }
 
+    pub async fn prune_rate_limits_before(&self, cutoff: i64) -> Result<u64> {
+        Ok(
+            query("DELETE FROM registry_rate_limits WHERE window_start<$1")
+                .bind(cutoff)
+                .execute(&self.pool)
+                .await?
+                .rows_affected(),
+        )
+    }
+
     pub async fn read_stage(&self, id: &str) -> Result<Option<StageRecord>> {
         let row = query("SELECT id,organization,name,version,tag,digest,status,private,manifest,publisher_assessment,assessment,server_evidence,sbom,provenance,created_at FROM stages WHERE id=$1")
             .bind(id).fetch_optional(&self.pool).await?;

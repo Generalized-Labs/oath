@@ -236,6 +236,20 @@ fn validate_metadata(metadata: &serde_json::Value) -> Vec<String> {
             errors.push(format!("{pointer} must be a non-empty string"));
         }
     }
+    if metadata
+        .get("evidence_scope")
+        .and_then(serde_json::Value::as_str)
+        != Some("qualifying")
+    {
+        errors.push("evidence_scope must equal qualifying".into());
+    }
+    if metadata
+        .get("source_commit")
+        .and_then(serde_json::Value::as_str)
+        .is_some_and(|value| value.chars().all(|character| character == '0'))
+    {
+        errors.push("source_commit cannot be the all-zero self-test value".into());
+    }
     for corpus in [
         "benign",
         "known_malware",

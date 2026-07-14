@@ -83,4 +83,5 @@ jobs:
           name: proposed-projects-lock
           path: |
             tests/compat/projects.lock.json
+            tests/compat/projects.txt
             tests/compat/project-locks/*.json.gz

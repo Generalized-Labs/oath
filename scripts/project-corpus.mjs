@@ -458,6 +458,10 @@ async function mergePreflight() {
   await validatePinnedLocks(manifest);
   await mkdir(resolve(output, ".."), { recursive: true });
   await writeFile(output, JSON.stringify(manifest, null, 2));
+  await writeFile(
+    resolve("tests/compat/projects.txt"),
+    `${projects.map(project => project.repository).join("\n")}\n`
+  );
   console.log(JSON.stringify({ output, projects: projects.length }, null, 2));
 }
 

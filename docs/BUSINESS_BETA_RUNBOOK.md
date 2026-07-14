@@ -4,8 +4,9 @@
 
 - All required CI jobs are green on Linux, macOS, and Windows.
 - PostgreSQL restore and object-store failover drills passed within 30 days.
-- Registry p95 metadata latency is below 250 ms and tarball availability is at
-  least 99.9% over a rolling 30-day window.
+- Registry p95 metadata latency is below 150 ms, tarball availability is at
+  least 99.95%, and control-plane availability is at least 99.9% throughout
+  the qualifying 60-day window.
 - Every billed organization has an auditable Stripe event, entitlement, owner,
   and support contact. Webhook signature or replay failures page the operator.
 - Compatibility evidence contains 10,000 generated executions and 250 pinned

@@ -297,6 +297,12 @@ impl PostgresRegistry {
         }
         Ok(delivered)
     }
+
+    pub async fn prune_expired_rate_limits(&self) -> Result<u64> {
+        self.control
+            .prune_rate_limits_before(now().saturating_sub(24 * 3600) as i64)
+            .await
+    }
 }
 
 fn positive_limit(name: &str, default: i64) -> Result<i64> {
@@ -1581,6 +1587,62 @@ mod tests {
             .await
             .unwrap();
         let registry_assertions = registry.clone();
+        assert!(
+            registry_assertions
+                .control
+                .consume_rate_limit("rate-test", "test-window", 2, 60)
+                .await
+                .unwrap()
+        );
+        assert!(
+            registry_assertions
+                .control
+                .consume_rate_limit("rate-test", "test-window", 2, 60)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !registry_assertions
+                .control
+                .consume_rate_limit("rate-test", "test-window", 2, 60)
+                .await
+                .unwrap()
+        );
+        let mut quota_registry = registry.clone();
+        quota_registry.maximum_pending_stages = 1;
+        let quota_app = router(quota_registry);
+        let quota_stage = stage(&quota_app, "secret", "quota-tool", "1.0.0", true).await;
+        let quota_response = call(
+            &quota_app,
+            post_request(
+                "/-/oath/stages",
+                "secret",
+                json!({
+                    "name": "quota-tool-two",
+                    "version": "1.0.0",
+                    "tag": "latest",
+                    "tarball_base64": base64::engine::general_purpose::STANDARD
+                        .encode(package_tarball("quota-tool-two", "1.0.0")),
+                    "assessment": {"decision": "allow"},
+                    "private": true
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(quota_response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            call(
+                &quota_app,
+                post_request(
+                    &format!("/-/oath/stages/{}/reject", quota_stage.id),
+                    "secret",
+                    json!({"reason": "quota test complete"}),
+                ),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
         let mut guarded_registry = registry.clone();
         guarded_registry.require_step_up_approval = true;
         let guarded_app = router(guarded_registry);

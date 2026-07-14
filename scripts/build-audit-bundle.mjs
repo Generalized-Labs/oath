@@ -24,6 +24,7 @@ const inputs = [
   "docs/SCANNER_THREAT_MODEL.md",
   "docs/SERVICE_LEVEL_OBJECTIVES.md",
   "docs/SUPPORTED_PLATFORMS.md",
+  "tests/detection/corpus-metadata.schema.json",
   "crates/oath-registry/migrations/0001_registry.sql",
   "crates/oath-registry/migrations/0002_ga_foundation.sql",
   "crates/oath-registry/migrations/0003_limits.sql",
