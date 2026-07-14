@@ -4,11 +4,18 @@ import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
+import { gunzipSync } from "node:zlib";
 
 const referenceNpmMajor = 11;
 const fixture = resolve(process.argv[2] ?? "tests/compat/fixtures/basic");
 const oath = resolve(process.env.OATH_BIN ?? "target/debug/oath");
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
+const pinnedLockPath = process.env.OATH_PINNED_LOCK_PATH ? resolve(process.env.OATH_PINNED_LOCK_PATH) : null;
+const expectedPinnedLockSha256 = process.env.OATH_PINNED_LOCK_SHA256 ?? null;
+
+function sha256(value) {
+  return createHash("sha256").update(value).digest("hex");
+}
 
 function run(command, args, cwd, home = process.env.HOME ?? process.env.USERPROFILE ?? tmpdir(), extraEnv = {}) {
   const result = spawnSync(command, args, {
@@ -77,13 +84,28 @@ try {
   // drift, not a placement difference. npm's generated lock pins the exact
   // versions and integrities that Oath must reproduce. Force lock creation for
   // projects such as Express that disable package-lock in their checked-in npmrc.
-  const lockResult = run(npmCommand, ["install", "--package-lock-only", "--ignore-scripts", "--package-lock=true"], lockDir, home);
-  let lockSha256 = lockResult.status === 0
-    ? createHash("sha256").update(await readFile(join(lockDir, "package-lock.json"))).digest("hex")
-    : null;
-  if (lockResult.status === 0) {
-    await cp(join(lockDir, "package-lock.json"), join(npmDir, "package-lock.json"));
-    await cp(join(lockDir, "package-lock.json"), join(oathDir, "package-lock.json"));
+  let lockResult;
+  let lockSha256 = null;
+  let pinnedLockSha256 = null;
+  if (pinnedLockPath) {
+    const pinnedLock = gunzipSync(await readFile(pinnedLockPath));
+    pinnedLockSha256 = sha256(pinnedLock);
+    if (!expectedPinnedLockSha256) throw new Error("OATH_PINNED_LOCK_SHA256 is required with OATH_PINNED_LOCK_PATH");
+    if (pinnedLockSha256 !== expectedPinnedLockSha256) {
+      throw new Error(`pinned lock digest mismatch: expected ${expectedPinnedLockSha256}, found ${pinnedLockSha256}`);
+    }
+    await writeFile(join(lockDir, "package-lock.json"), pinnedLock);
+    await writeFile(join(npmDir, "package-lock.json"), pinnedLock);
+    await writeFile(join(oathDir, "package-lock.json"), pinnedLock);
+    lockResult = { status: 0, stdout: "", stderr: "" };
+    lockSha256 = pinnedLockSha256;
+  } else {
+    lockResult = run(npmCommand, ["install", "--package-lock-only", "--ignore-scripts", "--package-lock=true"], lockDir, home);
+    lockSha256 = lockResult.status === 0 ? sha256(await readFile(join(lockDir, "package-lock.json"))) : null;
+    if (lockResult.status === 0) {
+      await cp(join(lockDir, "package-lock.json"), join(npmDir, "package-lock.json"));
+      await cp(join(lockDir, "package-lock.json"), join(oathDir, "package-lock.json"));
+    }
   }
   let npmResult = lockResult.status === 0
     ? run(npmCommand, ["install", "--ignore-scripts", "--package-lock=true"], npmDir, home)
@@ -94,8 +116,9 @@ try {
     npmResult = run(npmCommand, ["install", "--ignore-scripts", "--package-lock=true", ...(offline ? ["--offline"] : [])], npmDir, home);
   }
   if (npmResult.status === 0) {
-    lockSha256 = createHash("sha256").update(await readFile(join(npmDir, "package-lock.json"))).digest("hex");
+    lockSha256 = sha256(await readFile(join(npmDir, "package-lock.json")));
   }
+  const pinnedLockPreserved = !pinnedLockPath || lockSha256 === pinnedLockSha256;
   const npmTree = npmResult.status === 0 ? await tree(join(npmDir, "node_modules")) : [];
 
   // Real repositories can materialize tens of gigabytes. Persist the reference
@@ -123,10 +146,14 @@ try {
   const includeTree = process.env.OATH_COMPAT_INCLUDE_TREES === "1";
   const artifact = {
     schema_version: 1,
-    reference: { npm: npmVersion, lock_sha256: lockSha256 },
+    reference: {
+      npm: npmVersion,
+      lock_sha256: lockSha256,
+      ...(pinnedLockPath ? { pinned_lock_sha256: pinnedLockSha256, pinned_lock_preserved: pinnedLockPreserved } : {})
+    },
     fixture,
     mode,
-    classification: npmResult.status === 0 ? "compared" : "reference_rejected",
+    classification: npmResult.status !== 0 ? "reference_rejected" : pinnedLockPreserved ? "compared" : "pinned_lock_mutated",
     npm: { ...npmResult, ...treeEvidence(npmTree, includeTree) },
     oath: { ...oathResult, ...treeEvidence(oathTree, includeTree) },
     differences: {
@@ -135,7 +162,7 @@ try {
       npm_only_sample: npmTree.filter(entry => !oathSet.has(entry)).slice(0, 100),
       oath_only_sample: oathTree.filter(entry => !npmSet.has(entry)).slice(0, 100)
     },
-    equivalent: npmResult.status === 0 && oathResult.status === 0 && JSON.stringify(npmTree) === JSON.stringify(oathTree)
+    equivalent: npmResult.status === 0 && oathResult.status === 0 && pinnedLockPreserved && JSON.stringify(npmTree) === JSON.stringify(oathTree)
   };
   console.log(JSON.stringify(artifact, null, 2));
   if (!artifact.equivalent) process.exitCode = 1;

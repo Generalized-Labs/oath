@@ -38,6 +38,8 @@ jobs:
         run: node scripts/validate-agent-skills.mjs
       - name: Validate deterministic corpus lock workspace
         run: node scripts/project-corpus.mjs self-test
+      - name: Validate all pinned corpus lock artifacts
+        run: node scripts/project-corpus.mjs validate tests/compat/projects.lock.json
 
   independent-behavioral:
     strategy:
