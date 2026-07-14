@@ -7,14 +7,16 @@
       "t3-oss/create-t3-app", "saleor/storefront", "outline/outline", "hoppscotch/hoppscotch", "appsmithorg/appsmith",
       "ToolJet/ToolJet", "Budibase/budibase", "nocodb/nocodb", "twentyhq/twenty", "RocketChat/Rocket.Chat",
       "supabase/supabase", "dubinc/dub", "triggerdotdev/trigger.dev", "plane-software/plane", "novuhq/novu",
-      "vercel/commerce", "ixartz/SaaS-Boilerplate", "wasp-lang/open-saas", "documenso/documenso", "shadcn-ui/taxonomy"
+      "vercel/commerce", "ixartz/SaaS-Boilerplate", "wasp-lang/open-saas", "documenso/documenso", "shadcn-ui/taxonomy",
+      "arhamkhnz/next-shadcn-admin-dashboard", "flowershow/flowershow", "olafsulich/fullstack-nextjs-ecommerce", "NextAdminHQ/nextjs-admin-dashboard",
+      "TailAdmin/free-nextjs-admin-dashboard", "ixartz/Next-JS-Landing-Page-Starter-Template", "NextJSTemplates/startup-nextjs", "pankod/next-boilerplate"
     ],
     "build-tools": [
       "unjs/mkdist", "egoist/bundle-require", "privatenumber/tsdown", "electron/forge", "electron/packager",
       "electron-userland/electron-builder", "terser/terser", "cssnano/cssnano", "postcss/postcss", "parcel-bundler/lightningcss",
-      "sass/node-sass", "wclr/yalc", "jsenv/core", "preconstruct/preconstruct", "developit/wmr",
+      "sass/node-sass", "wclr/yalc", "jsenv/core", "developit/wmr",
       "fuse-box/fuse-box", "systemjs/systemjs", "jspm/jspm-cli", "facebook/metro", "expo/expo",
-      "angular/angular-cli", "vuejs/rollup-plugin-vue", "changesets/action", "semantic-release/npm", "emilkowalski/vaul"
+      "angular/angular-cli", "vuejs/rollup-plugin-vue", "changesets/action", "semantic-release/npm"
     ],
     "typescript-compilers": [
       "babel/minify", "jridgewell/sourcemap-codec", "jridgewell/trace-mapping", "Rich-Harris/magic-string", "privatenumber/tsx",
@@ -42,7 +44,12 @@
       "heroui-inc/heroui", "nextui-org/nextui", "primefaces/primereact", "primefaces/primevue", "carbon-design-system/carbon",
       "fluentui/react-components", "elastic/eui", "palantir/blueprint", "grommet/grommet", "rebassjs/rebass",
       "ariakit/ariakit", "reach/reach-ui", "szhsin/react-menu", "floating-ui/floating-ui", "downshift-js/downshift",
-      "TanStack/table", "TanStack/query", "pmndrs/zustand", "reduxjs/redux-toolkit", "immerjs/immer"
+      "TanStack/table", "TanStack/query", "pmndrs/zustand", "reduxjs/redux-toolkit", "immerjs/immer",
+      "emilkowalski/vaul", "inokawa/virtua", "omgovich/react-colorful", "unlayer/react-email-editor", "xiaolin/react-image-gallery",
+      "justin-chu/react-fast-marquee", "AdeleD/react-paginate", "video-react/video-react", "maxmarinich/react-alice-carousel", "Aljullu/react-lazy-load-image-component",
+      "asmyshlyaev177/react-horizontal-scrolling-menu", "mhnpd/react-loader-spinner", "zillow/react-slider", "teodosii/react-notifications-component", "ReactPrimer/ReactPrimer",
+      "xiaody/react-lines-ellipsis", "hustcc/timeago-react", "lovasoa/react-contenteditable", "jsdf/react-native-htmlview", "nygardk/react-share",
+      "tomkp/react-split-pane"
     ],
     "database-orm": [
       "mikro-orm/mikro-orm", "supabase/supabase-js", "remult/remult", "zenstackhq/zenstack", "jawj/zapatos",
@@ -56,7 +63,9 @@
       "vltpkg/vltpkg", "microsoft/fluentui", "microsoft/fast", "microsoft/vscode", "microsoft/monaco-editor",
       "facebook/react-native", "expo/expo-cli", "ionic-team/stencil", "ionic-team/capacitor", "electron/electron",
       "remix-run/react-router", "ampproject/amphtml", "angular/components", "angular/dev-infra", "aws/aws-cdk",
-      "googleapis/google-cloud-node", "nestjs/nest-cli", "nestjs/schematics", "oclif/oclif", "salesforcecli/cli"
+      "googleapis/google-cloud-node", "nestjs/nest-cli", "nestjs/schematics", "oclif/oclif", "salesforcecli/cli",
+      "preconstruct/preconstruct", "contentful/forma-36", "mkosir/frontend-monorepo-boilerplate", "xmlking/ngx-starter-kit", "bennymeg/nx-electron",
+      "Quramy/npm-ts-workspaces-example"
     ],
     "native-platform": [
       "nodejs/node-addon-examples", "grpc/grpc-node", "node-webrtc/node-webrtc", "nodejs/nan", "nodejs/llnode",

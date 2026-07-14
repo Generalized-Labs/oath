@@ -38,7 +38,7 @@ corpus.
 
 The pinned project target is 250 projects, 25 in each category. Refreshes retain
 the 100 previously verified exact commits and select 15 additional eligible
-projects per category from a 465-repository reviewed pool. Every addition must
+projects per category from a 498-repository reviewed pool. Every addition must
 clone, produce a lock with Node 24.13.0 and npm 11.12.1, install successfully,
 and pass compressed-lock checksum validation. The 250-project claim remains
 open until the refresh artifact is reviewed, committed, and its parity run
