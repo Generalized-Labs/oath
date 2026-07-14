@@ -2,6 +2,7 @@
 
 **Status:** Accepted  
 **Date:** 2026-07-12
+**Amended:** 2026-07-14
 
 ## Context
 
@@ -15,10 +16,10 @@ skipped checks to look like security evidence.
 
 Oath has two independent release programs:
 
-1. Compatibility runs 100 pinned, npm-11.12.1-eligible projects in 20 shards on
+1. Compatibility runs 250 pinned, npm-11.12.1-eligible projects in 20 shards on
    the approved Blacksmith `blacksmith-16vcpu-ubuntu-2404` runner pool. npm and
    Oath trees are materialized sequentially. A final aggregation job requires
-   100 unique exact comparisons at the pinned commit and immutable lock
+   250 unique exact comparisons at the pinned commit and immutable lock
    artifact. Each compressed lock is checked in, digest-verified before use,
    shared by npm and Oath, and materialized through `npm install`. npm's output
    lock may differ only through the paired `devOptional: true` to `dev: true`
@@ -50,9 +51,9 @@ eligibility preflight happen in a separate canary process.
 
 ## Release gate
 
-- 500/500 generated stress executions, explicitly labeled as repetitions.
-- Every reviewed independent behavioral fixture passes on the OS matrix.
-- 100/100 pinned real projects, ten in each required category.
+- 10,000/10,000 generated stress executions, explicitly labeled as repetitions.
+- All 100 reviewed independent behavioral workflows pass on the OS matrix.
+- 250/250 pinned real projects, 25 in each required category.
 - Zero successful Linux or Windows adversarial escapes.
 - No skipped/unavailable native controls.
 - Checksummed and attested capability reports for every native matrix entry.

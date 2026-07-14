@@ -8,7 +8,7 @@ observation window or external approval.
 | --- | --- | --- |
 | 100 independent npm workflows | Infrastructure ready: 100 explicit command/state cases from 10 reviewed base fixtures; independent review open | Signed Linux/macOS/Windows reports, external review of every ID, zero unexplained differences |
 | 10,000 generated executions | Infrastructure ready; last signed baseline 500/500 | Exact-commit 10,000-result manifest across clean/warm/offline/repeat/interrupted modes |
-| 250 pinned projects | Refresh ready: 100 retained pins plus 498-candidate pool; last signed baseline 100/100 | Reviewed 250-project manifest and exact-commit tree/lock/exit results |
+| 250 pinned projects | Inputs frozen: 250 exact locks, 25/category, from run 29366460579; last signed parity baseline 100/100 | Exact-commit 250-project tree/lock/exit results with zero unexplained differences |
 | Detection quality | Gate implemented; historical quality still failing | Qualifying frozen malware/private holdout/benign/exfiltration run with corpus digests, exclusions, and confidence intervals |
 | Native containment | Fail-closed selection implemented; native evidence partial | Zero escapes/leaks/writes/connections/bypasses on every supported OS and external corpus |
 | Performance | Open; current sample loses | Reproducible p50/p95 cold/warm/install/assessment/exec results on declared hardware |
