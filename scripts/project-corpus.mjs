@@ -6,6 +6,7 @@ import { access, cp, mkdtemp, mkdir, readFile, readdir, rm, writeFile } from "no
 import { tmpdir } from "node:os";
 import { basename, join, relative, resolve, sep } from "node:path";
 import { gunzipSync, gzipSync } from "node:zlib";
+import { analyzeLockMutation } from "./lock-mutation.mjs";
 
 const command = process.argv[2] ?? "validate";
 const npmReference = "11.12.1";
@@ -69,10 +70,7 @@ async function runReferenceInstall(packageRoot, workspaceRoot, home) {
     return { lock, install: null, npmDir, missingLock: true };
   }
   await cp(generatedLock, join(npmDir, "package-lock.json"));
-  // A selected lock becomes an immutable release input. npm ci is npm's
-  // lock-preserving materializer; npm install may normalize lock metadata based
-  // on cache state even when the resolved tree is unchanged.
-  const install = run("npm", ["ci", "--ignore-scripts"], npmDir, env);
+  const install = run("npm", ["install", "--ignore-scripts", "--package-lock=true"], npmDir, env);
   return { lock, install, npmDir };
 }
 
@@ -112,6 +110,17 @@ async function validatePinnedLocks(manifest) {
   return manifest.projects.length;
 }
 
+function aggregateFailure(project, result) {
+  if (!result.equivalent) return result.classification ?? "not_equivalent";
+  if (result.reference?.npm !== npmReference) return "npm_reference_drift";
+  if (result.reference?.command !== "install") return "npm_reference_command_drift";
+  if (result.reference?.pinned_lock_sha256 !== project.expected_lock_sha256) return "pinned_lock_hash_drift";
+  if (result.reference?.lock_sha256 !== project.expected_lock_sha256 && result.reference?.lock_mutation?.explained !== true) {
+    return "lock_hash_drift";
+  }
+  return null;
+}
+
 async function preflight() {
   const candidatesPath = resolve(process.env.OATH_PROJECT_CANDIDATES ?? "tests/compat/project-candidates.json");
   const output = resolve(process.env.OATH_PROJECT_PREFLIGHT_OUTPUT ?? "compat-results/preflight/projects.json");
@@ -146,7 +155,7 @@ async function preflight() {
       catch { results.push({ ...candidate, commit, eligible: false, reason: "missing_package_json" }); continue; }
       // npm derives a missing package name from the working-directory basename.
       // Mirror npm-parity.mjs exactly: generate in `lock`, copy the generated
-      // lock into `npm`, validate it with npm ci, and hash the preserved lock.
+      // lock into `npm`, install there, and hash the post-install npm lock.
       const workspaceRoot = join(root, `reference-workspace-${index}`);
       const home = join(root, `home-${index}`);
       const { lock, install, npmDir, missingLock } = await runReferenceInstall(packageRoot, workspaceRoot, home);
@@ -242,7 +251,74 @@ async function selfTest() {
     assert.equal(expectedLockSha256, parityEvidence.reference.lock_sha256);
     assert.equal(expectedLockSha256, parityEvidence.reference.pinned_lock_sha256);
     assert.equal(parityEvidence.reference.pinned_lock_preserved, true);
-    assert.equal(parityEvidence.reference.command, "ci");
+    assert.equal(parityEvidence.reference.command, "install");
+    const classificationBefore = Buffer.from(JSON.stringify({
+      lockfileVersion: 3,
+      packages: { "node_modules/example": { version: "1.0.0", devOptional: true } }
+    }));
+    const classificationAfter = Buffer.from(JSON.stringify({
+      lockfileVersion: 3,
+      packages: { "node_modules/example": { version: "1.0.0", dev: true } }
+    }));
+    const explainedMutation = analyzeLockMutation(classificationBefore, classificationAfter);
+    assert.equal(explainedMutation.explained, true);
+    assert.equal(explainedMutation.kind, "npm_dependency_classification");
+    const semanticMutation = analyzeLockMutation(
+      classificationBefore,
+      Buffer.from(JSON.stringify({
+        lockfileVersion: 3,
+        packages: { "node_modules/example": { version: "2.0.0", devOptional: true } }
+      }))
+    );
+    assert.equal(semanticMutation.explained, false);
+    const unexpectedClassificationMutation = analyzeLockMutation(
+      classificationBefore,
+      Buffer.from(JSON.stringify({
+        lockfileVersion: 3,
+        packages: { "node_modules/example": { version: "1.0.0", optional: true } }
+      }))
+    );
+    assert.equal(unexpectedClassificationMutation.explained, false);
+    const rootClassificationMutation = analyzeLockMutation(
+      Buffer.from(JSON.stringify({
+        lockfileVersion: 3,
+        packages: { "": { version: "1.0.0", devOptional: true } }
+      })),
+      Buffer.from(JSON.stringify({
+        lockfileVersion: 3,
+        packages: { "": { version: "1.0.0", dev: true } }
+      }))
+    );
+    assert.equal(rootClassificationMutation.explained, false);
+    const formattingMutation = analyzeLockMutation(
+      classificationBefore,
+      Buffer.from(`${JSON.stringify(JSON.parse(classificationBefore), null, 2)}\n`)
+    );
+    assert.equal(formattingMutation.explained, false);
+    const aggregateProject = { expected_lock_sha256: "input" };
+    const aggregateResult = {
+      equivalent: true,
+      reference: {
+        npm: npmReference,
+        command: "install",
+        pinned_lock_sha256: "input",
+        lock_sha256: "normalized",
+        lock_mutation: { explained: true }
+      }
+    };
+    assert.equal(aggregateFailure(aggregateProject, aggregateResult), null);
+    assert.equal(aggregateFailure(aggregateProject, {
+      ...aggregateResult,
+      reference: { ...aggregateResult.reference, command: "ci" }
+    }), "npm_reference_command_drift");
+    assert.equal(aggregateFailure(aggregateProject, {
+      ...aggregateResult,
+      reference: { ...aggregateResult.reference, pinned_lock_sha256: "changed" }
+    }), "pinned_lock_hash_drift");
+    assert.equal(aggregateFailure(aggregateProject, {
+      ...aggregateResult,
+      reference: { ...aggregateResult.reference, lock_mutation: { explained: false } }
+    }), "lock_hash_drift");
     const tampered = run(process.execPath, [resolve("scripts/npm-parity.mjs"), source], process.cwd(), {
       OATH_BIN: process.execPath,
       OATH_PINNED_LOCK_PATH: pinnedLockPath,
@@ -257,7 +333,13 @@ async function selfTest() {
       parity_lock_digest_matched: true,
       pinned_lock_digest_matched: true,
       pinned_lock_preserved: true,
-      pinned_reference_uses_npm_ci: true,
+      pinned_reference_uses_npm_install: true,
+      dependency_classification_normalization_explained: true,
+      semantic_lock_mutation_rejected: true,
+      unexpected_classification_mutation_rejected: true,
+      root_classification_mutation_rejected: true,
+      formatting_only_lock_mutation_rejected: true,
+      aggregate_rejects_unexplained_drift: true,
       tampered_lock_rejected: true
     }, null, 2));
   } finally {
@@ -279,9 +361,10 @@ async function aggregate() {
   for (const project of manifest.projects) {
     const result = byIdentity.get(`${project.repository}@${project.commit}`);
     if (!result) failures.push({ repository: project.repository, reason: "missing_result" });
-    else if (!result.equivalent) failures.push({ repository: project.repository, reason: result.classification ?? "not_equivalent" });
-    else if (result.reference?.npm !== npmReference) failures.push({ repository: project.repository, reason: "npm_reference_drift" });
-    else if (result.reference?.lock_sha256 !== project.expected_lock_sha256) failures.push({ repository: project.repository, reason: "lock_hash_drift" });
+    else {
+      const reason = aggregateFailure(project, result);
+      if (reason) failures.push({ repository: project.repository, reason });
+    }
   }
   const summary = { schema_version: 1, target: 100, exact_equivalents: 100 - failures.length, failures };
   const output = resolve(process.env.OATH_PROJECT_AGGREGATE_OUTPUT ?? join(resultDir, "project-summary.json"));

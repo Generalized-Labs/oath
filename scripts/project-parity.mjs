@@ -55,7 +55,9 @@ const out=resolve(process.env.OATH_COMPAT_RESULTS??"compat-results/ga");await mk
 const checkpoint=()=>writeFile(join(out,`project-shard-${shard}.json`),JSON.stringify({schema_version:1,shard,results},null,2));
 try{
  const parityScript=join(root,"npm-parity.mjs");
+ const lockMutationScript=join(root,"lock-mutation.mjs");
  await copyFile(resolve("scripts/npm-parity.mjs"),parityScript);
+ await copyFile(resolve("scripts/lock-mutation.mjs"),lockMutationScript);
  let selectedIndex=0;
  for(const [index,projectSpec] of projects.entries()){
   if(index%shards!==shard)continue;
@@ -126,7 +128,7 @@ try{
   }else{
    try{evidence=JSON.parse(run.stdout)}catch{evidence={equivalent:false,classification:"invalid_harness_output",stdout:run.stdout,stderr:run.stderr}}
   }
-  if(projectSpec.expected_lock_sha256&&evidence.reference?.lock_sha256&&evidence.reference.lock_sha256!==projectSpec.expected_lock_sha256){
+  if(projectSpec.expected_lock_sha256&&evidence.reference?.lock_sha256&&evidence.reference.lock_sha256!==projectSpec.expected_lock_sha256&&evidence.reference?.lock_mutation?.explained!==true){
    evidence={...evidence,equivalent:false,classification:"lock_hash_drift",expected_lock_sha256:projectSpec.expected_lock_sha256};
   }
   results.push({project,commit:sha,category:projectSpec.category,...evidence});
