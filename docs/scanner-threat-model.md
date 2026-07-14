@@ -29,8 +29,8 @@ scanned, since many attacks put the entire payload in `preinstall`.
 
 The following corpus numbers were measured on the v0.1.6 behavioral engine.
 Later releases narrowed package-level correlation to same-file correlation, so
-do not present these exact percentages as v0.2.0 measurements until the corpus
-is rerun on the exact release candidate.
+do not present these exact percentages as measurements for a later release until
+the corpus is rerun on that exact release candidate.
 
 Benchmarked with `cargo run --release -p oath-analyze --example bench` against:
 - **benign:** 1,776 package trees from a local store of the most-depended-on npm

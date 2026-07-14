@@ -3,6 +3,17 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.2.1] - 2026-07-14
+
+### Fixed
+- Linux x86-64 and ARM64 cross-release images now install the target-architecture
+  `libseccomp` development library required by Oath's native Linux sandbox.
+- CI now builds both Linux release artifacts on every change and requires them
+  in the exact-commit release-evidence gate.
+- The signed `v0.2.0` tag remains as an immutable record, but no GitHub release
+  or assets were published after its Linux artifact jobs failed. `v0.2.1` is the
+  corrected release candidate for the developer-preview line.
+
 ## [0.2.0] - 2026-07-13
 
 ### Added
