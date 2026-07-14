@@ -59,8 +59,15 @@ jobs:
     needs: preflight
     if: always()
     runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
     steps:
       - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.13.0
       - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           pattern: project-preflight-*
@@ -78,6 +85,12 @@ jobs:
           path: compat-results/preflight/selection-summary.json
       - name: Validate release corpus
         run: node scripts/project-corpus.mjs validate tests/compat/projects.lock.json
+      - name: Attest validated corpus manifest
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
+        with:
+          subject-path: |
+            tests/compat/projects.lock.json
+            tests/compat/projects.txt
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: proposed-projects-lock
