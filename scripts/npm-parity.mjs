@@ -5,6 +5,7 @@ import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
+import { analyzeLockMutation } from "./lock-mutation.mjs";
 
 const referenceNpmMajor = 11;
 const fixture = resolve(process.argv[2] ?? "tests/compat/fixtures/basic");
@@ -87,17 +88,17 @@ try {
   let lockResult;
   let lockSha256 = null;
   let pinnedLockSha256 = null;
-  const npmInstallCommand = pinnedLockPath ? "ci" : "install";
+  let pinnedLockBytes = null;
   if (pinnedLockPath) {
-    const pinnedLock = gunzipSync(await readFile(pinnedLockPath));
-    pinnedLockSha256 = sha256(pinnedLock);
+    pinnedLockBytes = gunzipSync(await readFile(pinnedLockPath));
+    pinnedLockSha256 = sha256(pinnedLockBytes);
     if (!expectedPinnedLockSha256) throw new Error("OATH_PINNED_LOCK_SHA256 is required with OATH_PINNED_LOCK_PATH");
     if (pinnedLockSha256 !== expectedPinnedLockSha256) {
       throw new Error(`pinned lock digest mismatch: expected ${expectedPinnedLockSha256}, found ${pinnedLockSha256}`);
     }
-    await writeFile(join(lockDir, "package-lock.json"), pinnedLock);
-    await writeFile(join(npmDir, "package-lock.json"), pinnedLock);
-    await writeFile(join(oathDir, "package-lock.json"), pinnedLock);
+    await writeFile(join(lockDir, "package-lock.json"), pinnedLockBytes);
+    await writeFile(join(npmDir, "package-lock.json"), pinnedLockBytes);
+    await writeFile(join(oathDir, "package-lock.json"), pinnedLockBytes);
     lockResult = { status: 0, stdout: "", stderr: "" };
     lockSha256 = pinnedLockSha256;
   } else {
@@ -109,17 +110,21 @@ try {
     }
   }
   let npmResult = lockResult.status === 0
-    ? run(npmCommand, [npmInstallCommand, "--ignore-scripts", ...(pinnedLockPath ? [] : ["--package-lock=true"])], npmDir, home)
+    ? run(npmCommand, ["install", "--ignore-scripts", "--package-lock=true"], npmDir, home)
     : lockResult;
   if (npmResult.status === 0 && mode !== "clean") {
     await rm(join(npmDir, "node_modules"), { recursive: true, force: true });
     const offline = mode === "offline";
-    npmResult = run(npmCommand, [npmInstallCommand, "--ignore-scripts", ...(pinnedLockPath ? [] : ["--package-lock=true"]), ...(offline ? ["--offline"] : [])], npmDir, home);
+    npmResult = run(npmCommand, ["install", "--ignore-scripts", "--package-lock=true", ...(offline ? ["--offline"] : [])], npmDir, home);
   }
+  let lockMutation = null;
   if (npmResult.status === 0) {
-    lockSha256 = sha256(await readFile(join(npmDir, "package-lock.json")));
+    const npmLockBytes = await readFile(join(npmDir, "package-lock.json"));
+    lockSha256 = sha256(npmLockBytes);
+    if (pinnedLockBytes) lockMutation = analyzeLockMutation(pinnedLockBytes, npmLockBytes);
   }
   const pinnedLockPreserved = !pinnedLockPath || lockSha256 === pinnedLockSha256;
+  const pinnedLockAccepted = !pinnedLockPath || lockMutation?.explained === true;
   const npmTree = npmResult.status === 0 ? await tree(join(npmDir, "node_modules")) : [];
 
   // Real repositories can materialize tens of gigabytes. Persist the reference
@@ -149,13 +154,17 @@ try {
     schema_version: 1,
     reference: {
       npm: npmVersion,
-      command: npmInstallCommand,
+      command: "install",
       lock_sha256: lockSha256,
-      ...(pinnedLockPath ? { pinned_lock_sha256: pinnedLockSha256, pinned_lock_preserved: pinnedLockPreserved } : {})
+      ...(pinnedLockPath ? {
+        pinned_lock_sha256: pinnedLockSha256,
+        pinned_lock_preserved: pinnedLockPreserved,
+        lock_mutation: lockMutation
+      } : {})
     },
     fixture,
     mode,
-    classification: npmResult.status !== 0 ? "reference_rejected" : pinnedLockPreserved ? "compared" : "pinned_lock_mutated",
+    classification: npmResult.status !== 0 ? "reference_rejected" : pinnedLockAccepted ? "compared" : "pinned_lock_mutated",
     npm: { ...npmResult, ...treeEvidence(npmTree, includeTree) },
     oath: { ...oathResult, ...treeEvidence(oathTree, includeTree) },
     differences: {
@@ -164,7 +173,7 @@ try {
       npm_only_sample: npmTree.filter(entry => !oathSet.has(entry)).slice(0, 100),
       oath_only_sample: oathTree.filter(entry => !npmSet.has(entry)).slice(0, 100)
     },
-    equivalent: npmResult.status === 0 && oathResult.status === 0 && pinnedLockPreserved && JSON.stringify(npmTree) === JSON.stringify(oathTree)
+    equivalent: npmResult.status === 0 && oathResult.status === 0 && pinnedLockAccepted && JSON.stringify(npmTree) === JSON.stringify(oathTree)
   };
   console.log(JSON.stringify(artifact, null, 2));
   if (!artifact.equivalent) process.exitCode = 1;

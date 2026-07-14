@@ -28,11 +28,13 @@ not public release evidence until the exact-commit cross-platform run passes.
 Ten reviewed behaviors are not proof of complete npm workflow coverage;
 generated stress repetitions are reported separately.
 
-The real-project corpus is a frozen-lock materialization contract. It compares
-Oath against `npm ci`, verifies the exact lock digest before both runs, and
-requires npm to preserve those bytes. Ordinary `npm install` behavior remains
-an independent generated-fixture contract; the frozen corpus does not replace
-it.
+The real-project corpus is a frozen-input `npm install` materialization
+contract. It verifies the exact lock digest before both runs. If npm rewrites
+the output lock, only the paired `devOptional: true` to `dev: true` package
+classification normalization may differ, and every changed JSON path is
+retained in the evidence. All other lock changes fail. `npm ci` remains a
+separate workflow contract and is not inferred from the real-project install
+corpus.
 
 Known intentional fail-closed boundary: git dependencies must use an exact branch,
 tag, or commit. npm-style `#semver:` git selectors are rejected with a stable

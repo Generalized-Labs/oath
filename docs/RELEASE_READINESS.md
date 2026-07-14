@@ -64,10 +64,10 @@ and 100-project gates for the exact release commit.
   before the developer-preview tag.
 - The real-project corpus now commits and digest-verifies 100 compressed npm
   lockfiles. Evidence runs no longer regenerate dependency resolution from
-  mutable registry state; npm and Oath consume the same pinned bytes, the frozen
-  npm reference uses lock-preserving `npm ci`, and lock mutation is a hard
-  failure. Ordinary `npm install` remains covered by the generated and reviewed
-  behavioral lanes.
+  mutable registry state, and npm and Oath consume the same pinned bytes through
+  the ordinary `npm install` path. Paired `devOptional: true` to `dev: true`
+  normalization is recorded path by path; every other lock mutation is a hard
+  failure.
 
 ## Honest measured limits
 

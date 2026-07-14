@@ -20,9 +20,10 @@ Oath has two independent release programs:
    Oath trees are materialized sequentially. A final aggregation job requires
    100 unique exact comparisons at the pinned commit and immutable lock
    artifact. Each compressed lock is checked in, digest-verified before use,
-   shared by npm and Oath, materialized by the frozen `npm ci` reference, and
-   required to remain byte-stable. Ordinary `npm install` remains covered by
-   the generated and independent behavioral lanes.
+   shared by npm and Oath, and materialized through `npm install`. npm's output
+   lock may differ only through the paired `devOptional: true` to `dev: true`
+   normalization; every changed path is evidence, and every other mutation
+   fails. Installed package paths and contents remain exact.
 2. Native security runs on Ubuntu 22.04, Ubuntu 24.04, Windows Server 2022, and
    Windows Server 2025. Strict Linux mode runs only when the launcher verifies
    its required namespaces, seccomp, Landlock, resource, filesystem, and
