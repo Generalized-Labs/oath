@@ -64,15 +64,15 @@ procedure live in [`contracts/`](contracts/README.md).
 window. JSON modes reserve stdout for one parseable document.
 
 > [!IMPORTANT]
-> The installer follows the latest stable GitHub release. The current `master`
-> branch is the `v0.2.0` release candidate and adds staged publishing, signed
-> transfers, the PostgreSQL registry control plane, expanded evidence, native
-> capability reporting, and Windows artifacts. Until `v0.2.0` is tagged, build
-> from source to test those newer paths; `v0.1.7` remains the stable binary.
+> The installer follows the latest non-prerelease GitHub release. The `v0.2.0`
+> line is a developer preview that adds staged publishing, signed transfers,
+> the PostgreSQL registry control plane, expanded evidence, native capability
+> reporting, and Windows artifacts. Preview users can download its release
+> assets or build `master` from source; `v0.1.7` remains the stable binary.
 
 ## Release status
 
-`v0.2.0` is a developer-preview release candidate, not a general-availability
+`v0.2.0` is a developer preview, not a general-availability
 claim. The tested CLI workflow slices and native Linux/Windows boundaries have
 public evidence. The hosted registry remains a business-beta control plane, and
 the broader GA gates for detection quality, performance, signed platform
@@ -199,8 +199,8 @@ cargo build --release --locked --bin oath
 ```
 
 Windows Server 2022 and 2025 native-containment checks pass in CI. The `v0.2.0`
-release workflow publishes x86-64 and ARM64 Windows binaries; until that tag is
-available, build from source. Do not use the Unix installer on Windows.
+developer-preview release includes x86-64 and ARM64 Windows binaries. Do not use
+the Unix installer on Windows.
 
 ## Core commands
 
@@ -225,7 +225,7 @@ oath log                           # inspect the local transparency log
 oath score lodash                  # inspect package evidence
 ```
 
-These commands are available in the `v0.2.0` release candidate on `master`:
+These commands are available in the `v0.2.0` developer preview and on `master`:
 
 ```sh
 oath sandbox-info --json

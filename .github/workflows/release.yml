@@ -249,9 +249,28 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
+          set -euo pipefail
+          evidence_status=$(jq -r .evidence_status release-evidence/ga-evidence-manifest.json)
+          release_flags=()
+          case "$evidence_status" in
+            ga)
+              ;;
+            developer-preview)
+              release_flags+=(
+                --prerelease
+                --title "Oath ${GITHUB_REF_NAME} (developer preview)"
+                --notes "Developer preview. Oath is not generally available; the attached signed evidence manifest records the passed checks and remaining GA gates for this exact commit."
+              )
+              ;;
+            *)
+              echo "Unsupported evidence status: $evidence_status" >&2
+              exit 1
+              ;;
+          esac
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \
             --generate-notes \
+            "${release_flags[@]}" \
             oath-darwin-arm64 \
             oath-darwin-arm64.sha256 \
             oath-darwin-x64 \

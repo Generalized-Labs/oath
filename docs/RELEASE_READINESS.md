@@ -4,10 +4,11 @@ Audit date: 2026-07-14
 
 ## Decision
 
-Oath `v0.2.0` is a **developer-preview release candidate**. The CLI and the
-documented npm workflow slices are ready to tag only after the exact candidate
+Oath `v0.2.0` is a **developer preview**. The CLI and the documented npm
+workflow slices are eligible for a preview tag only after the exact candidate
 commit passes the manually dispatched `release-evidence-gate`. The release
-workflow checks that exact-commit result before it builds or publishes assets.
+workflow checks that exact-commit result before it builds or publishes assets
+and derives prerelease status from the signed evidence manifest.
 
 Oath is **not GA**. The hosted registry is a business-beta control plane for
 isolated design-partner deployments with an operator. Detection quality,

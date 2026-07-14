@@ -39,7 +39,7 @@ All notable changes to oath are documented here. Format follows
   optional dependencies, peers, overrides, nested conflicts, scopes, aliases,
   workspaces, and dist-tags.
 - Public release evidence for 500 generated stress executions, 100 pinned
-  real-project tree comparisons, three reviewed independent behaviors, Linux and
+  real-project tree comparisons, ten reviewed independent behaviors, Linux and
   Windows native-capability reports, and installer benchmarks.
 - A public evidence website and design-partner issue workflow.
 
