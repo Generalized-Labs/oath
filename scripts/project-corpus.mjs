@@ -60,7 +60,14 @@ async function runReferenceInstall(packageRoot, workspaceRoot, home) {
   const env = { HOME: home, npm_config_cache: join(home, ".npm") };
   const lock = run("npm", ["install", "--package-lock-only", "--ignore-scripts", "--package-lock=true"], lockDir, env);
   if (lock.status !== 0) return { lock, install: null, npmDir };
-  await cp(join(lockDir, "package-lock.json"), join(npmDir, "package-lock.json"));
+  const generatedLock = join(lockDir, "package-lock.json");
+  try {
+    await access(generatedLock);
+  } catch (error) {
+    if (error?.code !== "ENOENT") throw error;
+    return { lock, install: null, npmDir, missingLock: true };
+  }
+  await cp(generatedLock, join(npmDir, "package-lock.json"));
   const install = run("npm", ["install", "--ignore-scripts", "--package-lock=true"], npmDir, env);
   return { lock, install, npmDir };
 }
@@ -122,9 +129,19 @@ async function preflight() {
       // lock into `npm`, install there, and hash the post-install npm lock.
       const workspaceRoot = join(root, `reference-workspace-${index}`);
       const home = join(root, `home-${index}`);
-      const { lock, install, npmDir } = await runReferenceInstall(packageRoot, workspaceRoot, home);
+      const { lock, install, npmDir, missingLock } = await runReferenceInstall(packageRoot, workspaceRoot, home);
       if (lock.status !== 0) {
         results.push({ ...candidate, commit, eligible: false, reason: "npm_lock_rejected", stderr: lock.stderr });
+        continue;
+      }
+      if (missingLock) {
+        results.push({
+          ...candidate,
+          commit,
+          eligible: false,
+          reason: "missing_package_lock",
+          stderr: "npm completed successfully without producing package-lock.json"
+        });
         continue;
       }
       if (install.status !== 0) {
