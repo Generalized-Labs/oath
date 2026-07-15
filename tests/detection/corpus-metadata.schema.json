@@ -1,0 +1,65 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://oath.dev/schemas/detection-corpus-metadata-v1.schema.json",
+  "title": "Oath detection corpus metadata v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "evidence_scope", "evidence_id", "source_commit", "captured_at", "corpora"],
+  "properties": {
+    "schema_version": { "const": 1 },
+    "evidence_scope": { "const": "qualifying" },
+    "evidence_id": { "type": "string", "minLength": 1 },
+    "source_commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$",
+      "not": { "const": "0000000000000000000000000000000000000000" }
+    },
+    "captured_at": { "type": "string", "format": "date-time" },
+    "corpora": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["benign", "known_malware", "private_holdout", "secret_exfiltration"],
+      "properties": {
+        "benign": { "$ref": "#/$defs/corpus" },
+        "known_malware": { "$ref": "#/$defs/corpus" },
+        "secret_exfiltration": { "$ref": "#/$defs/corpus" },
+        "private_holdout": {
+          "allOf": [
+            { "$ref": "#/$defs/corpus" },
+            {
+              "type": "object",
+              "required": ["family_separated", "time_separated", "labels_independently_held"],
+              "properties": {
+                "family_separated": { "const": true },
+                "time_separated": { "const": true },
+                "labels_independently_held": { "const": true }
+              }
+            }
+          ]
+        }
+      }
+    }
+  },
+  "$defs": {
+    "corpus": {
+      "type": "object",
+      "required": ["dataset_id", "dataset_version", "selection_policy", "exclusions"],
+      "properties": {
+        "dataset_id": { "type": "string", "minLength": 1 },
+        "dataset_version": { "type": "string", "minLength": 1 },
+        "selection_policy": { "type": "string", "minLength": 1 },
+        "exclusions": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": ["sample_id", "reason"],
+            "properties": {
+              "sample_id": { "type": "string", "minLength": 1 },
+              "reason": { "type": "string", "minLength": 1 }
+            }
+          }
+        }
+      }
+    }
+  }
+}

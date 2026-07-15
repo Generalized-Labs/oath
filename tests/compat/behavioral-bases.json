@@ -1,0 +1,16 @@
+{
+  "schema_version": 1,
+  "description": "Reviewed npm behavior fixtures expanded into command and execution-state workflows.",
+  "behaviors": [
+    { "id": "basic-production-dependency", "workflow_slice": "install", "fixture": "basic" },
+    { "id": "npm-alias", "workflow_slice": "aliases", "fixture": "alias" },
+    { "id": "workspace-link", "workflow_slice": "workspaces", "fixture": "workspace" },
+    { "id": "development-dependency", "workflow_slice": "dependency-groups", "fixture": "dev-dependency" },
+    { "id": "optional-dependency", "workflow_slice": "optional-dependencies", "fixture": "optional-dependency" },
+    { "id": "peer-dependency-pair", "workflow_slice": "peer-dependencies", "fixture": "peer-dependency" },
+    { "id": "root-override", "workflow_slice": "overrides", "fixture": "override" },
+    { "id": "nested-version-conflict", "workflow_slice": "nested-placement", "fixture": "nested-conflict" },
+    { "id": "scoped-package", "workflow_slice": "scoped-packages", "fixture": "scoped-package" },
+    { "id": "dist-tag-latest", "workflow_slice": "dist-tags", "fixture": "dist-tag" }
+  ]
+}

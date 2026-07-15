@@ -2,8 +2,8 @@ use anyhow::{Context, Result};
 use ed25519_dalek::SigningKey;
 use oath_contracts::{
     Decision, ExecAssessmentV3, PackageEvidence as PackageEvidenceV3,
-    PackageIdentity as PackageIdentityV3, PolicyDecision as PolicyDecisionV3, SandboxEvidence,
-    VersionDiff as VersionDiffV3,
+    PackageIdentity as PackageIdentityV3, PolicyDecision as PolicyDecisionV3, ReasonCode,
+    SandboxEvidence, VersionDiff as VersionDiffV3,
 };
 use oath_sandbox::{BackendCapabilities, SandboxPlan};
 use serde::Serialize;
@@ -48,7 +48,7 @@ pub struct VersionDiff {
 #[derive(Debug, Clone, Serialize)]
 pub struct PolicyDecision {
     pub decision: &'static str,
-    pub reason_code: &'static str,
+    pub reason_code: ReasonCode,
     pub grade: String,
     pub score: u8,
 }
@@ -124,7 +124,7 @@ pub fn signed_v3(
             } else {
                 Decision::Deny
             },
-            reason_code: assessment.policy.reason_code.to_string(),
+            reason_code: assessment.policy.reason_code,
             grade: assessment.policy.grade.clone(),
             score: assessment.policy.score,
         },
@@ -219,7 +219,7 @@ mod tests {
             },
             policy: PolicyDecision {
                 decision: "allow",
-                reason_code: "OATH_EXEC_ALLOWED",
+                reason_code: ReasonCode::ExecAllowed,
                 grade: "A".into(),
                 score: 100,
             },

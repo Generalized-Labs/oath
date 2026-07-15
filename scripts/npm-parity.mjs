@@ -13,6 +13,10 @@ const oath = resolve(process.env.OATH_BIN ?? "target/debug/oath");
 const npmCommand = process.platform === "win32" ? "npm.cmd" : "npm";
 const pinnedLockPath = process.env.OATH_PINNED_LOCK_PATH ? resolve(process.env.OATH_PINNED_LOCK_PATH) : null;
 const expectedPinnedLockSha256 = process.env.OATH_PINNED_LOCK_SHA256 ?? null;
+const command = process.env.OATH_COMPAT_COMMAND ?? "install";
+if (!new Set(["install", "ci"]).has(command)) {
+  throw new Error(`unsupported compatibility command: ${command}`);
+}
 
 function sha256(value) {
   return createHash("sha256").update(value).digest("hex");
@@ -109,13 +113,15 @@ try {
       await cp(join(lockDir, "package-lock.json"), join(oathDir, "package-lock.json"));
     }
   }
+  const npmArgs = (offline = false) => [command, "--ignore-scripts", "--package-lock=true", ...(offline ? ["--offline"] : [])];
+  const oathArgs = command === "ci" ? ["ci"] : ["install", "--ignore-scripts"];
   let npmResult = lockResult.status === 0
-    ? run(npmCommand, ["install", "--ignore-scripts", "--package-lock=true"], npmDir, home)
+    ? run(npmCommand, npmArgs(), npmDir, home)
     : lockResult;
   if (npmResult.status === 0 && mode !== "clean") {
-    await rm(join(npmDir, "node_modules"), { recursive: true, force: true });
+    if (mode !== "repeat") await rm(join(npmDir, "node_modules"), { recursive: true, force: true });
     const offline = mode === "offline";
-    npmResult = run(npmCommand, ["install", "--ignore-scripts", "--package-lock=true", ...(offline ? ["--offline"] : [])], npmDir, home);
+    npmResult = run(npmCommand, npmArgs(offline), npmDir, home);
   }
   let lockMutation = null;
   if (npmResult.status === 0) {
@@ -133,18 +139,29 @@ try {
   // SHA-256 remain the exact comparison contract.
   await rm(join(npmDir, "node_modules"), { recursive: true, force: true });
 
-  let oathResult = npmResult.status === 0
-    ? run(oath, ["install", "--ignore-scripts"], oathDir, home)
-    : { status: null, stdout: "", stderr: "skipped: reference npm rejected the project" };
+  let oathResult = { status: null, stdout: "", stderr: "skipped: reference npm rejected the project" };
+  if (npmResult.status === 0) {
+    if (command === "ci") {
+      const bootstrap = run(oath, ["install", "--ignore-scripts"], oathDir, home);
+      if (bootstrap.status === 0) {
+        await rm(join(oathDir, "node_modules"), { recursive: true, force: true });
+        oathResult = run(oath, oathArgs, oathDir, home);
+      } else {
+        oathResult = bootstrap;
+      }
+    } else {
+      oathResult = run(oath, oathArgs, oathDir, home);
+    }
+  }
   if (npmResult.status === 0 && oathResult.status === 0 && mode !== "clean") {
-    await rm(join(oathDir, "node_modules"), { recursive: true, force: true });
+    if (mode !== "repeat") await rm(join(oathDir, "node_modules"), { recursive: true, force: true });
     if (mode === "interrupted") {
       const stage = join(oathDir, ".oath-node_modules-stage");
       await mkdir(stage, { recursive: true });
       await writeFile(join(stage, "partial"), "interrupted");
     }
     const offline = mode === "offline";
-    oathResult = run(oath, ["install", "--ignore-scripts"], oathDir, home, offline ? { npm_config_offline: "true" } : {});
+    oathResult = run(oath, oathArgs, oathDir, home, offline ? { npm_config_offline: "true" } : {});
   }
   const oathTree = oathResult.status === 0 ? await tree(join(oathDir, "node_modules")) : [];
   const npmSet = new Set(npmTree);
@@ -154,7 +171,7 @@ try {
     schema_version: 1,
     reference: {
       npm: npmVersion,
-      command: "install",
+      command,
       lock_sha256: lockSha256,
       ...(pinnedLockPath ? {
         pinned_lock_sha256: pinnedLockSha256,

@@ -28,7 +28,7 @@ use crate::{
     control_plane::PostgresControlPlane,
     hex_sha256,
     identity::{InvitationMailer, OidcVerifier},
-    merkle_inclusion_proof, merkle_root,
+    merkle_consistency_proof, merkle_inclusion_proof, merkle_root,
     metrics::RegistryMetrics,
     now,
     object_backend::ArtifactStore,
@@ -48,6 +48,8 @@ pub struct PostgresRegistry {
     metrics: RegistryMetrics,
     billing: Option<StripeBilling>,
     require_step_up_approval: bool,
+    requests_per_minute: i64,
+    maximum_pending_stages: i64,
 }
 
 impl PostgresRegistry {
@@ -104,6 +106,8 @@ impl PostgresRegistry {
             (1024 * 1024..=1024 * 1024 * 1024).contains(&max_stage_request_bytes),
             "OATH_REGISTRY_MAX_STAGE_REQUEST_BYTES must be between 1 MiB and 1 GiB"
         );
+        let requests_per_minute = positive_limit("OATH_REGISTRY_REQUESTS_PER_MINUTE", 6_000)?;
+        let maximum_pending_stages = positive_limit("OATH_REGISTRY_MAX_PENDING_STAGES", 100)?;
         Ok(Self {
             control: PostgresControlPlane::connect(database_url).await?,
             objects,
@@ -122,6 +126,8 @@ impl PostgresRegistry {
                 .ok()
                 .map(|value| value.eq_ignore_ascii_case("true") || value == "1")
                 .unwrap_or(false),
+            requests_per_minute,
+            maximum_pending_stages,
         })
     }
 
@@ -291,6 +297,23 @@ impl PostgresRegistry {
         }
         Ok(delivered)
     }
+
+    pub async fn prune_expired_rate_limits(&self) -> Result<u64> {
+        self.control
+            .prune_rate_limits_before(now().saturating_sub(24 * 3600) as i64)
+            .await
+    }
+}
+
+fn positive_limit(name: &str, default: i64) -> Result<i64> {
+    let value = std::env::var(name)
+        .ok()
+        .map(|value| value.parse::<i64>())
+        .transpose()
+        .with_context(|| format!("{name} must be a positive integer"))?
+        .unwrap_or(default);
+    anyhow::ensure!(value > 0, "{name} must be a positive integer");
+    Ok(value)
 }
 
 async fn track_registry_metrics(
@@ -481,11 +504,16 @@ async fn create_stage(
     };
     let event = json!({"type":"stage.created","id":stage.id,"organization":stage.organization,"actor_org":principal.organization,"name":stage.name,"version":stage.version,"digest":stage.digest});
     let event_key = format!("stage.created:{}", stage.id);
-    registry
+    if !registry
         .control
-        .create_stage(&stage, &event_key, &event)
+        .create_stage(&stage, &event_key, &event, registry.maximum_pending_stages)
         .await
-        .map_err(ApiError::internal)?;
+        .map_err(ApiError::internal)?
+    {
+        return Err(ApiError::too_many_requests(
+            "organization pending-stage quota reached",
+        ));
+    }
     if let Err(error) = registry.drain_outbox().await {
         tracing::warn!(%error, "registry audit outbox will retry stage event");
     }
@@ -898,15 +926,19 @@ async fn consistency_proof(
     if query.from > hashes.len() {
         return Err(ApiError::bad("from tree size exceeds current tree size"));
     }
+    let proof = merkle_consistency_proof(&hashes, query.from)
+        .ok_or_else(|| ApiError::internal("cannot build consistency proof"))?;
     Ok(Json(json!({
-        "schema_version":1,
-        "proof_type":"full-leaf-set-v1",
+        "schema_version":2,
+        "proof_type":"compact-frontier-v1",
         "from_size":query.from,
         "to_size":hashes.len(),
         "from_root":merkle_root(hashes[..query.from].to_vec()),
         "to_root":merkle_root(hashes.clone()),
-        "leaf_hashes":hashes,
-        "limitation":"This complete-leaf bundle is verifiable but not a compact RFC 6962 consistency proof."
+        "prefix":proof.prefix,
+        "suffix":proof.suffix,
+        "hash_algorithm":"sha256",
+        "domain_separation":{"leaf":0,"node":1}
     })))
 }
 
@@ -1326,6 +1358,7 @@ async fn billing_webhook(
 pub fn router(registry: PostgresRegistry) -> Router {
     let metrics_state = registry.metrics.clone();
     let max_stage_request_bytes = registry.max_stage_request_bytes;
+    let registry = Arc::new(registry);
     Router::new()
         .route("/health", get(readyz))
         .route("/livez", get(livez))
@@ -1368,11 +1401,43 @@ pub fn router(registry: PostgresRegistry) -> Router {
         .route("/-/oath/billing/webhook", post(billing_webhook))
         .route("/-/oath/packages/{name}/roles", post(grant_role))
         .route("/{*name}", get(package_metadata))
-        .with_state(Arc::new(registry))
+        .with_state(registry.clone())
+        .layer(middleware::from_fn_with_state(
+            registry,
+            enforce_registry_rate_limit,
+        ))
         .layer(middleware::from_fn_with_state(
             metrics_state,
             track_registry_metrics,
         ))
+}
+
+async fn enforce_registry_rate_limit(
+    State(registry): State<Arc<PostgresRegistry>>,
+    request: Request,
+    next: Next,
+) -> Result<Response, ApiError> {
+    let path = request.uri().path();
+    if matches!(path, "/livez" | "/readyz" | "/health" | "/metrics") {
+        return Ok(next.run(request).await);
+    }
+    let subject = request
+        .headers()
+        .get(header::AUTHORIZATION)
+        .and_then(|value| value.to_str().ok())
+        .map(|value| hex_sha256(value.as_bytes()))
+        .unwrap_or_else(|| "anonymous".into());
+    let allowed = registry
+        .control
+        .consume_rate_limit(&subject, "api-minute", registry.requests_per_minute, 60)
+        .await
+        .map_err(ApiError::internal)?;
+    if !allowed {
+        return Err(ApiError::too_many_requests(
+            "registry request rate exceeded",
+        ));
+    }
+    Ok(next.run(request).await)
 }
 
 #[cfg(test)]
@@ -1522,6 +1587,62 @@ mod tests {
             .await
             .unwrap();
         let registry_assertions = registry.clone();
+        assert!(
+            registry_assertions
+                .control
+                .consume_rate_limit("rate-test", "test-window", 2, 60)
+                .await
+                .unwrap()
+        );
+        assert!(
+            registry_assertions
+                .control
+                .consume_rate_limit("rate-test", "test-window", 2, 60)
+                .await
+                .unwrap()
+        );
+        assert!(
+            !registry_assertions
+                .control
+                .consume_rate_limit("rate-test", "test-window", 2, 60)
+                .await
+                .unwrap()
+        );
+        let mut quota_registry = registry.clone();
+        quota_registry.maximum_pending_stages = 1;
+        let quota_app = router(quota_registry);
+        let quota_stage = stage(&quota_app, "secret", "quota-tool", "1.0.0", true).await;
+        let quota_response = call(
+            &quota_app,
+            post_request(
+                "/-/oath/stages",
+                "secret",
+                json!({
+                    "name": "quota-tool-two",
+                    "version": "1.0.0",
+                    "tag": "latest",
+                    "tarball_base64": base64::engine::general_purpose::STANDARD
+                        .encode(package_tarball("quota-tool-two", "1.0.0")),
+                    "assessment": {"decision": "allow"},
+                    "private": true
+                }),
+            ),
+        )
+        .await;
+        assert_eq!(quota_response.status(), StatusCode::TOO_MANY_REQUESTS);
+        assert_eq!(
+            call(
+                &quota_app,
+                post_request(
+                    &format!("/-/oath/stages/{}/reject", quota_stage.id),
+                    "secret",
+                    json!({"reason": "quota test complete"}),
+                ),
+            )
+            .await
+            .status(),
+            StatusCode::OK
+        );
         let mut guarded_registry = registry.clone();
         guarded_registry.require_step_up_approval = true;
         let guarded_app = router(guarded_registry);
@@ -1969,6 +2090,7 @@ mod tests {
         assert!(crate::verify_merkle_inclusion(
             inclusion["leaf_hash"].as_str().unwrap(),
             0,
+            inclusion["tree_size"].as_u64().unwrap() as usize,
             &inclusion["proof"]
                 .as_array()
                 .unwrap()
@@ -1986,10 +2108,18 @@ mod tests {
         assert_eq!(response.status(), StatusCode::OK);
         let consistency: Value = serde_json::from_slice(&body(response).await.to_bytes()).unwrap();
         assert_eq!(consistency["from_size"], 1);
-        assert_eq!(
-            consistency["to_size"],
-            consistency["leaf_hashes"].as_array().unwrap().len()
-        );
+        assert_eq!(consistency["proof_type"], "compact-frontier-v1");
+        let proof = crate::MerkleConsistencyProof {
+            from_size: consistency["from_size"].as_u64().unwrap() as usize,
+            to_size: consistency["to_size"].as_u64().unwrap() as usize,
+            prefix: serde_json::from_value(consistency["prefix"].clone()).unwrap(),
+            suffix: serde_json::from_value(consistency["suffix"].clone()).unwrap(),
+        };
+        assert!(crate::verify_merkle_consistency(
+            &proof,
+            consistency["from_root"].as_str().unwrap(),
+            consistency["to_root"].as_str().unwrap()
+        ));
 
         assert_eq!(
             call(

@@ -33,7 +33,7 @@ jobs:
       OATH_TEST_DATABASE_URL: postgresql://oath:oath@localhost:5432/oath_release
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
 
@@ -93,7 +93,7 @@ jobs:
         run: cargo audit --deny warnings
 
       - name: Install Node.js
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24.13.0
 
@@ -111,12 +111,12 @@ jobs:
       matrix:
         include:
           - target: aarch64-apple-darwin
-            os: macos-latest
+            os: macos-15
             asset: oath-darwin-arm64
             binary: oath
             use_cross: false
           - target: x86_64-apple-darwin
-            os: macos-latest
+            os: macos-15
             asset: oath-darwin-x64
             binary: oath
             use_cross: false
@@ -145,7 +145,7 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
 
       - name: Install Rust toolchain
         run: |
@@ -178,7 +178,7 @@ jobs:
           cat "${{ matrix.asset }}.sha256"
 
       - name: Upload artifact
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: ${{ matrix.asset }}
           path: |
@@ -197,14 +197,27 @@ jobs:
 
     steps:
       - name: Checkout
-        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
         with:
           fetch-depth: 0
 
+      - name: Install Node.js for contract publication
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
+        with:
+          node-version: 24.13.0
+
       - name: Download all artifacts
-        uses: actions/download-artifact@d3f86a106a0bac45b974a628896c90dbdf5c8093 # v4
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8
         with:
           merge-multiple: true
+
+      - name: Build exact-commit agent contract bundle
+        run: |
+          set -euo pipefail
+          node scripts/build-contract-bundle.mjs contract-dist
+          (cd contract-dist && sha256sum --check SHA256SUMS)
+          tar -czf "oath-agent-contracts-${GITHUB_REF_NAME}.tar.gz" -C contract-dist .
+          sha256sum "oath-agent-contracts-${GITHUB_REF_NAME}.tar.gz" > "oath-agent-contracts-${GITHUB_REF_NAME}.tar.gz.sha256"
 
       - name: Aggregate checksums
         run: |
@@ -235,7 +248,7 @@ jobs:
           test "$(jq -r .commit release-evidence/ga-evidence-manifest.json)" = "$GITHUB_SHA"
 
       - name: Attest release binaries
-        uses: actions/attest-build-provenance@e8998f949152b193b063cb0ec769d69d929409be # v2
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373 # v4
         with:
           subject-path: |
             oath-darwin-arm64
@@ -244,6 +257,11 @@ jobs:
             oath-linux-arm64
             oath-windows-x64.exe
             oath-windows-arm64.exe
+            oath-agent-contracts-${{ github.ref_name }}.tar.gz
+            contract-dist/contract-manifest.json
+            contract-dist/schemas/exec-assessment-v3.schema.json
+            contract-dist/schemas/publish-assessment-v2.schema.json
+            contract-dist/schemas/registry-verdict-v1.schema.json
 
       - name: Create GitHub Release
         env:
@@ -283,6 +301,14 @@ jobs:
             oath-windows-x64.exe.sha256 \
             oath-windows-arm64.exe \
             oath-windows-arm64.exe.sha256 \
+            "oath-agent-contracts-${GITHUB_REF_NAME}.tar.gz" \
+            "oath-agent-contracts-${GITHUB_REF_NAME}.tar.gz.sha256" \
+            contract-dist/contract-manifest.json \
+            contract-dist/contract-manifest.json.sha256 \
+            contract-dist/schemas/exec-assessment-v3.schema.json \
+            contract-dist/schemas/publish-assessment-v2.schema.json \
+            contract-dist/schemas/registry-verdict-v1.schema.json \
+            contract-dist/types/oath-contracts.ts \
             checksums.txt \
             release-evidence/ga-evidence-manifest.json \
             release-evidence/ga-evidence-manifest.json.sha256

@@ -54,6 +54,12 @@ impl ApiError {
             message: message.into(),
         }
     }
+    pub(crate) fn too_many_requests(message: impl Into<String>) -> Self {
+        Self {
+            status: StatusCode::TOO_MANY_REQUESTS,
+            message: message.into(),
+        }
+    }
     pub(crate) fn not_found(message: impl Into<String>) -> Self {
         Self {
             status: StatusCode::NOT_FOUND,
@@ -206,61 +212,223 @@ pub(crate) fn registry_signing_key(path: &Path) -> Result<SigningKey> {
     result
 }
 
-pub(crate) fn merkle_root(mut hashes: Vec<String>) -> String {
-    if hashes.is_empty() {
-        return hex_sha256(&[]);
-    }
-    while hashes.len() > 1 {
-        if hashes.len() % 2 == 1 {
-            hashes.push(hashes.last().expect("nonempty").clone());
-        }
-        hashes = hashes
-            .chunks(2)
-            .map(|pair| hex_sha256(format!("{}{}", pair[0], pair[1]).as_bytes()))
-            .collect();
-    }
-    hashes.remove(0)
+fn hash_leaf(leaf: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update([0]);
+    hasher.update(leaf.as_bytes());
+    format!("{:x}", hasher.finalize())
 }
 
-pub(crate) fn merkle_inclusion_proof(
-    mut hashes: Vec<String>,
-    mut index: usize,
-) -> Option<Vec<String>> {
+fn hash_children(left: &str, right: &str) -> String {
+    let mut hasher = Sha256::new();
+    hasher.update([1]);
+    hasher.update(left.as_bytes());
+    hasher.update(right.as_bytes());
+    format!("{:x}", hasher.finalize())
+}
+
+fn split_point(length: usize) -> usize {
+    debug_assert!(length > 1);
+    let mut power = 1usize;
+    while power << 1 < length {
+        power <<= 1;
+    }
+    power
+}
+
+fn subtree_root(hashes: &[String]) -> String {
+    match hashes.len() {
+        0 => hex_sha256(&[]),
+        1 => hash_leaf(&hashes[0]),
+        length => {
+            let split = split_point(length);
+            hash_children(
+                &subtree_root(&hashes[..split]),
+                &subtree_root(&hashes[split..]),
+            )
+        }
+    }
+}
+
+pub(crate) fn merkle_root(hashes: Vec<String>) -> String {
+    subtree_root(&hashes)
+}
+
+fn inclusion_path(hashes: &[String], index: usize, proof: &mut Vec<String>) {
+    if hashes.len() <= 1 {
+        return;
+    }
+    let split = split_point(hashes.len());
+    if index < split {
+        inclusion_path(&hashes[..split], index, proof);
+        proof.push(subtree_root(&hashes[split..]));
+    } else {
+        inclusion_path(&hashes[split..], index - split, proof);
+        proof.push(subtree_root(&hashes[..split]));
+    }
+}
+
+pub(crate) fn merkle_inclusion_proof(hashes: Vec<String>, index: usize) -> Option<Vec<String>> {
     if hashes.is_empty() || index >= hashes.len() {
         return None;
     }
     let mut proof = Vec::new();
-    while hashes.len() > 1 {
-        if hashes.len() % 2 == 1 {
-            hashes.push(hashes.last()?.clone());
-        }
-        proof.push(hashes[index ^ 1].clone());
-        index /= 2;
-        hashes = hashes
-            .chunks(2)
-            .map(|pair| hex_sha256(format!("{}{}", pair[0], pair[1]).as_bytes()))
-            .collect();
-    }
+    inclusion_path(&hashes, index, &mut proof);
     Some(proof)
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MerkleRangeNode {
+    pub start: usize,
+    pub size: usize,
+    pub hash: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MerkleConsistencyProof {
+    pub from_size: usize,
+    pub to_size: usize,
+    pub prefix: Vec<MerkleRangeNode>,
+    pub suffix: Vec<MerkleRangeNode>,
+}
+
+fn compact_range(hashes: &[String], start: usize, end: usize) -> Vec<MerkleRangeNode> {
+    let mut nodes = Vec::new();
+    let mut cursor = start;
+    while cursor < end {
+        let remaining = end - cursor;
+        let alignment = if cursor == 0 {
+            1usize << (usize::BITS - 1 - remaining.leading_zeros())
+        } else {
+            1usize << cursor.trailing_zeros()
+        };
+        let mut size = alignment.min(1usize << (usize::BITS - 1 - remaining.leading_zeros()));
+        while cursor + size > end {
+            size >>= 1;
+        }
+        nodes.push(MerkleRangeNode {
+            start: cursor,
+            size,
+            hash: subtree_root(&hashes[cursor..cursor + size]),
+        });
+        cursor += size;
+    }
+    nodes
+}
+
+pub fn merkle_consistency_proof(
+    hashes: &[String],
+    from_size: usize,
+) -> Option<MerkleConsistencyProof> {
+    if from_size > hashes.len() {
+        return None;
+    }
+    Some(MerkleConsistencyProof {
+        from_size,
+        to_size: hashes.len(),
+        prefix: compact_range(hashes, 0, from_size),
+        suffix: compact_range(hashes, from_size, hashes.len()),
+    })
+}
+
+fn root_from_frontier(nodes: &[MerkleRangeNode], expected_size: usize) -> Option<String> {
+    if expected_size == 0 {
+        return nodes.is_empty().then(|| hex_sha256(&[]));
+    }
+    let mut cursor = 0usize;
+    let mut stack = Vec::<MerkleRangeNode>::new();
+    for node in nodes {
+        if node.start != cursor || node.size == 0 || !node.size.is_power_of_two() {
+            return None;
+        }
+        cursor = cursor.checked_add(node.size)?;
+        stack.push(node.clone());
+        loop {
+            let length = stack.len();
+            if length < 2 {
+                break;
+            }
+            let left = &stack[length - 2];
+            let right = &stack[length - 1];
+            if left.size != right.size
+                || left.start + left.size != right.start
+                || !left.start.is_multiple_of(left.size * 2)
+            {
+                break;
+            }
+            let right = stack.pop()?;
+            let left = stack.pop()?;
+            stack.push(MerkleRangeNode {
+                start: left.start,
+                size: left.size * 2,
+                hash: hash_children(&left.hash, &right.hash),
+            });
+        }
+    }
+    if cursor != expected_size {
+        return None;
+    }
+    let mut nodes = stack.into_iter().rev();
+    let mut root = nodes.next()?.hash;
+    for node in nodes {
+        root = hash_children(&node.hash, &root);
+    }
+    Some(root)
+}
+
+pub fn verify_merkle_consistency(
+    proof: &MerkleConsistencyProof,
+    from_root: &str,
+    to_root: &str,
+) -> bool {
+    if proof.from_size > proof.to_size {
+        return false;
+    }
+    let prefix_root = root_from_frontier(&proof.prefix, proof.from_size);
+    let mut full = proof.prefix.clone();
+    full.extend(proof.suffix.clone());
+    prefix_root.as_deref() == Some(from_root)
+        && root_from_frontier(&full, proof.to_size).as_deref() == Some(to_root)
 }
 
 #[cfg(test)]
 pub(crate) fn verify_merkle_inclusion(
     leaf: &str,
-    mut index: usize,
+    index: usize,
+    tree_size: usize,
     proof: &[String],
     root: &str,
 ) -> bool {
-    let mut current = leaf.to_owned();
-    for sibling in proof {
-        current = if index.is_multiple_of(2) {
-            hex_sha256(format!("{current}{sibling}").as_bytes())
-        } else {
-            hex_sha256(format!("{sibling}{current}").as_bytes())
-        };
-        index /= 2;
+    if tree_size == 0 || index >= tree_size {
+        return false;
     }
-    current == root
+    fn reconstruct(
+        current: String,
+        index: usize,
+        tree_size: usize,
+        proof: &[String],
+        cursor: &mut usize,
+    ) -> Option<String> {
+        if tree_size == 1 {
+            return Some(current);
+        }
+        let split = split_point(tree_size);
+        let child = if index < split {
+            reconstruct(current, index, split, proof, cursor)?
+        } else {
+            reconstruct(current, index - split, tree_size - split, proof, cursor)?
+        };
+        let sibling = proof.get(*cursor)?;
+        *cursor += 1;
+        Some(if index < split {
+            hash_children(&child, sibling)
+        } else {
+            hash_children(sibling, &child)
+        })
+    }
+    let mut cursor = 0;
+    reconstruct(hash_leaf(leaf), index, tree_size, proof, &mut cursor)
+        .is_some_and(|candidate| candidate == root && cursor == proof.len())
 }
 
 #[cfg(test)]
@@ -282,7 +450,27 @@ mod tests {
         let root = merkle_root(leaves.clone());
         for (index, leaf) in leaves.iter().enumerate() {
             let proof = merkle_inclusion_proof(leaves.clone(), index).unwrap();
-            assert!(verify_merkle_inclusion(leaf, index, &proof, &root));
+            assert!(verify_merkle_inclusion(
+                leaf,
+                index,
+                leaves.len(),
+                &proof,
+                &root
+            ));
+        }
+    }
+
+    #[test]
+    fn compact_consistency_proofs_link_every_prefix() {
+        let leaves = (0..33)
+            .map(|value| format!("leaf-{value}"))
+            .collect::<Vec<_>>();
+        let to_root = merkle_root(leaves.clone());
+        for from_size in 0..=leaves.len() {
+            let proof = merkle_consistency_proof(&leaves, from_size).unwrap();
+            let from_root = merkle_root(leaves[..from_size].to_vec());
+            assert!(verify_merkle_consistency(&proof, &from_root, &to_root));
+            assert!(proof.prefix.len() + proof.suffix.len() <= 12);
         }
     }
 

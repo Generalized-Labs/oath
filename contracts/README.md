@@ -25,3 +25,26 @@ Unknown schema versions, signature algorithms, or canonicalization versions
 must fail closed. A valid signature proves integrity under the included key; it
 proves signer identity only when that public key is anchored through a trusted
 release, registry, organization, or policy channel.
+
+## Published bundle
+
+Every release publishes an `oath-agent-contracts-<tag>.tar.gz` bundle containing
+the three JSON Schemas, signed examples, TypeScript types, OpenAPI document,
+file manifest, and SHA-256 checksums. GitHub artifact attestations bind the
+bundle, manifest, and individual schemas to the exact release workflow and
+source commit. Consumers should verify both the release checksum and the
+attestation before trusting a newly downloaded schema.
+
+The reason-code set is closed within each schema version. Unknown reason codes
+must be rejected instead of interpreted heuristically. Adding a reason code to
+an existing schema requires synchronized Rust, TypeScript, schema, example, and
+bundle-manifest changes; changing or removing a code requires a new schema
+version.
+
+Regenerate the deterministic examples and build the publication bundle with:
+
+```sh
+cargo run --locked -p oath-contracts --example generate_contract_examples -- contracts/examples
+node scripts/build-contract-bundle.mjs contract-dist
+(cd contract-dist && sha256sum --check SHA256SUMS)
+```

@@ -11,7 +11,7 @@
     "expires_at": { "type": "integer", "minimum": 0 },
     "package": { "$ref": "#/$defs/identity" },
     "decision": { "enum": ["allow", "deny", "review", "unknown"] },
-    "reason_code": { "type": "string", "pattern": "^OATH_[A-Z0-9_]+$" },
+    "reason_code": { "enum": ["OATH_REGISTRY_ALLOWED", "OATH_REGISTRY_CRITICAL_BEHAVIOR", "OATH_REGISTRY_REVIEW_REQUIRED", "OATH_REGISTRY_SECRET_DETECTED", "OATH_REGISTRY_UNKNOWN"] },
     "risk_score": { "type": "integer", "minimum": 0, "maximum": 100 },
     "package_digest": { "$ref": "#/$defs/digest" },
     "assessment_digest": { "$ref": "#/$defs/digest" },

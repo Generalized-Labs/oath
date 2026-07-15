@@ -26,6 +26,12 @@ logs/checksums.
   aggregate contains zero failures. Repositories rejected by reference npm or
   requiring another package manager are not eligible for the locked corpus and
   never count as passes.
+- The GA foundation refresh in
+  [`29366460579`](https://github.com/Generalized-Labs/oath/actions/runs/29366460579)
+  tested 498 candidates and froze 250 exact project inputs, 25 in each category,
+  with all 250 compressed lock digests validated. This is input-corpus evidence,
+  not a 250-project parity result; the exact candidate still must execute and
+  aggregate all 250 npm/Oath comparisons.
 - Corpus manifest version 2 stores the exact compressed npm lockfile for each
   project. The harness verifies the decompressed digest, supplies identical
   bytes to npm and Oath, and runs the ordinary `npm install` workflow. It records

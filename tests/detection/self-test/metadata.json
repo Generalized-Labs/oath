@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "evidence_scope": "synthetic-self-test",
+  "evidence_id": "oath-detection-gate-self-test-v1",
+  "source_commit": "0000000000000000000000000000000000000000",
+  "captured_at": "1970-01-01T00:00:00Z",
+  "corpora": {
+    "benign": {
+      "dataset_id": "synthetic-benign-self-test",
+      "dataset_version": "1",
+      "selection_policy": "One deterministic inert package used only to test gate mechanics.",
+      "exclusions": []
+    },
+    "known_malware": {
+      "dataset_id": "synthetic-known-pattern-self-test",
+      "dataset_version": "1",
+      "selection_policy": "One inert source fixture containing a known exfiltration pattern.",
+      "exclusions": []
+    },
+    "private_holdout": {
+      "dataset_id": "synthetic-holdout-self-test",
+      "dataset_version": "1",
+      "selection_policy": "One visible inert fixture; this is not a private holdout.",
+      "family_separated": true,
+      "time_separated": true,
+      "labels_independently_held": true,
+      "exclusions": []
+    },
+    "secret_exfiltration": {
+      "dataset_id": "synthetic-secret-exfil-self-test",
+      "dataset_version": "1",
+      "selection_policy": "One inert secret-plus-network fixture used only to test gate mechanics.",
+      "exclusions": []
+    }
+  }
+}

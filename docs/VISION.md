@@ -63,9 +63,12 @@ staging, private-package roles, short-lived identity tokens, replicated object
 storage, signed revocation tombstones, dist-tag rollback, metrics, billing-event
 verification, and transparency checkpoints.
 
-That does not make Oath GA. The public evidence currently covers ten reviewed
+That does not make Oath GA. The last signed public evidence covers ten reviewed
 independent install behaviors, 500 generated stress executions, 100 pinned
-project trees, and native capability tests. The complete detection targets,
+project trees, and native capability tests. The current source defines 100
+named workflows and freezes 250 project inputs, but those larger denominators
+do not become passing metrics until an exact-candidate evidence run completes.
+The complete detection targets,
 performance targets, platform code signing, public registry/CDN operations,
 anti-squatting governance, external security review, reliability SLOs, and
 commercial adoption gates in [RELEASE_COMPLETE_PLAN.md](RELEASE_COMPLETE_PLAN.md)

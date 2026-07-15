@@ -278,8 +278,8 @@ pub fn create_capsule(
         name: assessment.name.clone(),
         version: assessment.version.clone(),
         package_digest: assessment.package_digest.clone(),
-        assessment_decision: assessment.decision.clone(),
-        assessment_reason_code: assessment.reason_code.clone(),
+        assessment_decision: assessment.decision.to_string(),
+        assessment_reason_code: assessment.reason_code.to_string(),
         capabilities: assessment.capabilities.clone(),
         signing_public_key: persisted.signing_public_key.clone(),
         tarball: TransferTarball {

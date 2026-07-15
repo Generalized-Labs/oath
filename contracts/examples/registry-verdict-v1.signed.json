@@ -1,0 +1,30 @@
+{
+  "schema_version": 1,
+  "generated_at": 1800000000,
+  "expires_at": 1800086400,
+  "package": {
+    "name": "@oath/example",
+    "version": "1.2.3",
+    "registry": "https://registry.npmjs.org",
+    "integrity": "sha512-example-integrity",
+    "publisher": "oath-example-publisher",
+    "publish_age_days": 30,
+    "repository": "https://github.com/Generalized-Labs/oath"
+  },
+  "decision": "allow",
+  "reason_code": "OATH_REGISTRY_ALLOWED",
+  "risk_score": 4,
+  "package_digest": "sha256:3333333333333333333333333333333333333333333333333333333333333333",
+  "assessment_digest": "sha256:d4f823ea511730816ad7a78519f13d533c8baf313a7d656b5b80cc82bbb5115a",
+  "policy_digest": "sha256:970d664108b6497bbd350c6e525f724dc1c4d15e3b138c4d59185b837758a426",
+  "rule_bundle_version": "oath-rules/1",
+  "limitations": [
+    "Runtime containment remains required"
+  ],
+  "signature": {
+    "algorithm": "ed25519",
+    "canonicalization": "oath-json-v1",
+    "public_key": "GX9rI+FshTLGq8g4+s1ep4m+DHaykgM0A5v6iz02jWE=",
+    "signature": "gD44NRzma7zqSHhDLHT8xTrd2+yTlsxrNl2eyyCLOel27mPXbLE4LoOXH4iF5E33uEmKwWoUAyKgKhvuKAxCCg=="
+  }
+}

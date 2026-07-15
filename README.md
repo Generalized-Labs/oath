@@ -303,16 +303,20 @@ oath exec --dry-run --json <package>
 oath exec --sandbox <package> -- <args>
 oath exec --sandbox-mode native <package>
 OATH_AGENT_MODE=1 oath exec <package>
+oath exec --sandbox-mode node --allow-degraded-sandbox <package>
 ```
 
 - Linux strict mode requires bubblewrap namespaces, Landlock ABI V6, seccomp,
   `no_new_privs`, and resource limits.
 - Windows uses a restricted token, unique AppContainer profile, ACL-scoped
   writable roots, and Job Object limits.
-- macOS currently uses Node permission mode and is not described as
-  Linux- or Windows-equivalent containment.
-- Strict mode fails closed. Compatibility mode is separately named and reports
-  degraded guarantees.
+- macOS has no verified native backend. Agent and auto mode therefore deny
+  execution instead of silently selecting weaker containment.
+- Node permission mode requires `--allow-degraded-sandbox`; assessments record
+  that process and resource isolation are absent. Agent mode also denies
+  outbound network by default.
+- Strict mode fails closed. Degraded mode is separately named, explicitly
+  acknowledged, and included in the signed policy digest.
 
 ## Publishing and signed transfer
 

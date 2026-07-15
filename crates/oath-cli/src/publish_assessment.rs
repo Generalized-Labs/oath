@@ -1,7 +1,11 @@
 use anyhow::{Context, Result};
 use base64::Engine;
-use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
-use serde::{Deserialize, Serialize};
+use ed25519_dalek::{Signer, SigningKey};
+use oath_contracts::{Decision, ReasonCode};
+pub use oath_contracts::{
+    DetachedSignature, PublishAssessmentV2 as PublishAssessment, PublishDiff, PublishFile,
+};
+use serde::Serialize;
 use sha2::{Digest, Sha256};
 use std::{
     fs::OpenOptions,
@@ -9,58 +13,7 @@ use std::{
     path::{Path, PathBuf},
 };
 
-pub const PUBLISH_ASSESSMENT_VERSION: u32 = 2;
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublishFile {
-    pub path: String,
-    pub bytes: u64,
-    pub sha256: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublishAssessment {
-    pub schema_version: u32,
-    #[serde(default)]
-    pub generated_at: u64,
-    #[serde(default)]
-    pub expires_at: u64,
-    pub name: String,
-    pub version: String,
-    pub tag: String,
-    pub access: Option<String>,
-    pub package_digest: String,
-    pub unpacked_bytes: u64,
-    pub files: Vec<PublishFile>,
-    pub dependency_count: usize,
-    pub lifecycle_hooks: Vec<String>,
-    pub capabilities: Vec<String>,
-    pub source_available: bool,
-    pub secret_findings: Vec<String>,
-    pub decision: String,
-    pub reason_code: String,
-    pub previous_release: Option<PublishDiff>,
-    #[serde(default)]
-    pub policy_digest: String,
-    #[serde(default)]
-    pub evidence_digest: String,
-    #[serde(default)]
-    pub rule_bundle_version: String,
-    #[serde(default)]
-    pub limitations: Vec<String>,
-    #[serde(default)]
-    pub signature: Option<DetachedSignature>,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct PublishDiff {
-    pub previous_version: String,
-    pub added_files: Vec<String>,
-    pub removed_files: Vec<String>,
-    pub changed_files: Vec<String>,
-    pub capabilities_added: Vec<String>,
-    pub capabilities_removed: Vec<String>,
-}
+pub const PUBLISH_ASSESSMENT_VERSION: u32 = oath_contracts::PUBLISH_ASSESSMENT_VERSION;
 
 #[derive(Debug, Serialize)]
 pub struct PersistedEvidence {
@@ -69,14 +22,6 @@ pub struct PersistedEvidence {
     pub signing_public_key: String,
     pub sbom_path: String,
     pub provenance_path: String,
-}
-
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct DetachedSignature {
-    pub algorithm: String,
-    pub canonicalization: String,
-    pub signature: String,
-    pub public_key: String,
 }
 
 pub fn legacy_v1(assessment: &PublishAssessment) -> serde_json::Value {
@@ -94,7 +39,7 @@ pub fn legacy_v1(assessment: &PublishAssessment) -> serde_json::Value {
         "capabilities": assessment.capabilities,
         "source_available": assessment.source_available,
         "secret_findings": assessment.secret_findings,
-        "decision": if assessment.decision == "deny" { "block" } else { &assessment.decision },
+        "decision": if assessment.decision == Decision::Deny { serde_json::json!("block") } else { serde_json::json!(assessment.decision) },
         "reason_code": assessment.reason_code,
         "previous_release": assessment.previous_release,
     })
@@ -106,41 +51,11 @@ pub fn sign_json(value: &impl Serialize) -> Result<DetachedSignature> {
 }
 
 fn sign_json_with_key(value: &impl Serialize, key: &SigningKey) -> Result<DetachedSignature> {
-    let canonical = oath_contracts::canonical_json_bytes(value)?;
-    let signature = key.sign(&canonical);
-    Ok(DetachedSignature {
-        algorithm: "ed25519".to_string(),
-        canonicalization: "oath-json-v1".to_string(),
-        signature: base64::engine::general_purpose::STANDARD.encode(signature.to_bytes()),
-        public_key: base64::engine::general_purpose::STANDARD
-            .encode(key.verifying_key().to_bytes()),
-    })
+    Ok(oath_contracts::sign_json(value, key)?)
 }
 
 pub fn verify_json_signature(value: &impl Serialize, signature: &DetachedSignature) -> Result<()> {
-    anyhow::ensure!(
-        signature.algorithm == "ed25519",
-        "unsupported signature algorithm {}",
-        signature.algorithm
-    );
-    anyhow::ensure!(
-        signature.canonicalization == "oath-json-v1",
-        "unsupported signature canonicalization {}",
-        signature.canonicalization
-    );
-    let public_key: [u8; 32] = base64::engine::general_purpose::STANDARD
-        .decode(&signature.public_key)?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("invalid Ed25519 public key length"))?;
-    let signature_bytes: [u8; 64] = base64::engine::general_purpose::STANDARD
-        .decode(&signature.signature)?
-        .try_into()
-        .map_err(|_| anyhow::anyhow!("invalid Ed25519 signature length"))?;
-    let verifying_key = VerifyingKey::from_bytes(&public_key)?;
-    let signature = Signature::from_bytes(&signature_bytes);
-    verifying_key
-        .verify(&oath_contracts::canonical_json_bytes(value)?, &signature)
-        .context("Ed25519 signature verification failed")
+    oath_contracts::verify_json(value, signature).context("Ed25519 signature verification failed")
 }
 
 pub fn spdx_sbom(package: &serde_json::Value, assessment: &PublishAssessment) -> serde_json::Value {
@@ -460,14 +375,14 @@ fn assess_with_signing_key(
         source_available: package.get("repository").is_some(),
         secret_findings,
         decision: if blocked {
-            "deny".into()
+            Decision::Deny
         } else {
-            "allow".into()
+            Decision::Allow
         },
         reason_code: if blocked {
-            "OATH_PUBLISH_SECRET_DETECTED".into()
+            ReasonCode::PublishSecretDetected
         } else {
-            "OATH_PUBLISH_ALLOWED".into()
+            ReasonCode::PublishAllowed
         },
         previous_release: None,
         policy_digest,
@@ -625,14 +540,14 @@ mod tests {
             &signing_key,
         )
         .unwrap();
-        assert_eq!(assessment.decision, "deny");
-        assert_eq!(assessment.reason_code, "OATH_PUBLISH_SECRET_DETECTED");
+        assert_eq!(assessment.decision, Decision::Deny);
+        assert_eq!(assessment.reason_code, ReasonCode::PublishSecretDetected);
         assert!(assessment.package_digest.starts_with("sha256:"));
         let signature = assessment.signature.clone().unwrap();
         let mut unsigned = assessment.clone();
         unsigned.signature = None;
         verify_json_signature(&unsigned, &signature).unwrap();
-        unsigned.reason_code = "tampered".into();
+        unsigned.reason_code = ReasonCode::PublishAllowed;
         assert!(verify_json_signature(&unsigned, &signature).is_err());
         let sbom = spdx_sbom(&package, &assessment);
         assert_eq!(sbom["spdxVersion"], "SPDX-2.3");

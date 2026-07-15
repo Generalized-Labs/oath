@@ -36,6 +36,16 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+    let maintenance_registry = registry.clone();
+    tokio::spawn(async move {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600));
+        loop {
+            interval.tick().await;
+            if let Err(error) = maintenance_registry.prune_expired_rate_limits().await {
+                tracing::warn!(%error, "registry rate-limit maintenance failed");
+            }
+        }
+    });
     let app = oath_registry::postgres_api::router(registry);
 
     let bind = std::env::var("OATH_REGISTRY_BIND").unwrap_or_else(|_| "0.0.0.0:4873".into());
