@@ -167,11 +167,6 @@ fn validated_workspace_target(project_dir: &Path, target: &Path) -> Result<PathB
     } else {
         project_dir.join(target)
     };
-    anyhow::ensure!(
-        candidate.starts_with(project_dir),
-        "workspace link escapes project: {}",
-        target.display()
-    );
 
     match std::fs::canonicalize(&candidate) {
         Ok(canonical) => {
@@ -1249,6 +1244,41 @@ mod tests {
                 .is_symlink()
         );
         assert_eq!(std::fs::read_link(link).unwrap(), missing);
+    }
+
+    #[test]
+    fn workspace_link_rejects_parent_directory_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+
+        let error = validated_workspace_target(&project, Path::new("../outside")).unwrap_err();
+        assert!(error.to_string().contains("workspace link escapes project"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn workspace_link_accepts_equivalent_windows_drive_case() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let target = project.join("packages/tool");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let mut target_text = target.to_string_lossy().into_owned();
+        let drive = target_text.as_bytes()[0] as char;
+        let alternate_drive_case = if drive.is_ascii_lowercase() {
+            drive.to_ascii_uppercase()
+        } else {
+            drive.to_ascii_lowercase()
+        };
+        target_text.replace_range(0..1, &alternate_drive_case.to_string());
+
+        assert_eq!(
+            validated_workspace_target(&project, Path::new(&target_text)).unwrap(),
+            target.canonicalize().unwrap()
+        );
     }
 
     #[cfg(unix)]
