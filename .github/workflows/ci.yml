@@ -44,6 +44,8 @@ jobs:
         run: node scripts/project-corpus.mjs self-test
       - name: Test installed-tree evidence normalization
         run: node --test scripts/tree-evidence.test.mjs
+      - name: Test GA evidence gate derivation
+        run: node --test scripts/generate-ga-evidence.test.mjs
       - name: Validate all pinned corpus lock artifacts
         run: node scripts/project-corpus.mjs validate tests/compat/projects.lock.json
       - name: Validate the real-project parity denominator
