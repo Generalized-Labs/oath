@@ -3,6 +3,23 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.2.3] - 2026-07-15
+
+### Fixed
+- Signed evidence manifests now derive the 100-workflow, 250-project, and
+  10,000-execution gate states from measured results instead of retaining stale
+  hard-coded open labels.
+- Measured gates are reported separately as completed or open, while external
+  GA gates remain explicitly open and continue to keep `ga_gate.ready` false.
+
+### Verified
+- The corrected generator reproduces the exact `v0.2.2` compatibility claims:
+  300/300 cross-platform workflow comparisons, 250/250 pinned projects, and
+  10,000/10,000 generated executions with zero open measured gates.
+- Full-threshold and under-threshold regression fixtures run in protected CI.
+- Oath remains a developer preview. This patch does not make a GA detection,
+  service-SLO, external-audit, or commercial-adoption claim.
+
 ## [0.2.2] - 2026-07-15
 
 ### Added
