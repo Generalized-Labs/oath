@@ -32,6 +32,12 @@ logs/checksums.
   with all 250 compressed lock digests validated. This is input-corpus evidence,
   not a 250-project parity result; the exact candidate still must execute and
   aggregate all 250 npm/Oath comparisons.
+- Exact-master run
+  [`29379054882`](https://github.com/Generalized-Labs/oath/actions/runs/29379054882)
+  correctly failed before project execution because `project-parity.mjs` still
+  enforced the historical 100-project denominator. All 20 shards rejected the
+  250-input manifest, the run was cancelled, and zero project passes from it are
+  claimed. The harness now validates an explicit 250-project target in PR CI.
 - Corpus manifest version 2 stores the exact compressed npm lockfile for each
   project. The harness verifies the decompressed digest, supplies identical
   bytes to npm and Oath, and runs the ordinary `npm install` workflow. It records
