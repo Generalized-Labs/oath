@@ -64,17 +64,18 @@ procedure live in [`contracts/`](contracts/README.md).
 window. JSON modes reserve stdout for one parseable document.
 
 > [!IMPORTANT]
-> The installer follows the latest non-prerelease GitHub release. The `v0.2.1`
+> The installer follows the latest non-prerelease GitHub release. The `v0.2.2`
 > line is a developer preview that adds staged publishing, signed transfers,
-> the PostgreSQL registry control plane, expanded evidence, native capability
-> reporting, and Windows artifacts. Preview users can download its release
+> the PostgreSQL registry control plane, portable deployment, signed agent
+> contracts, expanded evidence, native capability reporting, and Windows assets.
+> Preview users can download its release
 > assets or build `master` from source; `v0.1.7` remains the stable binary. The
 > signed `v0.2.0` tag did not publish a GitHub release after its Linux artifact
 > builds failed, and it remains immutable as part of the release record.
 
 ## Release status
 
-`v0.2.1` is a developer preview, not a general-availability
+`v0.2.2` is a developer preview, not a general-availability
 claim. The tested CLI workflow slices and native Linux/Windows boundaries have
 public evidence. The hosted registry remains a business-beta control plane, and
 the broader GA gates for detection quality, performance, signed platform
@@ -124,14 +125,16 @@ a new decision.
 
 | Evidence class | Current result | What it means |
 | --- | ---: | --- |
-| Generated stress executions | 500 / 500 | Repeated deterministic cases across three templates; **not** 500 independent npm behaviors |
-| Pinned real-project trees | 100 / 100 | Exact npm/Oath dependency-tree equivalents for the eligible locked corpus |
-| Independent install behaviors | 3 / 3 | Reviewed `basic`, `alias`, and `workspace` behaviors |
+| Generated stress executions | 10,000 / 10,000 | Deterministic comparisons, 2,000 each across clean, warm, offline, repeat, and interrupted modes; **not** 10,000 independent npm behaviors |
+| Pinned real-project trees | 250 / 250 | Exact npm/Oath dependency-tree equivalents for the eligible locked corpus |
+| Independently reviewed workflows | 300 / 300 platform results | 100 workflow IDs matched npm 11.12.1 on Linux, macOS, and Windows |
 | Native capability reports | 4 / 4 | Ubuntu 24 strict enforcement, Ubuntu 22 fail-closed behavior, and Windows Server 2022/2025 containment |
 
-The candidate source contract now contains ten behavior IDs and passed 10/10
-locally on macOS against npm 11.12.1. The table stays at the last signed 3/3 CI
-baseline until a new exact-commit cross-platform evidence artifact is attested.
+These results come from exact-master CI run
+[29403483148](https://github.com/Generalized-Labs/oath/actions/runs/29403483148)
+at commit `49f98e650ae3b5066463e585a8843189eb00ccfc`; all 60 jobs and the
+`release-evidence-gate` passed. A release tag still requires the same full gate
+to pass on the exact tagged commit.
 
 The post-merge smoke set also matched 108,376 installed entries across Rspack,
 Karma, and Mattermost. The current installer benchmark does **not** support a
@@ -139,7 +142,7 @@ speed claim: Oath was slower than npm and Bun on both cold and warm runs.
 
 - [Live evidence website](https://generalized-labs.github.io/oath/)
 - [Compatibility and security methodology](docs/GA_EVIDENCE.md)
-- [v0.2.1 release-readiness report](docs/RELEASE_READINESS.md)
+- [v0.2.2 release-readiness report](docs/RELEASE_READINESS.md)
 - [npm workflow contract](docs/NPM_COMPATIBILITY_CONTRACT.md)
 - [Scanner threat model and limitations](docs/scanner-threat-model.md)
 - [Registry deployment and operations](docs/REGISTRY_OPERATIONS.md)
@@ -201,7 +204,7 @@ cargo build --release --locked --bin oath
 .\target\release\oath.exe --version
 ```
 
-Windows Server 2022 and 2025 native-containment checks pass in CI. The `v0.2.1`
+Windows Server 2022 and 2025 native-containment checks pass in CI. The `v0.2.2`
 developer-preview release includes x86-64 and ARM64 Windows binaries. Do not use
 the Unix installer on Windows.
 
@@ -228,7 +231,7 @@ oath log                           # inspect the local transparency log
 oath score lodash                  # inspect package evidence
 ```
 
-These commands are available in the `v0.2.1` developer preview and on `master`:
+These commands are available in the `v0.2.2` developer preview and on `master`:
 
 ```sh
 oath sandbox-info --json
