@@ -355,7 +355,7 @@ fn repack_git_package(root: &std::path::Path, files: &[std::path::PathBuf]) -> R
             // npm-packlist never includes its controlling ignore files, but
             // root package-manager metadata is pruned before this point as an
             // additional guard. A disappearing entry is therefore skipped.
-            if !source.symlink_metadata().is_ok() {
+            if source.symlink_metadata().is_err() {
                 continue;
             }
             let archive_path = std::path::Path::new("package").join(relative);

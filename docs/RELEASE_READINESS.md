@@ -1,10 +1,10 @@
-# v0.2.2 release readiness
+# v0.2.3 release readiness
 
 Audit date: 2026-07-15
 
 ## Decision
 
-Oath `v0.2.2` is a **developer preview**. The CLI and the documented npm
+Oath `v0.2.3` is a **developer preview**. The CLI and the documented npm
 workflow slices are eligible for a preview tag only after the exact candidate
 commit passes the manually dispatched `release-evidence-gate`. The release
 workflow checks that exact-commit result before it builds or publishes assets
@@ -87,8 +87,10 @@ native-containment, registry, audit, reliability, 10,000-execution, and
   cross images lacked target `libseccomp`. No `v0.2.0` GitHub release or assets
   were published. The tag is not moved or deleted.
 - The `v0.2.1` release corrected the Linux cross-image `libseccomp` packaging
-  failure. `v0.2.2` adds portable registry deployment, cross-language signed
+  failure. `v0.2.2` added portable registry deployment, cross-language signed
   contract verification, immutable release assembly, and expanded npm parity.
+  `v0.2.3` derives measured gate state from the evidence instead of retaining
+  stale hard-coded open labels.
 - The real-project corpus now commits and digest-verifies 250 compressed npm
   lockfiles. Evidence runs no longer regenerate dependency resolution from
   mutable registry state, and npm and Oath consume the same pinned bytes through
@@ -122,7 +124,7 @@ native-containment, registry, audit, reliability, 10,000-execution, and
 1. Merge the reviewed candidate to `master`.
 2. Manually dispatch `.github/workflows/ci.yml` on the exact master commit.
 3. Require every job in `release-evidence-gate` to pass without exceptions.
-4. Create signed tag `v0.2.2` on that exact commit.
+4. Create signed tag `v0.2.3` on that exact commit.
 5. Let `.github/workflows/release.yml` revalidate version, changelog, MSRV,
    tests, dependency audits, website, exact-commit evidence, platform builds,
    checksums, and provenance before publishing the GitHub release.
