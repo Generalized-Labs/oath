@@ -48,6 +48,39 @@ const stress = generated.reduce((acc, item) => {
   return acc;
 }, { executed: 0, equivalent: 0, failed: 0 });
 
+const independentBehavioral = {
+  platform_reports: behavioral.length,
+  executed: behavioral.reduce((sum, item) => sum + Number(item.summary?.executed ?? 0), 0),
+  equivalent: behavioral.reduce((sum, item) => sum + Number(item.summary?.equivalent ?? 0), 0),
+  failed: behavioral.reduce((sum, item) => sum + Number(item.summary?.failed ?? 0), 0),
+};
+const realProjects = {
+  target: Number(project?.summary?.target ?? 0),
+  exact_equivalents: Number(project?.summary?.exact_equivalents ?? 0),
+  failures: project?.summary?.failures ?? [],
+};
+const evidenceGates = [
+  {
+    name: "100 independent workflows across required platforms",
+    passed: independentBehavioral.platform_reports >= 3 &&
+      independentBehavioral.executed >= 300 &&
+      independentBehavioral.equivalent === independentBehavioral.executed &&
+      independentBehavioral.failed === 0,
+  },
+  {
+    name: "250 pinned real projects",
+    passed: realProjects.target >= 250 &&
+      realProjects.exact_equivalents >= 250 &&
+      realProjects.failures.length === 0,
+  },
+  {
+    name: "10000 generated executions",
+    passed: stress.executed >= 10000 &&
+      stress.equivalent === stress.executed &&
+      stress.failed === 0,
+  },
+];
+
 const manifest = {
   schema_version: 1,
   evidence_status: "developer-preview",
@@ -58,25 +91,15 @@ const manifest = {
     : null,
   generated_at: new Date().toISOString(),
   claims: {
-    independent_behavioral: {
-      platform_reports: behavioral.length,
-      executed: behavioral.reduce((sum, item) => sum + Number(item.summary?.executed ?? 0), 0),
-      equivalent: behavioral.reduce((sum, item) => sum + Number(item.summary?.equivalent ?? 0), 0),
-      failed: behavioral.reduce((sum, item) => sum + Number(item.summary?.failed ?? 0), 0),
-    },
+    independent_behavioral: independentBehavioral,
     generated_stress: stress,
-    real_projects: {
-      target: Number(project?.summary?.target ?? 0),
-      exact_equivalents: Number(project?.summary?.exact_equivalents ?? 0),
-      failures: project?.summary?.failures ?? [],
-    },
+    real_projects: realProjects,
   },
   ga_gate: {
     ready: false,
+    completed_evidence_gates: evidenceGates.filter((gate) => gate.passed).map((gate) => gate.name),
+    open_evidence_gates: evidenceGates.filter((gate) => !gate.passed).map((gate) => gate.name),
     open_external_gates: [
-      "100 independent workflows",
-      "250 pinned real projects",
-      "10000 generated executions",
       "detection thresholds on frozen and private holdouts",
       "independent security review and penetration test",
       "60-day production SLO window",
