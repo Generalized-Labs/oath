@@ -3,6 +3,41 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.2.2] - 2026-07-15
+
+### Added
+- Rootless OCI and cloud-neutral Kubernetes deployment contracts for the
+  registry, with managed PostgreSQL and S3, R2, GCS, or Azure object storage.
+- Cross-language signed-verdict verification clients and tests for JavaScript,
+  Python, and Go, packaged with the published agent schemas.
+- Draft-first GitHub releases that verify the exact expected asset inventory
+  before publication.
+
+### Changed
+- The independently reviewed npm contract now contains 100 workflow IDs, the
+  pinned real-project corpus contains 250 projects, and generated stress
+  evidence executes 10,000 comparisons balanced across clean, warm, offline,
+  repeat, and interrupted modes.
+- Release assets are created as a draft and published only after all binaries,
+  checksums, provenance, evidence, and contract bundles are present.
+
+### Fixed
+- npm-compatible linking now handles absent install roots, dangling workspace
+  links, quoted boolean npm configuration, leading-`v` package versions, and
+  npm-created empty scope directories without masking real tree differences.
+- Windows workspace containment now validates canonical filesystem ancestry
+  instead of rejecting equivalent drive-letter spelling before canonicalization.
+
+### Verified
+- Exact-master CI run
+  [29403483148](https://github.com/Generalized-Labs/oath/actions/runs/29403483148)
+  passed all 60 jobs at commit
+  `49f98e650ae3b5066463e585a8843189eb00ccfc`: 100/100 reviewed behaviors
+  on Linux, macOS, and Windows, 250/250 pinned projects, and 10,000/10,000
+  generated comparisons with zero unexplained differences.
+- Oath remains a developer preview. This compatibility result is not a GA
+  detection, service-SLO, external-audit, or commercial-adoption claim.
+
 ## [0.2.1] - 2026-07-14
 
 ### Fixed

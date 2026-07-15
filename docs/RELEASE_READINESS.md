@@ -1,10 +1,10 @@
-# v0.2.1 release readiness
+# v0.2.2 release readiness
 
-Audit date: 2026-07-14
+Audit date: 2026-07-15
 
 ## Decision
 
-Oath `v0.2.1` is a **developer preview**. The CLI and the documented npm
+Oath `v0.2.2` is a **developer preview**. The CLI and the documented npm
 workflow slices are eligible for a preview tag only after the exact candidate
 commit passes the manually dispatched `release-evidence-gate`. The release
 workflow checks that exact-commit result before it builds or publishes assets
@@ -28,13 +28,14 @@ and remains a GA governance gate.
 
 ## Audited full-evidence baseline
 
-The corrected install-evidence contract first passed in run
-[`29320179154`](https://github.com/Generalized-Labs/oath/actions/runs/29320179154)
-at commit `aafc55c7403bc859b68ec6785de29bb2f28802ae`. All 54 jobs
-passed. The downloaded manifest checksum and GitHub OIDC/SLSA provenance both
-verified, and the manifest remained explicit that GA is not ready. This is a
-historical audited baseline for that exact commit; it must not be relabeled as
-evidence for later source.
+Exact-master run
+[`29403483148`](https://github.com/Generalized-Labs/oath/actions/runs/29403483148)
+passed all 60 jobs and `release-evidence-gate` at commit
+`49f98e650ae3b5066463e585a8843189eb00ccfc`. The downloaded summaries
+independently aggregate to 100 reviewed workflow IDs on each supported CI OS,
+250 pinned projects, and 10,000 generated comparisons. This is the audited
+implementation baseline for that exact commit; the release-bump commit must
+pass the complete manually dispatched gate again before it can be tagged.
 
 | Gate | Result |
 | --- | ---: |
@@ -42,24 +43,33 @@ evidence for later source.
 | Rust workspace tests, including live PostgreSQL | Pass |
 | Declared Rust 1.94 MSRV check | Pass |
 | Rust and website dependency audits | Pass |
-| Independent npm behaviors | 30 / 30 platform results across 10 behavior IDs |
-| Generated stress executions | 500 / 500 |
-| Pinned real-project trees | 100 / 100 |
-| Local registry reliability smoke | Pass |
+| Independently reviewed npm workflows | 100 / 100 on Linux, macOS, and Windows |
+| Generated stress executions | 10,000 / 10,000; 2,000 per execution mode |
+| Pinned real-project trees | 250 / 250 |
+| Signed JavaScript, Python, and Go agent-contract verification | Pass |
+| PostgreSQL, OCI-container, and registry reliability checks | Pass |
+| Native Linux and Windows containment checks | Pass |
 | Public stable-release README smoke | Pass |
+| Exact-commit release evidence gate | Pass |
 
-The independent behavior hashes and current AI ecosystem run are checked in
-under `compat-results/`. The complete manually dispatched CI run repeats the
-cross-platform, native-containment, registry, audit, reliability, 500-fixture,
-and 100-project gates for the exact release commit.
+The generated artifacts contain 2,000 comparisons each for clean, warm,
+offline, repeat, and interrupted modes, all classified as compared and all
+equivalent. The complete manually dispatched CI run repeats the cross-platform,
+native-containment, registry, audit, reliability, 10,000-execution, and
+250-project gates for the exact release commit.
 
 ## Current source validation
 
-- The reviewed behavior contract is expanded to ten workflows; a local macOS
-  run matched 10/10 against npm 11.12.1 with zero tree differences.
+- The reviewed behavior contract contains 100 workflow IDs. Exact-master
+  artifacts matched 100/100 against npm 11.12.1 on Linux, macOS, and Windows
+  with zero tree differences.
 - `ExecAssessment v3`, `PublishAssessment v2`, and `RegistryVerdict v1` have
   published schemas/types, stable decisions, digests, expiry, limitations, and
-  Ed25519 signatures. Exec v2 and publish v1 remain explicitly selectable.
+  Ed25519 signatures. JavaScript, Python, and Go verifiers accept the signed
+  fixtures and reject mutations. Exec v2 and publish v1 remain selectable.
+- The registry ships as a rootless OCI image and cloud-neutral Kubernetes base
+  over managed PostgreSQL and S3, R2, GCS, or Azure object storage. This is a
+  portable deployment contract, not a production-service SLO result.
 - The live PostgreSQL test passes server-owned assessment, retained evidence,
   SPDX SBOM, registry-observation provenance, private verdict authorization,
   step-up approval enforcement, atomic outbox delivery, download accounting,
@@ -76,9 +86,10 @@ and 100-project gates for the exact release commit.
   then failed only while linking the Linux x86-64 and ARM64 assets because the
   cross images lacked target `libseccomp`. No `v0.2.0` GitHub release or assets
   were published. The tag is not moved or deleted.
-- The `v0.2.1` candidate installs target `libseccomp` in both cross images and
-  makes those two release builds required CI and exact-evidence jobs.
-- The real-project corpus now commits and digest-verifies 100 compressed npm
+- The `v0.2.1` release corrected the Linux cross-image `libseccomp` packaging
+  failure. `v0.2.2` adds portable registry deployment, cross-language signed
+  contract verification, immutable release assembly, and expanded npm parity.
+- The real-project corpus now commits and digest-verifies 250 compressed npm
   lockfiles. Evidence runs no longer regenerate dependency resolution from
   mutable registry state, and npm and Oath consume the same pinned bytes through
   the ordinary `npm install` path. Paired `devOptional: true` to `dev: true`
@@ -102,13 +113,16 @@ and 100-project gates for the exact release commit.
   in the same PostgreSQL transaction. An idempotent worker appends signed log
   entries with retry. Full process-kill, restore, key-rotation, and regional
   failover drills remain operator gates.
+- Native macOS containment signing/notarization and an external sandbox escape
+  review remain open. Unsupported requested containment must continue to fail
+  closed unless policy explicitly permits degraded execution.
 
 ## Required tag sequence
 
 1. Merge the reviewed candidate to `master`.
 2. Manually dispatch `.github/workflows/ci.yml` on the exact master commit.
 3. Require every job in `release-evidence-gate` to pass without exceptions.
-4. Create `v0.2.1` on that exact commit.
+4. Create signed tag `v0.2.2` on that exact commit.
 5. Let `.github/workflows/release.yml` revalidate version, changelog, MSRV,
    tests, dependency audits, website, exact-commit evidence, platform builds,
    checksums, and provenance before publishing the GitHub release.
