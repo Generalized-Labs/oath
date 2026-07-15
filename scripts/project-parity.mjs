@@ -18,6 +18,7 @@ const gitNetworkAttempts=integerEnv("OATH_GIT_NETWORK_ATTEMPTS",3);
 const gitRetryDelayMs=integerEnv("OATH_GIT_RETRY_DELAY_MS",5_000,0);
 const gitNetworkTimeoutMs=integerEnv("OATH_GIT_NETWORK_TIMEOUT_MS",300_000);
 const gitCheckoutTimeoutMs=integerEnv("OATH_GIT_CHECKOUT_TIMEOUT_MS",300_000);
+const projectTarget=integerEnv("OATH_PROJECT_TARGET",250);
 async function runGitNetwork(args,options,cleanupPath){
  let result;
  for(let attempt=1;attempt<=gitNetworkAttempts;attempt++){
@@ -49,7 +50,11 @@ if(manifestPath){
 }else{
  projects=(await readFile(new URL("../tests/compat/projects.txt",import.meta.url),"utf8")).split(/\r?\n/).map(v=>v.trim()).filter(Boolean).map(repository=>({repository}));
 }
-if(projects.length!==100)throw new Error(`expected 100 projects, found ${projects.length}`);
+if(projects.length!==projectTarget)throw new Error(`expected ${projectTarget} projects, found ${projects.length}`);
+if(process.argv.includes("--validate-manifest")){
+ console.log(JSON.stringify({schema_version:1,project_target:projectTarget,projects:projects.length,valid:true},null,2));
+ process.exit(0);
+}
 const root=await mkdtemp(join(tmpdir(),"oath-projects-")); const results=[];
 const out=resolve(process.env.OATH_COMPAT_RESULTS??"compat-results/ga");await mkdir(out,{recursive:true});
 const checkpoint=()=>writeFile(join(out,`project-shard-${shard}.json`),JSON.stringify({schema_version:1,shard,results},null,2));

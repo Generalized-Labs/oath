@@ -44,6 +44,11 @@ jobs:
         run: node scripts/project-corpus.mjs self-test
       - name: Validate all pinned corpus lock artifacts
         run: node scripts/project-corpus.mjs validate tests/compat/projects.lock.json
+      - name: Validate the real-project parity denominator
+        run: node scripts/project-parity.mjs --validate-manifest
+        env:
+          OATH_PROJECT_MANIFEST: tests/compat/projects.lock.json
+          OATH_PROJECT_TARGET: 250
 
   agent-contracts:
     runs-on: ubuntu-latest
@@ -435,6 +440,7 @@ jobs:
           OATH_PROJECT_SHARD: ${{ matrix.shard }}
           OATH_PROJECT_SHARDS: 20
           OATH_PROJECT_MANIFEST: tests/compat/projects.lock.json
+          OATH_PROJECT_TARGET: 250
           OATH_PROJECT_TIMEOUT_MS: 1200000
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
