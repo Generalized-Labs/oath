@@ -42,6 +42,8 @@ jobs:
           git diff --exit-code -- tests/compat/behavioral-contract.json
       - name: Validate deterministic corpus lock workspace
         run: node scripts/project-corpus.mjs self-test
+      - name: Test installed-tree evidence normalization
+        run: node --test scripts/tree-evidence.test.mjs
       - name: Validate all pinned corpus lock artifacts
         run: node scripts/project-corpus.mjs validate tests/compat/projects.lock.json
       - name: Validate the real-project parity denominator
@@ -61,12 +63,22 @@ jobs:
       - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7
         with:
           node-version: 24.13.0
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: 1.26.1
       - run: rustup toolchain install stable --profile minimal && rustup default stable
       - name: Regenerate and verify signed contract examples
         run: |
           cargo run --locked -p oath-contracts --example generate_contract_examples -- contracts/examples
           git diff --exit-code -- contracts/examples
           cargo test --locked -p oath-contracts published_signed_examples_verify
+      - name: Verify cross-language contract clients
+        run: |
+          node contracts/javascript/verify-examples.mjs
+          python3 -m venv /tmp/oath-contract-python
+          /tmp/oath-contract-python/bin/pip install --requirement contracts/python/requirements.txt
+          /tmp/oath-contract-python/bin/python contracts/python/test_examples.py
+          (cd contracts/go && go test ./...)
       - name: Build deterministic agent contract bundle
         run: |
           node scripts/build-contract-bundle.mjs contract-dist
@@ -205,7 +217,7 @@ jobs:
     runs-on: ubuntu-latest
     services:
       postgres:
-        image: postgres:17
+        image: postgres:17.10-bookworm
         env:
           POSTGRES_USER: oath
           POSTGRES_PASSWORD: oath
@@ -226,6 +238,49 @@ jobs:
         run: rustup toolchain install stable && rustup default stable
       - name: PostgreSQL registry end-to-end test
         run: cargo test --locked -p oath-registry postgres_api::tests::live_postgres_enforces_tenants_publish_download_and_revoke -- --exact
+
+  registry-container:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.10-bookworm
+        env:
+          POSTGRES_USER: oath
+          POSTGRES_PASSWORD: oath
+          POSTGRES_DB: oath_container
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U oath -d oath_container"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+      - name: Build rootless registry image
+        run: docker build --file deploy/Dockerfile --tag oath-registry:ci .
+      - name: Verify container identity and readiness
+        shell: bash
+        run: |
+          set -euo pipefail
+          test "$(docker image inspect oath-registry:ci --format '{{.Config.User}}')" = "10001:10001"
+          container=$(docker run --detach --network host \
+            --env DATABASE_URL=postgresql://oath:oath@127.0.0.1:5432/oath_container \
+            --env OATH_PUBLIC_URL=http://127.0.0.1:4873 \
+            --env OATH_REGISTRY_ORG=ci \
+            --env OATH_REGISTRY_TOKEN=ci-bootstrap-token \
+            --read-only \
+            --tmpfs /tmp:size=256m,mode=1777 \
+            oath-registry:ci)
+          trap 'docker logs "$container"; docker rm --force "$container"' EXIT
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:4873/readyz >/dev/null; then
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "registry container did not become ready" >&2
+          exit 1
 
   msrv:
     runs-on: ubuntu-latest
@@ -567,6 +622,7 @@ jobs:
       - audit-readiness
       - independent-behavioral
       - postgres-registry
+      - registry-container
       - msrv
       - check
       - windows-artifacts
@@ -592,6 +648,7 @@ jobs:
           LINUX: ${{ needs.native-linux-security.result }}
           WINDOWS: ${{ needs.native-windows-security.result }}
           REGISTRY: ${{ needs.postgres-registry.result }}
+          REGISTRY_CONTAINER: ${{ needs.registry-container.result }}
           MSRV: ${{ needs.msrv.result }}
           CHECKS: ${{ needs.check.result }}
           WINDOWS_ARTIFACTS: ${{ needs.windows-artifacts.result }}
@@ -610,6 +667,7 @@ jobs:
           test "$LINUX" = success
           test "$WINDOWS" = success
           test "$REGISTRY" = success
+          test "$REGISTRY_CONTAINER" = success
           test "$MSRV" = success
           test "$CHECKS" = success
           test "$WINDOWS_ARTIFACTS" = success

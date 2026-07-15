@@ -14,7 +14,10 @@ documented as intentional security divergences with a stable Oath reason code.
 The semantic tree comparison follows package links and excludes npm's
 `.package-lock.json` plus Oath's `.oath` content-addressed implementation data.
 Oath's internal `.oath-store-manifest.json` integrity record is also excluded.
-The installed package names and package contents must still be identical.
+Empty directories left by npm deduplication are normalized away because they
+carry no package content. A dangling workspace link remains an explicit link
+entry instead of crashing the comparator. Installed package names, links, and
+package contents must otherwise be identical.
 
 The required fixture corpus grows monotonically. Each fixed compatibility bug
 must add a fixture before release.

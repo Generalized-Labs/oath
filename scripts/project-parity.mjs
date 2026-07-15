@@ -61,8 +61,10 @@ const checkpoint=()=>writeFile(join(out,`project-shard-${shard}.json`),JSON.stri
 try{
  const parityScript=join(root,"npm-parity.mjs");
  const lockMutationScript=join(root,"lock-mutation.mjs");
+ const treeEvidenceScript=join(root,"tree-evidence.mjs");
  await copyFile(resolve("scripts/npm-parity.mjs"),parityScript);
  await copyFile(resolve("scripts/lock-mutation.mjs"),lockMutationScript);
+ await copyFile(resolve("scripts/tree-evidence.mjs"),treeEvidenceScript);
  let selectedIndex=0;
  for(const [index,projectSpec] of projects.entries()){
   if(index%shards!==shard)continue;

@@ -27,7 +27,9 @@ async function main () {
   }
   const boolOption = (name, fallback = false) => {
     const value = npmrc[name]
-    return value === undefined ? fallback : value === 'true'
+    if (value === undefined) return fallback
+    const normalized = value.trim().replace(/^(['"])(.*)\1$/, '$2').toLowerCase()
+    return normalized === 'true'
   }
   const arborist = new Arborist({
     path: project,

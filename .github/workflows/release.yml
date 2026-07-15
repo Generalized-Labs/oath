@@ -263,7 +263,7 @@ jobs:
             contract-dist/schemas/publish-assessment-v2.schema.json
             contract-dist/schemas/registry-verdict-v1.schema.json
 
-      - name: Create GitHub Release
+      - name: Create and verify draft GitHub Release
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -288,6 +288,7 @@ jobs:
           gh release create "$GITHUB_REF_NAME" \
             --verify-tag \
             --generate-notes \
+            --draft \
             "${release_flags[@]}" \
             oath-darwin-arm64 \
             oath-darwin-arm64.sha256 \
@@ -312,3 +313,40 @@ jobs:
             checksums.txt \
             release-evidence/ga-evidence-manifest.json \
             release-evidence/ga-evidence-manifest.json.sha256
+
+          cat > expected-assets.txt <<EOF
+          checksums.txt
+          contract-manifest.json
+          contract-manifest.json.sha256
+          exec-assessment-v3.schema.json
+          ga-evidence-manifest.json
+          ga-evidence-manifest.json.sha256
+          oath-agent-contracts-${GITHUB_REF_NAME}.tar.gz
+          oath-agent-contracts-${GITHUB_REF_NAME}.tar.gz.sha256
+          oath-contracts.ts
+          oath-darwin-arm64
+          oath-darwin-arm64.sha256
+          oath-darwin-x64
+          oath-darwin-x64.sha256
+          oath-linux-arm64
+          oath-linux-arm64.sha256
+          oath-linux-x64
+          oath-linux-x64.sha256
+          oath-windows-arm64.exe
+          oath-windows-arm64.exe.sha256
+          oath-windows-x64.exe
+          oath-windows-x64.exe.sha256
+          publish-assessment-v2.schema.json
+          registry-verdict-v1.schema.json
+          EOF
+          gh release view "$GITHUB_REF_NAME" \
+            --json assets \
+            --jq '.assets[].name' \
+            | sort > actual-assets.txt
+          sort -o expected-assets.txt expected-assets.txt
+          diff -u expected-assets.txt actual-assets.txt
+
+      - name: Publish verified GitHub Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false

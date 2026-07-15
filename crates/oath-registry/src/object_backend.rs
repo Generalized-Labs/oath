@@ -2,7 +2,8 @@ use anyhow::{Context, Result};
 use futures_util::StreamExt;
 use object_store::{
     ObjectStore, ObjectStoreExt, PutMode, PutOptions, aws::AmazonS3Builder,
-    gcp::GoogleCloudStorageBuilder, local::LocalFileSystem, path::Path as ObjectPath,
+    azure::MicrosoftAzureBuilder, gcp::GoogleCloudStorageBuilder, local::LocalFileSystem,
+    path::Path as ObjectPath,
 };
 use std::{path::PathBuf, sync::Arc};
 
@@ -17,6 +18,9 @@ pub enum ObjectBackendConfig {
     },
     Gcs {
         bucket: String,
+    },
+    Azure {
+        container: String,
     },
 }
 
@@ -117,6 +121,10 @@ impl ObjectBackendConfig {
                 bucket: std::env::var("OATH_OBJECT_BUCKET")
                     .context("OATH_OBJECT_BUCKET is required")?,
             }),
+            "azure" => Ok(Self::Azure {
+                container: std::env::var("OATH_OBJECT_BUCKET")
+                    .context("OATH_OBJECT_BUCKET is required")?,
+            }),
             backend => anyhow::bail!("unsupported object backend {backend}"),
         }
     }
@@ -140,6 +148,11 @@ pub fn build(config: ObjectBackendConfig) -> Result<Arc<dyn ObjectStore>> {
                 .with_bucket_name(bucket)
                 .build()?,
         )),
+        ObjectBackendConfig::Azure { container } => Ok(Arc::new(
+            MicrosoftAzureBuilder::from_env()
+                .with_container_name(container)
+                .build()?,
+        )),
     }
 }
 
@@ -161,6 +174,10 @@ pub fn artifact_store_from_env(default_root: PathBuf) -> Result<ArtifactStore> {
         },
         "gcs" => ObjectBackendConfig::Gcs {
             bucket: std::env::var("OATH_OBJECT_REPLICA_BUCKET")
+                .context("OATH_OBJECT_REPLICA_BUCKET is required")?,
+        },
+        "azure" => ObjectBackendConfig::Azure {
+            container: std::env::var("OATH_OBJECT_REPLICA_BUCKET")
                 .context("OATH_OBJECT_REPLICA_BUCKET is required")?,
         },
         value => anyhow::bail!("unsupported replica object backend {value}"),

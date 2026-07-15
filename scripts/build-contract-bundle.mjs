@@ -1,8 +1,9 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { copyFile, mkdir, readFile, writeFile } from "node:fs/promises";
-import { join, resolve } from "node:path";
+import { copyFile, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { basename, isAbsolute, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
 const root = resolve(fileURLToPath(new URL("..", import.meta.url)));
@@ -53,6 +54,15 @@ async function copy(relative, destination) {
   };
 }
 
+const within = (parent, child) => {
+  const path = relative(parent, child);
+  return path !== "" && !path.startsWith("..") && !isAbsolute(path);
+};
+const allowedRoots = [root, resolve(tmpdir()), resolve("/tmp"), resolve("/private/tmp")];
+if (!basename(output).includes("contract") || !allowedRoots.some((parent) => within(parent, output))) {
+  throw new Error("contract bundle output must be a contract-named directory inside the repository or temporary directory");
+}
+await rm(output, { recursive: true, force: true });
 await mkdir(output, { recursive: true });
 const files = [];
 for (const [name, version, expectedCodes] of schemas) {
@@ -82,6 +92,18 @@ for (const name of examples) {
 }
 
 files.push(await copy("contracts/oath-contracts.ts", "types/oath-contracts.ts"));
+for (const [source, destination] of [
+  ["contracts/javascript/oath-contracts.mjs", "javascript/oath-contracts.mjs"],
+  ["contracts/javascript/verify-examples.mjs", "javascript/verify-examples.mjs"],
+  ["contracts/python/oath_contracts.py", "python/oath_contracts.py"],
+  ["contracts/python/requirements.txt", "python/requirements.txt"],
+  ["contracts/python/test_examples.py", "python/test_examples.py"],
+  ["contracts/go/go.mod", "go/go.mod"],
+  ["contracts/go/oathcontracts/oathcontracts.go", "go/oathcontracts/oathcontracts.go"],
+  ["contracts/go/oathcontracts/oathcontracts_test.go", "go/oathcontracts/oathcontracts_test.go"],
+]) {
+  files.push(await copy(source, destination));
+}
 files.push(await copy("contracts/registry-openapi.yaml", "openapi/registry-openapi.yaml"));
 files.push(await copy("contracts/README.md", "README.md"));
 files.sort((left, right) => left.path.localeCompare(right.path));

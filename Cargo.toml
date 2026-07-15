@@ -38,7 +38,7 @@ ed25519-dalek = "2"
 getrandom = "0.3"
 # Pin the upstream quick-xml 0.41 security update until object_store 0.14.1 is
 # published. The revision is the minimal upstream dependency-only fix.
-object_store = { git = "https://github.com/apache/arrow-rs-object-store", rev = "fd44ebb9c1158660795ec22d7b11acf31c3fe113", features = ["aws", "gcp"] }
+object_store = { git = "https://github.com/apache/arrow-rs-object-store", rev = "fd44ebb9c1158660795ec22d7b11acf31c3fe113", features = ["aws", "azure", "gcp"] }
 # Keep Cargo.lock on crc-fast 1.7.0 while 1.8.0-1.10.0 depend on yanked
 # spin 0.10.0. CI's warning-fatal RustSec audit guards this lock constraint.
 # AWS-LC provides the same OIDC verification algorithms without pulling the

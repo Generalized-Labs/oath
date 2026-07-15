@@ -160,6 +160,52 @@ fn remove_existing_path(path: &Path) -> std::io::Result<()> {
     }
 }
 
+fn validated_workspace_target(project_dir: &Path, target: &Path) -> Result<PathBuf> {
+    let project = std::fs::canonicalize(project_dir).context("resolve workspace project root")?;
+    let candidate = if target.is_absolute() {
+        target.to_path_buf()
+    } else {
+        project_dir.join(target)
+    };
+
+    match std::fs::canonicalize(&candidate) {
+        Ok(canonical) => {
+            anyhow::ensure!(
+                canonical.starts_with(&project),
+                "workspace link escapes project: {}",
+                target.display()
+            );
+            Ok(canonical)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            let mut ancestor = candidate.parent();
+            while let Some(path) = ancestor {
+                match std::fs::canonicalize(path) {
+                    Ok(canonical) => {
+                        anyhow::ensure!(
+                            canonical.starts_with(&project),
+                            "workspace link escapes project: {}",
+                            target.display()
+                        );
+                        return Ok(candidate);
+                    }
+                    Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                        ancestor = path.parent();
+                    }
+                    Err(error) => {
+                        return Err(error).with_context(|| {
+                            format!("resolve workspace link ancestor {}", path.display())
+                        });
+                    }
+                }
+            }
+            anyhow::bail!("workspace link has no existing project ancestor")
+        }
+        Err(error) => Err(error)
+            .with_context(|| format!("resolve workspace link target {}", target.display())),
+    }
+}
+
 impl Linker {
     pub fn new(store: ContentStore) -> Self {
         Self { store }
@@ -236,16 +282,11 @@ impl Linker {
                     .target
                     .as_ref()
                     .context("Arborist link node has no target")?;
-                let canonical = std::fs::canonicalize(target)
-                    .with_context(|| format!("resolve workspace link target {target}"))?;
-                anyhow::ensure!(
-                    canonical.starts_with(project_dir),
-                    "workspace link escapes project: {target}"
-                );
+                let target = validated_workspace_target(project_dir, Path::new(target))?;
                 if let Some(parent) = destination.parent() {
                     std::fs::create_dir_all(parent)?;
                 }
-                symlink_dir(&canonical, &destination)?;
+                symlink_dir(&target, &destination)?;
                 result.symlinks += 1;
                 continue;
             }
@@ -1156,6 +1197,103 @@ mod tests {
                 .join("node_modules/parent/node_modules/dep/package.json")
                 .exists()
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn placement_plan_preserves_safe_dangling_workspace_links() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        std::fs::create_dir(&project).unwrap();
+        let missing = project.join("packages/missing");
+        let plan = PlacementPlan {
+            schema_version: 2,
+            planner: PlannerIdentity {
+                name: "@npmcli/arborist".into(),
+                npm: "11.12.1".into(),
+            },
+            project: project.display().to_string(),
+            nodes: vec![PlacementNode {
+                location: "node_modules/missing".into(),
+                install_name: "missing".into(),
+                name: "missing".into(),
+                version: "0.0.0".into(),
+                resolved: None,
+                integrity: None,
+                dev: false,
+                optional: false,
+                has_install_script: false,
+                reuse_existing: false,
+                link: true,
+                target: Some(missing.display().to_string()),
+                edges: vec![],
+            }],
+            removed_locations: vec![],
+            invalid_edges: vec![],
+        };
+
+        let store = ContentStore::new(tmp.path().join("store")).unwrap();
+        Linker::new(store)
+            .link_placement_plan(&plan, &project)
+            .unwrap();
+        let link = project.join("node_modules/missing");
+        assert!(
+            std::fs::symlink_metadata(&link)
+                .unwrap()
+                .file_type()
+                .is_symlink()
+        );
+        assert_eq!(std::fs::read_link(link).unwrap(), missing);
+    }
+
+    #[test]
+    fn workspace_link_rejects_parent_directory_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+
+        let error = validated_workspace_target(&project, Path::new("../outside")).unwrap_err();
+        assert!(error.to_string().contains("workspace link escapes project"));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn workspace_link_accepts_equivalent_windows_drive_case() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let target = project.join("packages/tool");
+        std::fs::create_dir_all(&target).unwrap();
+
+        let mut target_text = target.to_string_lossy().into_owned();
+        let drive = target_text.as_bytes()[0] as char;
+        let alternate_drive_case = if drive.is_ascii_lowercase() {
+            drive.to_ascii_uppercase()
+        } else {
+            drive.to_ascii_lowercase()
+        };
+        target_text.replace_range(0..1, &alternate_drive_case.to_string());
+
+        assert_eq!(
+            validated_workspace_target(&project, Path::new(&target_text)).unwrap(),
+            target.canonicalize().unwrap()
+        );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn dangling_workspace_link_rejects_symlinked_ancestor_escape() {
+        let tmp = tempfile::tempdir().unwrap();
+        let project = tmp.path().join("project");
+        let outside = tmp.path().join("outside");
+        std::fs::create_dir(&project).unwrap();
+        std::fs::create_dir(&outside).unwrap();
+        std::os::unix::fs::symlink(&outside, project.join("escaped")).unwrap();
+
+        let target = project.join("escaped/missing");
+        let error = validated_workspace_target(&project, &target).unwrap_err();
+        assert!(error.to_string().contains("workspace link escapes project"));
     }
 
     #[test]

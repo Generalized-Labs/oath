@@ -558,6 +558,31 @@ mod tests {
     }
 
     #[test]
+    fn bundled_planner_accepts_quoted_legacy_peer_deps_config() {
+        let project = tempfile::tempdir().unwrap();
+        for (directory, package) in [
+            ("peer-v1", r#"{"name":"peer","version":"1.0.0"}"#),
+            (
+                "consumer",
+                r#"{"name":"consumer","version":"1.0.0","peerDependencies":{"peer":"2.x"}}"#,
+            ),
+        ] {
+            let path = project.path().join(directory);
+            std::fs::create_dir(&path).unwrap();
+            std::fs::write(path.join("package.json"), package).unwrap();
+        }
+        std::fs::write(
+            project.path().join("package.json"),
+            r#"{"name":"root","version":"1.0.0","dependencies":{"peer":"file:./peer-v1","consumer":"file:./consumer"}}"#,
+        )
+        .unwrap();
+        std::fs::write(project.path().join(".npmrc"), "legacy-peer-deps=\"true\"\n").unwrap();
+
+        let plan = ArboristPlanner::plan(project.path()).unwrap();
+        assert!(plan.nodes.iter().any(|node| node.name == "consumer"));
+    }
+
+    #[test]
     fn planner_uses_arborists_dependency_bundle_boundary() {
         assert!(PLANNER.contains(".filter(node => !node.inDepBundle"));
         assert!(!PLANNER.contains(".filter(node => !node.inBundle &&"));
