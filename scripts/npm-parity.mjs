@@ -1,11 +1,12 @@
 #!/usr/bin/env node
-import { mkdtemp, cp, mkdir, readFile, readdir, realpath, rm, stat, writeFile } from "node:fs/promises";
+import { mkdtemp, cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join, resolve } from "node:path";
 import { spawnSync } from "node:child_process";
 import { createHash } from "node:crypto";
 import { gunzipSync } from "node:zlib";
 import { analyzeLockMutation } from "./lock-mutation.mjs";
+import { installedTree } from "./tree-evidence.mjs";
 
 const referenceNpmMajor = 11;
 const fixture = resolve(process.argv[2] ?? "tests/compat/fixtures/basic");
@@ -46,27 +47,6 @@ function treeEvidence(entries, includeTree) {
     tree_sha256: createHash("sha256").update(entries.join("\n")).digest("hex"),
     ...(includeTree ? { tree: entries } : {})
   };
-}
-
-async function tree(root) {
-  const entries = [];
-  async function walk(dir, prefix = "") {
-    for (const item of (await readdir(dir, { withFileTypes: true })).sort((a, b) => a.name.localeCompare(b.name))) {
-      if (item.name === ".package-lock.json" || item.name === "oath-lock.json" || item.name === ".oath-store-manifest.json") continue;
-      if (item.name === ".oath" || item.name === ".bin") continue;
-      const relative = join(prefix, item.name);
-      let directory = item.isDirectory();
-      let child = join(dir, item.name);
-      if (item.isSymbolicLink()) {
-        child = await realpath(child);
-        directory = (await stat(child)).isDirectory();
-      }
-      entries.push(`${directory ? "d" : "f"}:${relative}`);
-      if (directory && prefix.split(/[\\/]/).length < 4) await walk(child, relative);
-    }
-  }
-  await walk(root);
-  return entries;
 }
 
 const npmVersion = run(npmCommand, ["--version"], process.cwd()).stdout.trim();
@@ -131,7 +111,7 @@ try {
   }
   const pinnedLockPreserved = !pinnedLockPath || lockSha256 === pinnedLockSha256;
   const pinnedLockAccepted = !pinnedLockPath || lockMutation?.explained === true;
-  const npmTree = npmResult.status === 0 ? await tree(join(npmDir, "node_modules")) : [];
+  const npmTree = npmResult.status === 0 ? await installedTree(join(npmDir, "node_modules")) : [];
 
   // Real repositories can materialize tens of gigabytes. Persist the reference
   // tree in memory, then remove npm's node_modules before Oath starts so peak
@@ -163,7 +143,7 @@ try {
     const offline = mode === "offline";
     oathResult = run(oath, oathArgs, oathDir, home, offline ? { npm_config_offline: "true" } : {});
   }
-  const oathTree = oathResult.status === 0 ? await tree(join(oathDir, "node_modules")) : [];
+  const oathTree = oathResult.status === 0 ? await installedTree(join(oathDir, "node_modules")) : [];
   const npmSet = new Set(npmTree);
   const oathSet = new Set(oathTree);
   const includeTree = process.env.OATH_COMPAT_INCLUDE_TREES === "1";

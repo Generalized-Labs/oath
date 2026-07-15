@@ -509,8 +509,11 @@ fn build_manifest(
         .and_then(|v| v.as_str())
         .unwrap_or("")
         .to_string();
-    let version_matches = package_json_version == version
-        || package_json_version
+    let package_version = package_json_version
+        .strip_prefix('v')
+        .unwrap_or(&package_json_version);
+    let version_matches = package_version == version
+        || package_version
             .strip_prefix(version)
             .is_some_and(|suffix| suffix.starts_with('+') && suffix.len() > 1);
     if package_json_name != name || !version_matches {
@@ -644,6 +647,22 @@ fn safe_path_component(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn package_manifest_accepts_npm_style_leading_v_version() {
+        let tmp = tempfile::tempdir().unwrap();
+        let source = tmp.path().join("source");
+        std::fs::create_dir_all(&source).unwrap();
+        std::fs::write(
+            source.join("package.json"),
+            r#"{"name":"pkg","version":"v1.2.3"}"#,
+        )
+        .unwrap();
+
+        let manifest = build_manifest("pkg", "1.2.3", None, None, &source).unwrap();
+        assert_eq!(manifest.package_json_version, "v1.2.3");
+        assert!(build_manifest("pkg", "2.0.0", None, None, &source).is_err());
+    }
 
     #[test]
     fn package_dir_does_not_escape_store_root() {

@@ -143,6 +143,7 @@ speed claim: Oath was slower than npm and Bun on both cold and warm runs.
 - [npm workflow contract](docs/NPM_COMPATIBILITY_CONTRACT.md)
 - [Scanner threat model and limitations](docs/scanner-threat-model.md)
 - [Registry deployment and operations](docs/REGISTRY_OPERATIONS.md)
+- [Cloud-neutral container and Kubernetes deployment](deploy/kubernetes/README.md)
 - [Supported platform and compatibility matrix](docs/SUPPORTED_PLATFORMS.md)
 - [Published JSON Schemas and TypeScript contracts](contracts/)
 - [Registry OpenAPI contract](contracts/registry-openapi.yaml)

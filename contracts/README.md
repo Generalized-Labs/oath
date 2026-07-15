@@ -30,10 +30,18 @@ release, registry, organization, or policy channel.
 
 Every release publishes an `oath-agent-contracts-<tag>.tar.gz` bundle containing
 the three JSON Schemas, signed examples, TypeScript types, OpenAPI document,
-file manifest, and SHA-256 checksums. GitHub artifact attestations bind the
-bundle, manifest, and individual schemas to the exact release workflow and
-source commit. Consumers should verify both the release checksum and the
-attestation before trusting a newly downloaded schema.
+JavaScript/Python/Go signature-verification clients, file manifest, and SHA-256
+checksums. GitHub artifact attestations bind the bundle, manifest, and
+individual schemas to the exact release workflow and source commit. Consumers
+should verify both the release checksum and the attestation before trusting a
+newly downloaded schema.
+
+The reference clients verify the same three fixtures and reject a one-byte
+semantic mutation. They intentionally do not select a trusted public key or
+replace JSON Schema validation; callers must anchor accepted signer keys and
+validate the complete document before acting on its decision. The HTTP and JSON
+contracts are framework-neutral, so clients in other languages can implement
+the same closed verification procedure without an Oath runtime dependency.
 
 The reason-code set is closed within each schema version. Unknown reason codes
 must be rejected instead of interpreted heuristically. Adding a reason code to

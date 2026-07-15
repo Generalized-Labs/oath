@@ -1,0 +1,84 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: oath-registry
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: oath-registry
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: oath-registry
+    spec:
+      serviceAccountName: oath-registry
+      securityContext:
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: registry
+          image: oath-registry:local
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: oath-registry-secrets
+                  key: database-url
+            - name: OATH_PUBLIC_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: oath-registry-config
+                  key: public-url
+            - name: OATH_OBJECT_BACKEND
+              valueFrom:
+                configMapKeyRef:
+                  name: oath-registry-config
+                  key: object-backend
+            - name: OATH_OBJECT_BUCKET
+              valueFrom:
+                configMapKeyRef:
+                  name: oath-registry-config
+                  key: object-bucket
+            - name: OATH_REQUIRE_STEP_UP_APPROVAL
+              value: "true"
+          ports:
+            - name: http
+              containerPort: 4873
+          livenessProbe:
+            httpGet:
+              path: /livez
+              port: http
+          readinessProbe:
+            httpGet:
+              path: /readyz
+              port: http
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          securityContext:
+            allowPrivilegeEscalation: false
+            capabilities:
+              drop: ["ALL"]
+            readOnlyRootFilesystem: true
+            runAsGroup: 10001
+            runAsNonRoot: true
+            runAsUser: 10001
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/oath-registry
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: oath-registry-data
+        - name: tmp
+          emptyDir:
+            sizeLimit: 256Mi

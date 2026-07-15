@@ -20,6 +20,23 @@ behind a TLS-terminating reverse proxy, restrict the admin and metrics routes,
 and set request-size and rate limits there. Do not expose the service directly
 to the internet.
 
+The same binary is packaged by [`deploy/Dockerfile`](../deploy/Dockerfile) as a
+rootless OCI container. For an isolated local beta stack:
+
+```sh
+export POSTGRES_PASSWORD="$(openssl rand -hex 24)"
+export OATH_REGISTRY_TOKEN="$(openssl rand -hex 32)"
+docker compose -f deploy/compose.yaml up --build
+curl --fail http://localhost:4873/readyz
+```
+
+The Compose stack is for local validation, not production. The cloud-neutral
+Kustomize base in [`deploy/kubernetes`](../deploy/kubernetes/README.md) expects
+managed PostgreSQL, managed object storage, an ingress or service mesh for TLS,
+and platform secret/workload-identity controllers. The container contract is
+ordinary Linux/OCI and does not depend on a cloud vendor, application
+framework, or caller language.
+
 Required configuration:
 
 | Variable | Purpose |
@@ -38,13 +55,19 @@ One-time bootstrap configuration:
 | `OATH_REGISTRY_ORG` | Organization receiving the bootstrap token; defaults to `default`. |
 
 Object storage defaults to the local directory under `OATH_REGISTRY_DATA`.
-Production beta deployments should use `OATH_OBJECT_BACKEND=s3`, `r2`, or `gcs`
-with `OATH_OBJECT_BUCKET`; R2/S3-compatible endpoints use
+Production beta deployments should use `OATH_OBJECT_BACKEND=s3`, `r2`, `gcs`,
+or `azure` with `OATH_OBJECT_BUCKET`; R2/S3-compatible endpoints use
 `OATH_OBJECT_ENDPOINT`. Provider credentials use the standard environment
 variables understood by the object-store SDK. A read-repair replica can be
 configured with `OATH_OBJECT_REPLICA_BACKEND`,
 `OATH_OBJECT_REPLICA_BUCKET`, `OATH_OBJECT_REPLICA_ENDPOINT`, or
 `OATH_OBJECT_REPLICA_ROOT`.
+
+For Azure Blob Storage, `OATH_OBJECT_BUCKET` is the container name. Use the
+standard `AZURE_STORAGE_*` variables for an account key, service principal, or
+workload identity. The replica backend accepts the same provider names as the
+primary. Do not put long-lived cloud credentials in image layers or checked-in
+Kubernetes resources.
 
 Optional integrations are fail-closed configuration pairs:
 
@@ -149,7 +172,10 @@ failover.
 - OIDC membership exchange selects one organization per subject.
 - Non-package account and billing audit events have not all migrated to the
   transactional outbox yet.
-- External witnesses, KMS signing, and Rekor-backed attestations remain GA work.
+- External witnesses, remote/KMS signing, and Rekor-backed attestations remain
+  GA work. The included Kubernetes base therefore runs one replica with a
+  protected file-backed signing-key volume; scaling it before shared remote
+  signing exists is unsupported.
 - Service SLOs, restore targets, revocation propagation, external security
   review, and design-partner adoption have not yet met the GA gates.
 
