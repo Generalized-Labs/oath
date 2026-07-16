@@ -3,6 +3,14 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [Unreleased]
+
+### Changed
+- The Homebrew formula now installs the immutable Apache-2.0 `v0.2.4` source
+  archive with its verified SHA-256.
+- `oath init` now writes `UNLICENSED` instead of choosing MIT on behalf of a
+  new project's author.
+
 ## [0.2.4] - 2026-07-15
 
 ### Changed
