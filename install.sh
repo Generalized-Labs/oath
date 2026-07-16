@@ -20,14 +20,23 @@ case "$OS" in
 esac
 
 BINARY="oath-${PLATFORM}-${ARCH}"
-if ! LATEST_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest"); then
-  echo "oath: could not resolve the latest release of ${REPO}" >&2
-  exit 1
-fi
-LATEST=${LATEST_URL##*/}
-if [ -z "$LATEST" ] || [ "$LATEST" = "latest" ]; then
-  echo "oath: could not determine the latest release of ${REPO}" >&2
-  exit 1
+if [ -n "${OATH_VERSION:-}" ]; then
+  LATEST=$OATH_VERSION
+  case "$LATEST" in
+    *[!v0-9.]*|*.*.*.*) echo "oath: OATH_VERSION must be a release tag such as v0.2.4" >&2; exit 1 ;;
+    v[0-9]*.[0-9]*.[0-9]*) ;;
+    *) echo "oath: OATH_VERSION must be a release tag such as v0.2.4" >&2; exit 1 ;;
+  esac
+else
+  if ! LATEST_URL=$(curl -fsSLI -o /dev/null -w '%{url_effective}' "https://github.com/${REPO}/releases/latest"); then
+    echo "oath: could not resolve the latest release of ${REPO}" >&2
+    exit 1
+  fi
+  LATEST=${LATEST_URL##*/}
+  if [ -z "$LATEST" ] || [ "$LATEST" = "latest" ]; then
+    echo "oath: could not determine the latest release of ${REPO}" >&2
+    exit 1
+  fi
 fi
 BASE="https://github.com/${REPO}/releases/download/${LATEST}"
 URL="${BASE}/${BINARY}"

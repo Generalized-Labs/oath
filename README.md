@@ -31,6 +31,13 @@ The installer selects the correct macOS/Linux asset, downloads its `.sha256`
 sidecar, verifies the binary, and fails closed when the checksum is missing or
 wrong.
 
+To install the exact `v0.2.4` developer preview instead of the latest stable
+release:
+
+```sh
+curl -fsSL https://raw.githubusercontent.com/Generalized-Labs/oath/master/install.sh | OATH_VERSION=v0.2.4 sh
+```
+
 ### 2. Create and verify a small project
 
 ```sh
@@ -69,7 +76,8 @@ window. JSON modes reserve stdout for one parseable document.
 > the PostgreSQL registry control plane, portable deployment, signed agent
 > contracts, expanded evidence, native capability reporting, and Windows assets.
 > Preview users can download its release
-> assets or build `master` from source; `v0.1.7` remains the stable binary. The
+> assets, use the pinned installer command above, or build `master` from source;
+> `v0.1.7` remains the stable binary. The
 > signed `v0.2.0` tag did not publish a GitHub release after its Linux artifact
 > builds failed, and it remains immutable as part of the release record.
 
