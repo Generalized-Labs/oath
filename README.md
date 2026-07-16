@@ -322,8 +322,13 @@ oath exec --sandbox-mode node --allow-degraded-sandbox <package>
   `no_new_privs`, and resource limits.
 - Windows uses a restricted token, unique AppContainer profile, ACL-scoped
   writable roots, and Job Object limits.
-- macOS has no verified native backend. Agent and auto mode therefore deny
-  execution instead of silently selecting weaker containment.
+- macOS uses a runtime-probed Seatbelt profile that denies file contents and
+  writes outside the captured plan, denies network by default, strips the
+  environment, constrains child processes, and applies kernel resource limits.
+  The active Node executable is canonicalized and granted explicitly, including
+  binaries managed by Homebrew, `nvm`, `fnm`, or Volta.
+  Apple deprecates the `sandbox-exec` launcher, so every process verifies the
+  live controls and fails closed if the backend stops enforcing them.
 - Node permission mode requires `--allow-degraded-sandbox`; assessments record
   that process and resource isolation are absent. Agent mode also denies
   outbound network by default.

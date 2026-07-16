@@ -3154,7 +3154,7 @@ fn run_node_binary(
     sandbox_mode: ExecSandboxMode,
     sandbox_plan: Option<&oath_sandbox::SandboxPlan>,
 ) -> Result<std::process::ExitStatus> {
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     let _ = sandbox_plan;
     #[cfg(target_os = "linux")]
     if sandbox_mode == ExecSandboxMode::Native {
@@ -3173,6 +3173,28 @@ fn run_node_binary(
         return oath_sandbox::windows::run(
             plan,
             std::path::Path::new("node.exe"),
+            &std::iter::once(bin_path.display().to_string())
+                .chain(args.iter().cloned())
+                .collect::<Vec<_>>(),
+        );
+    }
+    #[cfg(target_os = "macos")]
+    if sandbox_mode == ExecSandboxMode::Native {
+        let plan = sandbox_plan.context("native sandbox requires a sandbox plan")?;
+        let node = std::process::Command::new("node")
+            .args(["-p", "process.execPath"])
+            .output()
+            .context("failed to resolve the active Node executable")?;
+        anyhow::ensure!(node.status.success(), "active Node executable probe failed");
+        let node = std::path::PathBuf::from(String::from_utf8(node.stdout)?.trim());
+        let node = std::fs::canonicalize(&node).with_context(|| {
+            format!("failed to canonicalize Node executable {}", node.display())
+        })?;
+        let mut plan = plan.clone();
+        plan.read_only_paths.push(node.clone());
+        return oath_sandbox::macos::run(
+            &plan,
+            &node,
             &std::iter::once(bin_path.display().to_string())
                 .chain(args.iter().cloned())
                 .collect::<Vec<_>>(),

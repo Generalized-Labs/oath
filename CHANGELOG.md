@@ -5,6 +5,8 @@ All notable changes to oath are documented here. Format follows
 
 ## [Unreleased]
 
+## [0.2.5] - 2026-07-16
+
 ### Changed
 - The Homebrew formula now installs the immutable Apache-2.0 `v0.2.4` source
   archive with its verified SHA-256.
@@ -13,6 +15,22 @@ All notable changes to oath are documented here. Format follows
 - The installer accepts an explicit `OATH_VERSION` release tag so developer
   previews can be installed with the same fail-closed checksum verification as
   the latest stable release.
+- macOS native mode uses a runtime-probed Seatbelt policy with default-deny file
+  contents and process execution, scoped writes, network denial, environment
+  stripping, inherited child restrictions, kernel limits, and process-group
+  memory enforcement. The active Node binary is granted by canonical path so
+  Homebrew and user-scoped version managers remain compatible.
+
+### Fixed
+- The released CLI now generates `UNLICENSED` project metadata instead of the
+  historical MIT default.
+- macOS auto and agent modes select native containment only after the live
+  adversarial probe passes; probe or launcher failure remains fail-closed.
+
+### Verified
+- The macOS capability probe covers outside and system-secret reads, outside
+  writes, child-process bypass, environment leakage, local network access, and
+  resource limits. Protected CI checksums and attests the capability report.
 
 ## [0.2.4] - 2026-07-15
 

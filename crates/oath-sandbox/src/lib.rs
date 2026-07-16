@@ -9,6 +9,8 @@ pub mod policy;
 
 #[cfg(target_os = "linux")]
 pub mod linux;
+#[cfg(target_os = "macos")]
+pub mod macos;
 #[cfg(target_os = "windows")]
 pub mod windows;
 
@@ -36,17 +38,7 @@ pub fn native_capabilities() -> BackendCapabilities {
     }
     #[cfg(target_os = "macos")]
     {
-        BackendCapabilities {
-            backend: "unavailable".into(),
-            available: false,
-            filesystem_isolation: false,
-            network_isolation: false,
-            process_isolation: false,
-            resource_limits: false,
-            degraded_reason: Some(
-                "macOS native containment is unavailable: Oath does not trust deprecated sandbox-exec/Seatbelt for strict enforcement; use a Linux strict runner or explicitly acknowledge degraded Node permissions".into(),
-            ),
-        }
+        macos::capabilities()
     }
     #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
@@ -65,6 +57,11 @@ pub fn native_capabilities() -> BackendCapabilities {
 /// Proves the advertised native controls by executing a minimal strict plan.
 /// Release evidence must use this function; tool presence alone is not proof.
 pub fn verified_native_capabilities() -> BackendCapabilities {
+    static VERIFIED: std::sync::OnceLock<BackendCapabilities> = std::sync::OnceLock::new();
+    VERIFIED.get_or_init(verify_native_capabilities).clone()
+}
+
+fn verify_native_capabilities() -> BackendCapabilities {
     let mut capabilities = native_capabilities();
     if !capabilities.available {
         return capabilities;
@@ -77,7 +74,7 @@ pub fn verified_native_capabilities() -> BackendCapabilities {
             return capabilities;
         }
     };
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     let _ = &root;
     #[cfg(target_os = "linux")]
     let result = {
@@ -93,7 +90,9 @@ pub fn verified_native_capabilities() -> BackendCapabilities {
             &["/C".into(), "exit 0".into()],
         )
     };
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    let result = macos::verify(root.path()).map(|()| ExitStatusSuccess::success());
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     let result: anyhow::Result<std::process::ExitStatus> =
         Err(anyhow::anyhow!("unsupported platform"));
     match result {
@@ -120,9 +119,24 @@ pub fn verified_native_capabilities() -> BackendCapabilities {
     }
 }
 
+#[cfg(target_os = "macos")]
+struct ExitStatusSuccess;
+
+#[cfg(target_os = "macos")]
+impl ExitStatusSuccess {
+    fn success() -> std::process::ExitStatus {
+        use std::os::unix::process::ExitStatusExt;
+        std::process::ExitStatus::from_raw(0)
+    }
+}
+
 /// Returns whether this platform is in scope for OS-level sandboxing.
 pub fn platform_supported() -> bool {
-    cfg!(any(target_os = "windows", target_os = "linux"))
+    cfg!(any(
+        target_os = "windows",
+        target_os = "linux",
+        target_os = "macos"
+    ))
 }
 
 #[cfg(test)]
@@ -133,20 +147,23 @@ mod tests {
     fn reports_supported_launch_platforms() {
         assert_eq!(
             platform_supported(),
-            cfg!(any(target_os = "windows", target_os = "linux"))
+            cfg!(any(
+                target_os = "windows",
+                target_os = "linux",
+                target_os = "macos"
+            ))
         );
     }
 
     #[cfg(target_os = "macos")]
     #[test]
-    fn macos_explains_the_fail_closed_boundary() {
+    fn macos_advertises_only_runtime_verified_controls() {
         let capabilities = native_capabilities();
-        assert!(!capabilities.available);
-        assert!(
-            capabilities
-                .degraded_reason
-                .as_deref()
-                .is_some_and(|reason| reason.contains("macOS native containment is unavailable"))
-        );
+        assert_eq!(capabilities.backend, "macos-seatbelt-v1");
+        assert!(capabilities.available);
+        assert!(capabilities.filesystem_isolation);
+        assert!(capabilities.network_isolation);
+        assert!(capabilities.process_isolation);
+        assert!(capabilities.resource_limits);
     }
 }

@@ -7,7 +7,7 @@
 | npm behavior reference | npm 11.12.1, canary against latest npm 11 | Uncovered workflows are documented; no silent npm fallback |
 | Node.js | Node 22.14+ and 24.x in evidence workflows | Unsupported runtimes fail before package execution |
 | Linux | Ubuntu 24.04 strict native containment; Ubuntu 22.04 fail-closed capability evidence | Missing Landlock/seccomp/bubblewrap controls deny strict execution |
-| macOS | Apple Silicon and x86-64 CLI; explicitly acknowledged Node permission mode | Agent/auto execution denies when native containment is unavailable unless policy passes `--allow-degraded-sandbox`. For strong execution containment, use a Linux strict runner; Oath does not treat deprecated `sandbox-exec`/Seatbelt as sufficient proof. |
+| macOS | macOS 15 native Seatbelt evidence; Apple Silicon and x86-64 release builds | Oath runtime-probes filesystem, network, process, environment, and resource controls before selecting native mode. Apple deprecates the `sandbox-exec` interface, so a missing or failed probe denies strict execution instead of downgrading. |
 | Windows | Server 2022/2025 containment evidence; x86-64 and ARM64 release builds | Missing AppContainer, token, ACL, or Job Object controls deny strict execution |
 | Registry | PostgreSQL 17 plus local, S3/R2, or GCS object storage | Readiness fails on unavailable PostgreSQL or object storage |
 

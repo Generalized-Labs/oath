@@ -25,13 +25,16 @@ Oath has two independent release programs:
    lock may differ only through the paired `devOptional: true` to `dev: true`
    normalization; every changed path is evidence, and every other mutation
    fails. Installed package paths and contents remain exact.
-2. Native security runs on Ubuntu 22.04, Ubuntu 24.04, Windows Server 2022, and
-   Windows Server 2025. Strict Linux mode runs only when the launcher verifies
-   its required namespaces, seccomp, Landlock, resource, filesystem, and
-   network controls on the native kernel. Ubuntu 22.04 must prove fail-closed
-   behavior when the full contract is unavailable. Missing controls never
-   trigger a compatibility fallback. Capability reports are checksummed,
-   attested through GitHub OIDC, and retained with the test output.
+2. Native security runs on Ubuntu 22.04, Ubuntu 24.04, macOS 15, Windows Server
+   2022, and Windows Server 2025. Strict Linux mode runs only when the launcher
+   verifies its required namespaces, seccomp, Landlock, resource, filesystem,
+   and network controls on the native kernel. macOS proves its deprecated
+   Seatbelt launcher still enforces default-deny file contents, scoped writes,
+   network denial, child inheritance, environment stripping, and resource
+   limits. Ubuntu 22.04 must prove fail-closed behavior when the full contract
+   is unavailable. Missing controls never trigger a compatibility fallback.
+   Capability reports are checksummed, attested through GitHub OIDC, and
+   retained with the test output.
 
 Moving repository HEAD is never a release input. Candidate refresh and npm
 eligibility preflight happen in a separate canary process.
@@ -54,6 +57,6 @@ eligibility preflight happen in a separate canary process.
 - 10,000/10,000 generated stress executions, explicitly labeled as repetitions.
 - All 100 reviewed independent behavioral workflows pass on the OS matrix.
 - 250/250 pinned real projects, 25 in each required category.
-- Zero successful Linux or Windows adversarial escapes.
+- Zero successful Linux, macOS, or Windows adversarial escapes.
 - No skipped/unavailable native controls.
 - Checksummed and attested capability reports for every native matrix entry.
