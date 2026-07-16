@@ -1812,7 +1812,7 @@ fn cmd_init(name: Option<&str>) -> Result<()> {
         "main": "index.js",
         "scripts": {"test": "echo \"Error: no test specified\" && exit 1"},
         "keywords": [],
-        "license": "MIT"
+        "license": "UNLICENSED"
     });
     let content = serde_json::to_string_pretty(&pkg)?;
     std::fs::write("package.json", &content)?;

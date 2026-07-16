@@ -14,13 +14,15 @@ function requireMatch(contents, pattern, label) {
   }
 }
 
-const [cargoToml, packageJson, packageLock, readme, notice, license] = await Promise.all([
+const [cargoToml, packageJson, packageLock, readme, notice, license, formula, cliMain] = await Promise.all([
   read("Cargo.toml"),
   read("website/package.json"),
   read("website/package-lock.json"),
   read("README.md"),
   read("NOTICE"),
   read("LICENSE"),
+  read("homebrew/oath.rb"),
+  read("crates/oath-cli/src/main.rs"),
 ]);
 
 requireMatch(cargoToml, /^license = "Apache-2\.0"$/m, "Cargo workspace metadata");
@@ -31,6 +33,15 @@ requireMatch(
   /^                                 Apache License\n                           Version 2\.0, January 2004$/m,
   "LICENSE",
 );
+requireMatch(formula, /^  license "Apache-2\.0"$/m, "Homebrew formula");
+requireMatch(
+  formula,
+  /^  url "https:\/\/github\.com\/Generalized-Labs\/oath\/archive\/refs\/tags\/v0\.2\.4\.tar\.gz"$/m,
+  "Homebrew formula release URL",
+);
+if (!cliMain.includes('"license": "UNLICENSED"')) {
+  throw new Error("oath init must not assign a license on the user's behalf");
+}
 
 const website = JSON.parse(packageJson);
 const lock = JSON.parse(packageLock);
