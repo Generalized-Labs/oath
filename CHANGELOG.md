@@ -10,6 +10,9 @@ All notable changes to oath are documented here. Format follows
   archive with its verified SHA-256.
 - `oath init` now writes `UNLICENSED` instead of choosing MIT on behalf of a
   new project's author.
+- The installer accepts an explicit `OATH_VERSION` release tag so developer
+  previews can be installed with the same fail-closed checksum verification as
+  the latest stable release.
 
 ## [0.2.4] - 2026-07-15
 
