@@ -119,7 +119,7 @@ fn which_node() -> Result<PathBuf, ()> {
 
 /// Check if we're running on macOS AND sandbox-exec works with restrictions
 pub fn is_available() -> bool {
-    // sandbox-exec with deny-default profiles crashes on macOS 15+ (Sonoma)
+    // sandbox-exec deny-default profiles are not reliable on macOS 15 and later.
     // Apple deprecated Seatbelt; restrict profiles abort. Only (allow default) works.
     // Until Apple ships a replacement API, we fall back to env-stripping + timeout.
     false

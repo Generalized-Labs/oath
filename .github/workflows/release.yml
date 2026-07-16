@@ -102,6 +102,7 @@ jobs:
           npm ci --prefix website
           npm audit --prefix website --audit-level=moderate
           npm run build --prefix website
+          node scripts/license-check.mjs
 
   build:
     needs: verify
@@ -221,6 +222,8 @@ jobs:
 
       - name: Aggregate checksums
         run: |
+          sha256sum LICENSE > LICENSE.sha256
+          sha256sum NOTICE > NOTICE.sha256
           cat ./*.sha256 > checksums.txt
           echo "=== checksums.txt ==="
           cat checksums.txt
@@ -257,6 +260,8 @@ jobs:
             oath-linux-arm64
             oath-windows-x64.exe
             oath-windows-arm64.exe
+            LICENSE
+            NOTICE
             oath-agent-contracts-${{ github.ref_name }}.tar.gz
             contract-dist/contract-manifest.json
             contract-dist/schemas/exec-assessment-v3.schema.json
@@ -302,6 +307,10 @@ jobs:
             oath-windows-x64.exe.sha256 \
             oath-windows-arm64.exe \
             oath-windows-arm64.exe.sha256 \
+            LICENSE \
+            LICENSE.sha256 \
+            NOTICE \
+            NOTICE.sha256 \
             "oath-agent-contracts-${GITHUB_REF_NAME}.tar.gz" \
             "oath-agent-contracts-${GITHUB_REF_NAME}.tar.gz.sha256" \
             contract-dist/contract-manifest.json \
@@ -338,6 +347,10 @@ jobs:
           oath-windows-x64.exe.sha256
           publish-assessment-v2.schema.json
           registry-verdict-v1.schema.json
+          LICENSE
+          LICENSE.sha256
+          NOTICE
+          NOTICE.sha256
           EOF
           gh release view "$GITHUB_REF_NAME" \
             --json assets \

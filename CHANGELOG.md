@@ -3,6 +3,27 @@
 All notable changes to oath are documented here. Format follows
 [Keep a Changelog](https://keepachangelog.com/); versions follow semver.
 
+## [0.2.4] - 2026-07-15
+
+### Changed
+- Oath source, documentation, website metadata, and future release artifacts are
+  licensed under Apache License 2.0, with a root `NOTICE` file and CI-enforced
+  license metadata consistency.
+- Native macOS containment remains explicitly unavailable and fail-closed; Oath
+  does not relabel Node permission mode as equivalent OS process isolation.
+
+### Fixed
+- The end-to-end launch check now derives its sandbox expectation from verified
+  runtime capabilities. It requires native mode where all controls pass, proves
+  automatic denial where they do not, and tests degraded Node permissions only
+  after explicit acknowledgement.
+
+### Verified
+- Historical releases remain under the license granted with those immutable
+  artifacts. This release changes current and future Oath licensing and does
+  not attempt to revoke existing grants.
+- Oath remains a developer preview and retains every open GA gate.
+
 ## [0.2.3] - 2026-07-15
 
 ### Fixed

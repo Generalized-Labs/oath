@@ -142,7 +142,7 @@ managed multi-tenant and managed isolated deployments using the same binaries,
 APIs, evidence contract, upgrade process, and backup controls.
 
 The CLI, schemas, decision verification, and local transparency tooling remain
-MIT. The commercial product has three entry messages over one trust chain: safe
+Apache-2.0. The commercial product has three entry messages over one trust chain: safe
 execution for agents, enforceable policy for security teams, and reversible,
 evidence-backed releases for publishers.
 

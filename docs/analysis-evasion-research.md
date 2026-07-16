@@ -336,7 +336,7 @@ Socket.dev is the most sophisticated npm security tool. Their approach:
 7. **Protestware detection:** Locale/timezone/IP checks for conditional payload patterns.
 8. **Dependency confusion:** Scoped vs unscoped package name conflicts.
 9. **Maintainer analysis:** New maintainer on old package, abandoned package (no activity >2 years), email/GitHub account recently created.
-10. **License changes:** MIT -> proprietary signals monetization attacks.
+10. **License changes:** permissive open source -> proprietary signals monetization attacks.
 11. **AI/LLM-hallucinated package names (slopsquatting):** They scan for common LLM-confabulated names.
 
 **ML model signals (inferred from Socket blog posts):**

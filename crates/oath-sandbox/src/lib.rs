@@ -34,7 +34,21 @@ pub fn native_capabilities() -> BackendCapabilities {
     {
         windows::capabilities()
     }
-    #[cfg(not(any(target_os = "linux", target_os = "windows")))]
+    #[cfg(target_os = "macos")]
+    {
+        BackendCapabilities {
+            backend: "unavailable".into(),
+            available: false,
+            filesystem_isolation: false,
+            network_isolation: false,
+            process_isolation: false,
+            resource_limits: false,
+            degraded_reason: Some(
+                "macOS native containment is unavailable: Oath does not trust deprecated sandbox-exec/Seatbelt for strict enforcement; use a Linux strict runner or explicitly acknowledge degraded Node permissions".into(),
+            ),
+        }
+    }
+    #[cfg(not(any(target_os = "linux", target_os = "windows", target_os = "macos")))]
     {
         BackendCapabilities {
             backend: "unavailable".into(),
@@ -120,6 +134,19 @@ mod tests {
         assert_eq!(
             platform_supported(),
             cfg!(any(target_os = "windows", target_os = "linux"))
+        );
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn macos_explains_the_fail_closed_boundary() {
+        let capabilities = native_capabilities();
+        assert!(!capabilities.available);
+        assert!(
+            capabilities
+                .degraded_reason
+                .as_deref()
+                .is_some_and(|reason| reason.contains("macOS native containment is unavailable"))
         );
     }
 }
