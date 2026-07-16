@@ -616,6 +616,35 @@ jobs:
           name: native-windows-${{ matrix.os }}
           path: sandbox-capabilities-windows.*
 
+  native-macos-security:
+    if: github.event_name == 'pull_request' || github.event_name == 'schedule' || github.event_name == 'workflow_dispatch'
+    runs-on: macos-15
+    permissions:
+      contents: read
+      id-token: write
+      attestations: write
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+      - run: rustup toolchain install stable && rustup default stable
+      - run: cargo build --release --locked --bin oath
+      - name: Prove native Seatbelt backend
+        run: |
+          target/release/oath sandbox-info --json > sandbox-capabilities-macos.json
+          jq -e '.available and .filesystem_isolation and .network_isolation and .process_isolation and .resource_limits and .backend == "macos-seatbelt-v1"' sandbox-capabilities-macos.json
+      - name: Run filesystem, environment, network, process, and resource adversarial tests
+        run: cargo test --locked -p oath-sandbox macos::tests -- --nocapture --test-threads=1
+      - run: shasum -a 256 sandbox-capabilities-macos.json > sandbox-capabilities-macos.sha256
+      - name: Sign capability report with GitHub artifact attestation
+        if: github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository
+        uses: actions/attest-build-provenance@0f67c3f4856b2e3261c31976d6725780e5e4c373
+        with:
+          subject-path: sandbox-capabilities-macos.json
+      - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
+        if: always()
+        with:
+          name: native-macos-macos-15
+          path: sandbox-capabilities-macos.*
+
   release-evidence-gate:
     if: always() && (github.event_name == 'schedule' || github.event_name == 'workflow_dispatch')
     needs:
@@ -635,6 +664,7 @@ jobs:
       - compatibility-scale
       - real-project-aggregate
       - native-linux-security
+      - native-macos-security
       - native-windows-security
       - reliability-drills
     runs-on: ubuntu-latest
@@ -650,6 +680,7 @@ jobs:
           BEHAVIORS: ${{ needs.independent-behavioral.result }}
           PROJECTS: ${{ needs.real-project-aggregate.result }}
           LINUX: ${{ needs.native-linux-security.result }}
+          MACOS: ${{ needs.native-macos-security.result }}
           WINDOWS: ${{ needs.native-windows-security.result }}
           REGISTRY: ${{ needs.postgres-registry.result }}
           REGISTRY_CONTAINER: ${{ needs.registry-container.result }}
@@ -669,6 +700,7 @@ jobs:
           test "$FIXTURES" = success
           test "$PROJECTS" = success
           test "$LINUX" = success
+          test "$MACOS" = success
           test "$WINDOWS" = success
           test "$REGISTRY" = success
           test "$REGISTRY_CONTAINER" = success

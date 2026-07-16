@@ -116,9 +116,10 @@ native-containment, registry, audit, reliability, 10,000-execution, and
   in the same PostgreSQL transaction. An idempotent worker appends signed log
   entries with retry. Full process-kill, restore, key-rotation, and regional
   failover drills remain operator gates.
-- Native macOS containment signing/notarization and an external sandbox escape
-  review remain open. Unsupported requested containment must continue to fail
-  closed unless policy explicitly permits degraded execution.
+- Native macOS Seatbelt containment is runtime-probed and covered by an
+  attested macOS 15 adversarial job. Apple's launcher interface remains
+  deprecated, and signing/notarization plus an external sandbox escape review
+  remain open. A failed probe continues to deny strict execution.
 
 ## Required tag sequence
 
