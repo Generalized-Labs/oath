@@ -6,10 +6,10 @@ resolver = "2"
 # oath-workspace is included via crates/* glob
 
 [workspace.package]
-version = "0.2.3"
+version = "0.2.4"
 edition = "2024"
 rust-version = "1.94"
-license = "MIT"
+license = "Apache-2.0"
 authors = ["Generalized Labs"]
 repository = "https://github.com/Generalized-Labs/oath"
 

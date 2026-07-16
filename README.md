@@ -64,7 +64,7 @@ procedure live in [`contracts/`](contracts/README.md).
 window. JSON modes reserve stdout for one parseable document.
 
 > [!IMPORTANT]
-> The installer follows the latest non-prerelease GitHub release. The `v0.2.3`
+> The installer follows the latest non-prerelease GitHub release. The `v0.2.4`
 > line is a developer preview that adds staged publishing, signed transfers,
 > the PostgreSQL registry control plane, portable deployment, signed agent
 > contracts, expanded evidence, native capability reporting, and Windows assets.
@@ -75,7 +75,7 @@ window. JSON modes reserve stdout for one parseable document.
 
 ## Release status
 
-`v0.2.3` is a developer preview, not a general-availability
+`v0.2.4` is a developer preview, not a general-availability
 claim. The tested CLI workflow slices and native Linux/Windows boundaries have
 public evidence. The hosted registry remains a business-beta control plane, and
 the broader GA gates for detection quality, performance, signed platform
@@ -142,7 +142,7 @@ speed claim: Oath was slower than npm and Bun on both cold and warm runs.
 
 - [Live evidence website](https://generalized-labs.github.io/oath/)
 - [Compatibility and security methodology](docs/GA_EVIDENCE.md)
-- [v0.2.3 release-readiness report](docs/RELEASE_READINESS.md)
+- [v0.2.4 release-readiness report](docs/RELEASE_READINESS.md)
 - [npm workflow contract](docs/NPM_COMPATIBILITY_CONTRACT.md)
 - [Scanner threat model and limitations](docs/scanner-threat-model.md)
 - [Registry deployment and operations](docs/REGISTRY_OPERATIONS.md)
@@ -204,7 +204,7 @@ cargo build --release --locked --bin oath
 .\target\release\oath.exe --version
 ```
 
-Windows Server 2022 and 2025 native-containment checks pass in CI. The `v0.2.3`
+Windows Server 2022 and 2025 native-containment checks pass in CI. The `v0.2.4`
 developer-preview release includes x86-64 and ARM64 Windows binaries. Do not use
 the Unix installer on Windows.
 
@@ -231,7 +231,7 @@ oath log                           # inspect the local transparency log
 oath score lodash                  # inspect package evidence
 ```
 
-These commands are available in the `v0.2.3` developer preview and on `master`:
+These commands are available in the `v0.2.4` developer preview and on `master`:
 
 ```sh
 oath sandbox-info --json
@@ -360,4 +360,4 @@ fixture through [GitHub Issues](https://github.com/Generalized-Labs/oath/issues)
 
 ## License
 
-[MIT](LICENSE)
+[Apache License 2.0](LICENSE)

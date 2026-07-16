@@ -46,6 +46,9 @@ echo "using cargo target dir: $CARGO_TARGET_DIR"
 echo "==> format"
 cargo fmt --all -- --check
 
+echo "==> license declarations"
+node scripts/license-check.mjs
+
 echo "==> clippy"
 cargo clippy --workspace --locked --all-targets -- -D warnings
 
@@ -122,8 +125,19 @@ echo "==> release smoke exec json"
   BIN="$CARGO_TARGET_DIR/release/oath"
   HOME="$SMOKE_HOME" "$BIN" exec --dry-run --json is-number > exec.json
   node -e 'const r = require("./exec.json"); if (r.name !== "is-number" || r.decision === "deny" || r.sandbox_effective !== "off") process.exit(1)'
-  HOME="$SMOKE_HOME" "$BIN" exec --dry-run --json --sandbox is-number > exec-sandbox.json
-  node -e 'const r = require("./exec-sandbox.json"); if (r.name !== "is-number" || r.sandbox_mode !== "auto" || r.sandbox_effective !== "node") process.exit(1)'
+
+  HOME="$SMOKE_HOME" "$BIN" sandbox-info --json > sandbox-capabilities.json
+  if node -e 'const c = require("./sandbox-capabilities.json"); process.exit(c.available && c.filesystem_isolation && c.network_isolation && c.process_isolation && c.resource_limits ? 0 : 1)'; then
+    HOME="$SMOKE_HOME" "$BIN" exec --dry-run --json --sandbox is-number > exec-sandbox.json
+    node -e 'const r = require("./exec-sandbox.json"); if (r.name !== "is-number" || r.sandbox_mode !== "auto" || r.sandbox_effective !== "native") process.exit(1)'
+  else
+    if HOME="$SMOKE_HOME" "$BIN" exec --dry-run --json --sandbox is-number; then
+      echo "expected automatic sandbox mode to fail closed without complete native containment" >&2
+      exit 1
+    fi
+    HOME="$SMOKE_HOME" "$BIN" exec --dry-run --json --sandbox --allow-degraded-sandbox is-number > exec-sandbox.json
+    node -e 'const r = require("./exec-sandbox.json"); if (r.name !== "is-number" || r.sandbox_mode !== "auto" || r.sandbox_effective !== "node" || !r.sandbox_degraded_allowed) process.exit(1)'
+  fi
 )
 
 echo "==> release smoke run args"

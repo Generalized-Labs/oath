@@ -50,7 +50,7 @@ needs the whole stack (publishing integrations, registry, CDN, verification plat
 CLIs) — expensive before, tractable now. Socket already AI-audits releases and catches
 exploits before npm does; there's enormous room to build better on top of / instead of npm.
 
-## Where Oath stands today (v0.2.3 developer preview)
+## Where Oath stands today (v0.2.4 developer preview)
 
 The install/exec side is implemented for the documented npm 11 workflow slices:
 integrity-verified fetches, transactional linking, block-by-default dependency
@@ -71,5 +71,5 @@ detection or production-service proof. The complete detection targets,
 performance targets, platform code signing, public registry/CDN operations,
 anti-squatting governance, external security review, reliability SLOs, and
 commercial adoption gates in [RELEASE_COMPLETE_PLAN.md](RELEASE_COMPLETE_PLAN.md)
-remain open. `v0.2.3` must be described as a developer preview or private beta,
+remain open. `v0.2.4` must be described as a developer preview or private beta,
 not a production-wide npm replacement.
