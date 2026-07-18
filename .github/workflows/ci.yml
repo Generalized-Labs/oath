@@ -47,7 +47,9 @@ jobs:
       - name: Test installed-tree evidence normalization
         run: node --test scripts/tree-evidence.test.mjs
       - name: Test GA evidence gate derivation
-        run: node --test scripts/generate-ga-evidence.test.mjs
+        run: |
+          node --test scripts/generate-ga-evidence.test.mjs
+          node -e "for (const path of require('fs').readdirSync('contracts').filter((path) => path.endsWith('.schema.json'))) JSON.parse(require('fs').readFileSync('contracts/' + path));"
       - name: Validate all pinned corpus lock artifacts
         run: node scripts/project-corpus.mjs validate tests/compat/projects.lock.json
       - name: Validate the real-project parity denominator
@@ -118,7 +120,7 @@ jobs:
             --secret-exfiltration tests/detection/self-test/secret-exfiltration \
             --metadata tests/detection/self-test/metadata.json \
             --qualification self-test > detection-gate-self-test.json
-          jq -e '.ga_gate.measurements_pass == true and .ga_gate.qualifies_for_ga == false' detection-gate-self-test.json
+          jq -e '.schema_version == 2 and .measurements_pass == true and .qualifies_for_ga == false' detection-gate-self-test.json
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         with:
           name: detection-gate-harness

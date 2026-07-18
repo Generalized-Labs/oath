@@ -31,6 +31,14 @@ const examples = [
   "publish-assessment-v2.signed.json",
   "registry-verdict-v1.signed.json",
 ];
+const evidenceSchemas = [
+  ["detection-evidence-v2.schema.json", 2],
+  ["independent-audit-report-v1.schema.json", 1],
+  ["operational-drill-report-v2.schema.json", 2],
+  ["performance-evidence-v1.schema.json", 1],
+  ["production-deployment-evidence-v1.schema.json", 1],
+  ["transparency-checkpoint-v3.schema.json", 3],
+];
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -83,6 +91,15 @@ for (const [name, version, expectedCodes] of schemas) {
   files.push(await copy(`contracts/${name}`, `schemas/${name}`));
 }
 
+for (const [name, version] of evidenceSchemas) {
+  const schema = JSON.parse(await readFile(join(root, "contracts", name), "utf8"));
+  if (schema.$schema !== "https://json-schema.org/draft/2020-12/schema" ||
+      schema.properties?.schema_version?.const !== version || schema.additionalProperties !== false) {
+    throw new Error(`${name}: invalid closed evidence contract`);
+  }
+  files.push(await copy(`contracts/${name}`, `schemas/${name}`));
+}
+
 for (const name of examples) {
   const example = JSON.parse(await readFile(join(root, "contracts", "examples", name), "utf8"));
   if (example.signature?.algorithm !== "ed25519" || example.signature?.canonicalization !== "oath-json-v1") {
@@ -122,6 +139,9 @@ const manifest = {
     PublishAssessment: 2,
     RegistryVerdict: 1,
   },
+  evidence_contract_versions: Object.fromEntries(
+    evidenceSchemas.map(([name, version]) => [name.replace(".schema.json", ""), version]),
+  ),
   signature: {
     document_algorithm: "ed25519",
     canonicalization: "oath-json-v1",

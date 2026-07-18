@@ -49,6 +49,21 @@ an existing schema requires synchronized Rust, TypeScript, schema, example, and
 bundle-manifest changes; changing or removing a code requires a new schema
 version.
 
+## GA evidence contracts
+
+The bundle also publishes closed JSON Schemas for `DetectionEvidenceReport v2`,
+`PerformanceEvidence v1`, `OperationalDrillReport v2`, `ProductionDeploymentEvidence v1`,
+`TransparencyCheckpoint v3`, and `IndependentAuditReport v1`. These reports do
+not authorize package execution and are not signed agent verdicts. They are
+exact-commit inputs to the GA manifest, distributed with checksums and GitHub
+artifact provenance. Missing, stale, self-test, expired, incomplete, or
+threshold-failing reports remain open gates.
+
+Two witness signatures are required for a qualifying transparency checkpoint;
+the registry's own checkpoint signature is not an independent witness. Audit
+reports bind the auditor's retained report and scope by digest without forcing
+private findings into the public bundle.
+
 Regenerate the deterministic examples and build the publication bundle with:
 
 ```sh

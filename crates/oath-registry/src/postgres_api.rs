@@ -1,4 +1,4 @@
-use std::{io::Read, path::Path, sync::Arc};
+use std::{io::Read, path::Path, sync::Arc, time::Instant};
 
 use anyhow::{Context, Result};
 use axum::{
@@ -29,7 +29,7 @@ use crate::{
     hex_sha256,
     identity::{InvitationMailer, OidcVerifier},
     merkle_consistency_proof, merkle_inclusion_proof, merkle_root,
-    metrics::RegistryMetrics,
+    metrics::{RegistryMetrics, RegistryOperation},
     now,
     object_backend::ArtifactStore,
     registry_signing_key,
@@ -322,6 +322,8 @@ async fn track_registry_metrics(
     next: Next,
 ) -> Response {
     metrics.request();
+    let operation = registry_operation(request.method().as_str(), request.uri().path());
+    let started = Instant::now();
     let response = next.run(request).await;
     if matches!(
         response.status(),
@@ -332,7 +334,40 @@ async fn track_registry_metrics(
     if response.status().is_server_error() {
         metrics.error();
     }
+    if let Some(operation) = operation {
+        metrics.observe(
+            operation,
+            started.elapsed(),
+            !response.status().is_server_error(),
+        );
+    }
     response
+}
+
+fn registry_operation(method: &str, path: &str) -> Option<RegistryOperation> {
+    if method == "POST" && path.ends_with("/revoke") && path.contains("/-/oath/versions/") {
+        return Some(RegistryOperation::Revocation);
+    }
+    if method == "POST" && path.ends_with("/approve") && path.contains("/-/oath/stages/") {
+        return Some(RegistryOperation::Publish);
+    }
+    if method == "POST" && path == "/-/oath/stages" {
+        return Some(RegistryOperation::Assessment);
+    }
+    if method == "GET" && (path.contains("/-/oath/tarballs/") || path.ends_with("/download")) {
+        return Some(RegistryOperation::Tarball);
+    }
+    if method == "GET" && path.starts_with("/v1/verdicts/") {
+        return Some(RegistryOperation::Assessment);
+    }
+    if method == "GET"
+        && !matches!(path, "/health" | "/livez" | "/readyz" | "/metrics")
+        && !path.starts_with("/-/")
+        && !path.starts_with("/v1/")
+    {
+        return Some(RegistryOperation::Metadata);
+    }
+    None
 }
 
 fn bearer(headers: &HeaderMap) -> Result<&str, ApiError> {
@@ -1444,6 +1479,31 @@ async fn enforce_registry_rate_limit(
 mod tests {
     use super::*;
     use axum::{body::Body, http::Request};
+
+    #[test]
+    fn classifies_slo_operations_without_dynamic_metric_labels() {
+        assert_eq!(
+            registry_operation("GET", "/left-pad"),
+            Some(RegistryOperation::Metadata)
+        );
+        assert_eq!(
+            registry_operation("GET", "/-/oath/tarballs/left-pad/1.0.0"),
+            Some(RegistryOperation::Tarball)
+        );
+        assert_eq!(
+            registry_operation("POST", "/-/oath/stages"),
+            Some(RegistryOperation::Assessment)
+        );
+        assert_eq!(
+            registry_operation("POST", "/-/oath/stages/123/approve"),
+            Some(RegistryOperation::Publish)
+        );
+        assert_eq!(
+            registry_operation("POST", "/-/oath/versions/pkg/1.0.0/revoke"),
+            Some(RegistryOperation::Revocation)
+        );
+        assert_eq!(registry_operation("GET", "/metrics"), None);
+    }
     use http_body_util::{BodyExt, Collected};
     use object_store::memory::InMemory;
     use sha2::{Digest, Sha256};

@@ -136,8 +136,10 @@ paths after every production revocation and record the transparency checkpoint.
 - `GET /livez` proves the process can serve requests.
 - `GET /readyz` and the compatibility alias `GET /health` query PostgreSQL and
   list every configured object store; dependency failures return a 5xx.
-- `GET /metrics` exposes Prometheus counters for requests, stages, downloads,
-  and denied operations.
+- `GET /metrics` exposes Prometheus counters plus cumulative latency histograms
+  and error counters for metadata, tarball, assessment, publish, and revocation
+  operations. Route families are fixed labels; package names never become
+  metric labels.
 - `GET /-/oath/transparency/checkpoint` returns the signed current Merkle root.
 - Core package mutations write audit intent transactionally to a PostgreSQL
   outbox. The retrying worker appends idempotent signed hash-chain events.
@@ -164,6 +166,13 @@ smoke, then complete the operator drills in
 [`BUSINESS_BETA_RUNBOOK.md`](BUSINESS_BETA_RUNBOOK.md). The script does not by
 itself certify restore RPO/RTO, process-kill atomicity, key rotation, or regional
 failover.
+
+Qualifying environments use `scripts/run-operational-drill.mjs` to execute a
+provider-specific fault command without a shell and emit the cloud-neutral
+`OperationalDrillReport v2` contract. The runner requires a deployment digest,
+regions, explicit assertions, and a checksum-bound log. A failed command or
+assertion produces a failed report and a nonzero exit; backup/restore reports
+also require measured RPO and RTO.
 
 ## Known beta limits
 
