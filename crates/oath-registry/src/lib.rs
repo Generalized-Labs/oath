@@ -15,6 +15,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+pub mod analysis_backend;
 pub mod assessment;
 pub mod billing;
 pub mod control_plane;
@@ -22,6 +23,8 @@ pub mod identity;
 pub mod metrics;
 pub mod object_backend;
 pub mod postgres_api;
+pub mod rate_limit;
+pub mod signer;
 
 #[derive(Debug)]
 pub struct ApiError {
