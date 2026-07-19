@@ -1,5 +1,5 @@
 use anyhow::{Context, Result};
-use clap::{Parser, Subcommand, ValueEnum};
+use clap::{Args, Parser, Subcommand, ValueEnum};
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::ffi::OsStr;
 use std::path::PathBuf;
@@ -17,7 +17,9 @@ use oath_resolve::git::{
     git_cache_file_name, is_git_spec, pack_local_package, parse_git_spec, resolve_git_spec,
 };
 use oath_resolve::graph::{DepNode, PeerResolution};
-use oath_resolve::placement::{ArboristPlanner, PlacementPlan, PlacementRequest};
+use oath_resolve::placement::{
+    ArboristPlanner, PlacementPlan, PlacementRequest, pinned_npm_cli_path,
+};
 use oath_resolve::resolver::{ResolveOptions, Resolver};
 use oath_resolve::{DepGraph, Lockfile};
 use oath_store::cas::{ContentStore, PackageVerification};
@@ -25,7 +27,11 @@ use oath_store::linker::Linker;
 use oath_workspace::{WorkspaceRoot, detect_workspace_root};
 
 mod approvals;
+mod capabilities;
+mod evidence;
 mod exec_assessment;
+mod install_state;
+mod install_timing;
 mod package_transfer;
 mod prompts;
 mod publish_assessment;
@@ -40,12 +46,37 @@ fn platform_symlink_file(target: &std::path::Path, link: &std::path::Path) -> st
     std::os::windows::fs::symlink_file(target, link)
 }
 
+#[cfg(unix)]
+fn platform_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::unix::fs::symlink(target, link)
+}
+
+#[cfg(windows)]
+fn platform_symlink_dir(target: &std::path::Path, link: &std::path::Path) -> std::io::Result<()> {
+    std::os::windows::fs::symlink_dir(target, link)
+}
+
 #[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
 enum ExecSandboxMode {
     Off,
     Node,
     Native,
     Auto,
+}
+
+#[derive(Copy, Clone, Debug, Eq, PartialEq, ValueEnum)]
+enum LoginAuthType {
+    Web,
+    Legacy,
+}
+
+impl LoginAuthType {
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Web => "web",
+            Self::Legacy => "legacy",
+        }
+    }
 }
 
 #[derive(Subcommand)]
@@ -124,6 +155,28 @@ enum TransferAction {
     },
 }
 
+#[derive(Subcommand)]
+enum EvidenceAction {
+    /// Validate bundle digests, commit identity, freshness, and detached signatures.
+    Verify {
+        bundle: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Re-run deterministic verification and report environment differences.
+    Replay {
+        bundle: PathBuf,
+        #[arg(long)]
+        json: bool,
+    },
+}
+
+#[derive(Subcommand)]
+enum CacheAction {
+    /// Cryptographically verify every lockfile entry in the content store.
+    Verify,
+}
+
 impl ExecSandboxMode {
     fn as_str(self) -> &'static str {
         match self {
@@ -146,9 +199,29 @@ struct Cli {
     command: Commands,
 }
 
+#[derive(Args, Clone, Debug, Default)]
+struct WorkspaceArgs {
+    /// Run in a workspace selected by package name, directory, or parent directory.
+    #[arg(short = 'w', long = "workspace", action = clap::ArgAction::Append)]
+    workspace: Vec<String>,
+    /// Run in every configured workspace.
+    #[arg(long)]
+    workspaces: bool,
+    /// Include the workspace root when a workspace filter is active.
+    #[arg(long)]
+    include_workspace_root: bool,
+}
+
+impl WorkspaceArgs {
+    fn active(&self) -> bool {
+        self.workspaces || !self.workspace.is_empty()
+    }
+}
+
 #[derive(Subcommand)]
 enum Commands {
     /// Install dependencies from package.json
+    #[command(visible_alias = "i")]
     Install {
         packages: Vec<String>,
         #[arg(short = 'D', long, alias = "save-dev")]
@@ -176,29 +249,43 @@ enum Commands {
         /// Fail if lockfile is missing or would be changed (for CI)
         #[arg(long, alias = "ci")]
         frozen_lockfile: bool,
+        #[command(flatten)]
+        workspace: WorkspaceArgs,
     },
     /// Clean install from the lockfile (like `npm ci`): fail if it is missing or would change
     Ci,
     /// Add a dependency
     Add {
-        package: String,
+        packages: Vec<String>,
         #[arg(short = 'D', long)]
         dev: bool,
         #[arg(short = 'y', long)]
         yes: bool,
+        #[command(flatten)]
+        workspace: WorkspaceArgs,
     },
     /// Update dependencies within package.json ranges
-    Update { packages: Vec<String> },
+    Update {
+        packages: Vec<String>,
+        #[command(flatten)]
+        workspace: WorkspaceArgs,
+    },
     /// Remove a dependency
     #[command(visible_aliases = ["uninstall", "rm"])]
-    Remove { packages: Vec<String> },
+    Remove {
+        packages: Vec<String>,
+        #[command(flatten)]
+        workspace: WorkspaceArgs,
+    },
     /// Run a script defined in package.json
     Run {
         script: Option<String>,
         args: Vec<String>,
+        #[command(flatten)]
+        workspace: WorkspaceArgs,
     },
     /// Execute a package binary (like npx, but scanned first)
-    #[command(visible_alias = "x")]
+    #[command(visible_aliases = ["x", "npx"])]
     Exec {
         package: String,
         #[arg(trailing_var_arg = true)]
@@ -236,6 +323,8 @@ enum Commands {
         /// Persist an approval bound to this exact integrity, capability set, and sandbox policy.
         #[arg(long)]
         remember: bool,
+        #[command(flatten)]
+        workspace: WorkspaceArgs,
     },
     /// Scan installed packages for malicious behavior (behavioral analysis, not a CVE audit)
     #[command(visible_alias = "audit")]
@@ -257,6 +346,7 @@ enum Commands {
     /// Verify integrity of oath-lock.json against the store
     Verify,
     /// Print an ASCII dependency graph
+    #[command(visible_aliases = ["ls", "list"])]
     Graph {
         /// Maximum depth to display (default: 3)
         #[arg(long, default_value = "3")]
@@ -265,7 +355,86 @@ enum Commands {
     /// Show safety score and metadata for a package
     Score { package: String },
     /// Show info about a package (author, downloads, publish date)
+    #[command(visible_alias = "view")]
     Info { package: String },
+    /// Create the npm-compatible package tarball for the current project.
+    Pack {
+        /// Report the tarball without writing it.
+        #[arg(long)]
+        dry_run: bool,
+        /// Emit machine-readable package and digest metadata.
+        #[arg(long)]
+        json: bool,
+        /// Directory in which to write the tarball.
+        #[arg(long, default_value = ".")]
+        destination: PathBuf,
+        #[command(flatten)]
+        workspace: WorkspaceArgs,
+    },
+    /// Report direct dependencies whose installed or allowed versions are behind.
+    Outdated {
+        /// Emit a stable JSON report. Returns exit code 1 when updates exist.
+        #[arg(long)]
+        json: bool,
+    },
+    /// Inspect effective npm-compatible registry configuration without exposing tokens.
+    Config {
+        /// Optional key such as `registry` or `@scope:registry`.
+        key: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Report the authenticated npm registry identity.
+    Whoami {
+        #[arg(long)]
+        json: bool,
+    },
+    /// Store and verify a registry authentication token.
+    #[command(visible_alias = "adduser")]
+    Login {
+        /// Registry to authenticate against.
+        #[arg(long)]
+        registry: Option<String>,
+        /// Associate this registry with an npm scope such as @mycorp.
+        #[arg(long)]
+        scope: Option<String>,
+        /// Read the token from standard input. Otherwise NPM_TOKEN is required.
+        #[arg(long)]
+        token_stdin: bool,
+        /// npm-compatible interactive authentication strategy.
+        #[arg(long, value_enum, default_value_t = LoginAuthType::Web)]
+        auth_type: LoginAuthType,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Remove locally stored registry credentials.
+    Logout {
+        #[arg(long)]
+        registry: Option<String>,
+        #[arg(long)]
+        scope: Option<String>,
+        #[arg(long)]
+        json: bool,
+    },
+    /// Create or consume npm-compatible global development links.
+    Link {
+        packages: Vec<String>,
+        /// Persist linked packages as file: dependencies.
+        #[arg(long)]
+        save: bool,
+    },
+    /// Remove local development links without deleting their targets.
+    Unlink { packages: Vec<String> },
+    /// Inspect and verify Oath's content cache.
+    Cache {
+        #[command(subcommand)]
+        action: CacheAction,
+    },
+    /// Recompute and materialize npm's deduplicated ideal dependency tree.
+    Dedupe {
+        #[arg(long)]
+        dry_run: bool,
+    },
     /// Publish the current package to the npm registry
     Publish {
         /// Tag to use (default: "latest")
@@ -286,6 +455,8 @@ enum Commands {
         /// Submit through npm's staged-publishing protocol after Oath preflight.
         #[arg(long)]
         stage: bool,
+        #[command(flatten)]
+        workspace: WorkspaceArgs,
     },
     /// Review and decide npm staged releases (npm 11.15+ compatibility adapter).
     Stage {
@@ -296,6 +467,17 @@ enum Commands {
     Transfer {
         #[command(subcommand)]
         action: TransferAction,
+    },
+    /// Verify or replay exact-commit release evidence.
+    Evidence {
+        #[command(subcommand)]
+        action: EvidenceAction,
+    },
+    /// Report npm compatibility, containment, signing, and evidence capabilities.
+    Capabilities {
+        /// Emit the stable machine-readable capability report.
+        #[arg(long)]
+        json: bool,
     },
     /// Show recent transparency log entries
     Log {
@@ -351,6 +533,7 @@ async fn main() -> Result<()> {
             min_age,
             global,
             frozen_lockfile,
+            workspace,
         } => {
             cmd_install(
                 packages,
@@ -363,17 +546,32 @@ async fn main() -> Result<()> {
                 global,
                 frozen_lockfile,
                 min_age,
+                false,
+                workspace,
+                None,
             )
             .await?;
         }
-        Commands::Add { package, dev, yes } => {
-            cmd_add(&package, dev, yes).await?;
+        Commands::Add {
+            packages,
+            dev,
+            yes,
+            workspace,
+        } => {
+            cmd_add_scoped(packages, dev, yes, workspace).await?;
         }
-        Commands::Update { packages } => {
-            cmd_update(packages).await?;
+        Commands::Update {
+            packages,
+            workspace,
+        } => {
+            cmd_update_scoped(packages, workspace).await?;
         }
-        Commands::Run { script, args } => {
-            cmd_run(script.as_deref(), &args)?;
+        Commands::Run {
+            script,
+            args,
+            workspace,
+        } => {
+            cmd_run_scoped(script.as_deref(), &args, &workspace)?;
         }
         Commands::Init { name } => {
             cmd_init(name.as_deref())?;
@@ -416,8 +614,9 @@ async fn main() -> Result<()> {
             deny_network,
             allow_degraded_sandbox,
             remember,
+            workspace,
         } => {
-            cmd_exec(
+            cmd_exec_scoped(
                 &package,
                 &args,
                 yes,
@@ -431,6 +630,7 @@ async fn main() -> Result<()> {
                 deny_network,
                 allow_degraded_sandbox,
                 remember,
+                &workspace,
             )
             .await?;
         }
@@ -440,6 +640,75 @@ async fn main() -> Result<()> {
         Commands::Info { package } => {
             cmd_info(&package).await?;
         }
+        Commands::Pack {
+            dry_run,
+            json,
+            destination,
+            workspace,
+        } => {
+            cmd_pack_scoped(&destination, dry_run, json, &workspace)?;
+        }
+        Commands::Outdated { json } => {
+            if cmd_outdated(json).await? {
+                std::process::exit(1);
+            }
+        }
+        Commands::Config { key, json } => {
+            cmd_config(key.as_deref(), json)?;
+        }
+        Commands::Whoami { json } => {
+            cmd_whoami(json).await?;
+        }
+        Commands::Login {
+            registry,
+            scope,
+            token_stdin,
+            auth_type,
+            json,
+        } => {
+            cmd_login(
+                registry.as_deref(),
+                scope.as_deref(),
+                token_stdin,
+                auth_type,
+                json,
+            )
+            .await?;
+        }
+        Commands::Logout {
+            registry,
+            scope,
+            json,
+        } => {
+            cmd_logout(registry.as_deref(), scope.as_deref(), json).await?;
+        }
+        Commands::Link { packages, save } => {
+            cmd_link(packages, save)?;
+        }
+        Commands::Unlink { packages } => {
+            cmd_unlink(packages)?;
+        }
+        Commands::Cache { action } => match action {
+            CacheAction::Verify => cmd_verify()?,
+        },
+        Commands::Dedupe { dry_run } => {
+            cmd_install(
+                Vec::new(),
+                false,
+                dry_run,
+                true,
+                false,
+                false,
+                true,
+                false,
+                false,
+                None,
+                true,
+                WorkspaceArgs::default(),
+                None,
+            )
+            .await?;
+        }
         Commands::Publish {
             tag,
             access,
@@ -447,14 +716,16 @@ async fn main() -> Result<()> {
             json,
             schema_version,
             stage,
+            workspace,
         } => {
-            cmd_publish(
+            cmd_publish_scoped(
                 tag.as_deref(),
                 access.as_deref(),
                 dry_run,
                 json,
                 schema_version,
                 stage,
+                &workspace,
             )
             .await?;
         }
@@ -464,11 +735,57 @@ async fn main() -> Result<()> {
         Commands::Transfer { action } => {
             cmd_transfer(action)?;
         }
+        Commands::Evidence { action } => {
+            let (report, json) = match action {
+                EvidenceAction::Verify { bundle, json } => {
+                    (evidence::verify(&bundle, false)?, json)
+                }
+                EvidenceAction::Replay { bundle, json } => (evidence::verify(&bundle, true)?, json),
+            };
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("evidence {}: valid", report.operation);
+                println!("  commit: {}", report.source_commit);
+                println!("  files: {}", report.files_verified);
+                println!("  signatures: {}", report.signatures_verified);
+                for difference in report.environment_differences {
+                    println!("  environment difference: {difference}");
+                }
+            }
+        }
+        Commands::Capabilities { json } => {
+            let report = capabilities::report()?;
+            if json {
+                println!("{}", serde_json::to_string_pretty(&report)?);
+            } else {
+                println!("Oath {} capabilities", report.version);
+                println!("  platform: {}/{}", report.platform, report.architecture);
+                println!(
+                    "  npm/npx commands complete: {}/{}",
+                    report.compatibility.supported_commands.len(),
+                    report.compatibility.ga_required_commands.len()
+                );
+                println!(
+                    "  native containment: {} ({})",
+                    report.containment.available, report.containment.backend
+                );
+                if !report.compatibility.missing_ga_commands.is_empty() {
+                    println!(
+                        "  remaining GA commands: {}",
+                        report.compatibility.missing_ga_commands.join(", ")
+                    );
+                }
+            }
+        }
         Commands::Log { tail } => {
             cmd_log(tail)?;
         }
-        Commands::Remove { packages } => {
-            cmd_remove(packages).await?;
+        Commands::Remove {
+            packages,
+            workspace,
+        } => {
+            cmd_remove_scoped(packages, workspace).await?;
         }
         Commands::SandboxInfo { json } => {
             let capabilities = oath_sandbox::verified_native_capabilities();
@@ -547,8 +864,12 @@ async fn cmd_install(
     global: bool,
     frozen_lockfile: bool,
     min_age: Option<String>,
+    force_replan: bool,
+    workspace_args: WorkspaceArgs,
+    workspace_update: Option<Vec<String>>,
 ) -> Result<()> {
     let start = Instant::now();
+    let mut timings = install_timing::InstallTimings::new();
 
     // ---- Global install shortcut --------------------------------------------
     if global {
@@ -568,14 +889,41 @@ async fn cmd_install(
     let cwd = std::env::current_dir()?.canonicalize()?;
     let workspace = detect_workspace_root(&cwd);
 
+    if workspace_args.active() && workspace.is_none() {
+        anyhow::bail!("workspace filters require a package.json workspace root");
+    }
     if let Some(ref ws) = workspace {
         // Workspace mode: install all packages together with hoisted graph
         if packages.is_empty() {
-            println!("oath: workspace mode, {} packages", ws.packages.len());
-            for pkg in &ws.packages {
+            let selected = ws
+                .select_packages(&workspace_args.workspace, workspace_args.workspaces)
+                .map_err(anyhow::Error::msg)?;
+            let selected_ws = if workspace_args.active() {
+                WorkspaceRoot {
+                    root: ws.root.clone(),
+                    packages: selected.into_iter().cloned().collect(),
+                }
+            } else {
+                ws.clone()
+            };
+            println!(
+                "oath: workspace mode, {} packages",
+                selected_ws.packages.len()
+            );
+            for pkg in &selected_ws.packages {
                 println!("  - {} ({})", pkg.name, pkg.path.display());
             }
-            return cmd_install_workspace(ws, dry_run, run_audit, yes_flag, run_scripts).await;
+            return cmd_install_workspace(
+                &selected_ws,
+                dry_run,
+                run_audit,
+                yes_flag,
+                run_scripts,
+                workspace_args.active(),
+                workspace_args.include_workspace_root,
+                workspace_update,
+            )
+            .await;
         }
         // If specific packages are listed, fall through to normal install
     }
@@ -632,6 +980,33 @@ async fn cmd_install(
             .unwrap_or_default()
     };
 
+    // Verified warm no-op: the input digests, lifecycle mode, installed
+    // package identities, placement plan, policy, platform, and content store
+    // must all still match before Arborist or the network is started.
+    let noop_start = Instant::now();
+    if packages.is_empty() && !dry_run && !force_replan {
+        match install_state::is_current(&cwd, run_audit, ignore_scripts, run_scripts, yes_flag) {
+            Ok(true) => {
+                let lockfile = Lockfile::read(&cwd.join("oath-lock.json"))?;
+                let store = ContentStore::default_store()?;
+                if lockfile.matches_manifest(&deps, &dev_deps)
+                    && lockfile_all_cached(&lockfile, &store)
+                {
+                    timings.record("noop_validation", noop_start.elapsed());
+                    println!(
+                        "oath: verified no-op ({} packages unchanged)",
+                        lockfile.package_count()
+                    );
+                    timings.finish(true)?;
+                    return Ok(());
+                }
+            }
+            Ok(false) => {}
+            Err(error) => tracing::debug!("warm no-op state rejected: {error:#}"),
+        }
+    }
+    timings.record("noop_validation", noop_start.elapsed());
+
     let total_direct = deps.len() + dev_deps.len();
 
     // npm Arborist is the authoritative placement planner for ordinary
@@ -646,8 +1021,12 @@ async fn cmd_install(
         } else {
             PlacementRequest::add(packages.clone(), dev)
         };
+        let resolve_start = Instant::now();
         let mut plan = ArboristPlanner::plan_with(&cwd, &request)?;
+        timings.record("resolve", resolve_start.elapsed());
+        let metadata_start = Instant::now();
         hydrate_missing_registry_metadata(&mut plan).await?;
+        timings.record("metadata", metadata_start.elapsed());
         println!(
             "  planned {} exact locations with {} (npm {})",
             plan.nodes.len(),
@@ -762,7 +1141,9 @@ async fn cmd_install(
     // Root project's own preinstall (trusted, runs like npm/bun) -- only on a
     // plain `oath install` of the project, not when adding specific packages.
     if packages.is_empty() && !ignore_scripts {
+        let lifecycle_start = Instant::now();
         run_root_lifecycle("preinstall");
+        timings.record("lifecycle", lifecycle_start.elapsed());
     }
 
     // Download -- parallel with JoinSet
@@ -855,6 +1236,9 @@ async fn cmd_install(
         download_missing_nodes(to_download, Arc::clone(&store), Arc::clone(&client)).await?;
     let downloaded = download_summary.downloaded;
     let download_bytes = download_summary.bytes;
+    timings.record("download", download_summary.download_time);
+    timings.record("extraction", download_summary.extraction_time);
+    timings.record("integrity", download_summary.integrity_time);
 
     let download_time = download_start.elapsed();
     if downloaded > 0 {
@@ -883,6 +1267,7 @@ async fn cmd_install(
         plan.write(&cwd.join(".oath").join("placement-plan.json"))?;
     }
     let link_time = link_start.elapsed();
+    timings.record("link", link_time);
     println!(
         "  linked {} packages in {:.1}s",
         link_result.linked,
@@ -890,6 +1275,7 @@ async fn cmd_install(
     );
 
     // Write lockfile
+    let lockfile_start = Instant::now();
     if !frozen_lockfile {
         lockfile.write(&PathBuf::from("oath-lock.json"))?;
     }
@@ -898,6 +1284,7 @@ async fn cmd_install(
     if let Some(pkg_json) = pending_manifest {
         std::fs::write("package.json", serde_json::to_string_pretty(&pkg_json)?)?;
     }
+    timings.record("lockfile", lockfile_start.elapsed());
 
     // -- Peer dependency warnings ---------------------------------------------
     let peer = &graph.peer_report;
@@ -931,8 +1318,11 @@ async fn cmd_install(
 
     // -- Install script permission prompts ------------------------------------
     // Load policy (project-local oath-policy.toml + global ~/.oath/policy.toml)
+    let policy_start = Instant::now();
     let policy = OathPolicy::load();
+    timings.record("policy", policy_start.elapsed());
 
+    let lifecycle_start = Instant::now();
     let mut scripts_blocked = 0;
     for node in graph.nodes.values() {
         if ignore_scripts || !node.has_install_script {
@@ -1011,8 +1401,10 @@ async fn cmd_install(
             scripts_blocked
         );
     }
+    timings.record("lifecycle", lifecycle_start.elapsed());
 
     // Static analysis on newly downloaded packages
+    let analysis_start = Instant::now();
     if run_audit && downloaded > 0 {
         println!("  scanning {} new packages...", downloaded);
         // Scan new packages in parallel -- each scan is independent and
@@ -1086,14 +1478,23 @@ async fn cmd_install(
             println!("  all clear");
         }
     }
+    timings.record("analysis", analysis_start.elapsed());
 
     // Root project's own post-install lifecycle (trusted, runs like npm/bun) --
     // covers the common husky `prepare` and any project postinstall.
     if packages.is_empty() && !ignore_scripts {
+        let lifecycle_start = Instant::now();
         run_root_lifecycle("install");
         run_root_lifecycle("postinstall");
         run_root_lifecycle("prepare");
+        timings.record("lifecycle", lifecycle_start.elapsed());
     }
+
+    let cleanup_start = Instant::now();
+    if placement_plan.is_some() {
+        install_state::write(&cwd, run_audit, ignore_scripts, run_scripts, yes_flag)?;
+    }
+    timings.record("cleanup", cleanup_start.elapsed());
 
     let total_time = start.elapsed();
     println!("  done in {:.1}s", total_time.as_secs_f64());
@@ -1110,6 +1511,8 @@ async fn cmd_install(
     if let Ok(logger) = oath_transparency::TransparencyLogger::default_logger() {
         let _ = logger.log(&project_path, &pkg_entries, total_time.as_millis() as u64);
     }
+
+    timings.finish(false)?;
 
     Ok(())
 }
@@ -1196,17 +1599,22 @@ async fn cmd_ci() -> Result<()> {
 ///   2. Resolve + download them once as a unified graph
 ///   3. Link them all into root/node_modules (hoisted)
 ///   4. Materialize only the workspace links selected by Arborist
+#[allow(clippy::too_many_arguments)]
 async fn cmd_install_workspace(
     ws: &WorkspaceRoot,
     dry_run: bool,
     run_audit: bool,
     _yes_flag: bool,
     _run_scripts: bool,
+    filtered: bool,
+    include_workspace_root: bool,
+    update_packages: Option<Vec<String>>,
 ) -> Result<()> {
     let start = Instant::now();
 
     // Collect external deps from all workspace packages (merged, deduped)
-    let (external_deps, workspace_links) = ws.collect_external_deps(true);
+    let (external_deps, workspace_links) =
+        ws.collect_external_deps_for_packages(true, !filtered || include_workspace_root);
 
     println!(
         "  {} external deps, {} workspace links",
@@ -1234,7 +1642,14 @@ async fn cmd_install_workspace(
     }
 
     println!("  planning npm-compatible workspace layout with Arborist...");
-    let mut placement_plan = ArboristPlanner::plan(&ws.root)?;
+    let mut request =
+        update_packages.map_or_else(PlacementRequest::default, PlacementRequest::update);
+    request.workspaces = if filtered {
+        ws.packages.iter().map(|pkg| pkg.name.clone()).collect()
+    } else {
+        Vec::new()
+    };
+    let mut placement_plan = ArboristPlanner::plan_with(&ws.root, &request)?;
     hydrate_missing_registry_metadata(&mut placement_plan).await?;
     let graph = placement_plan.to_dep_graph()?;
     let empty_dev_deps: HashMap<String, String> = HashMap::new();
@@ -1536,9 +1951,10 @@ fn cmd_perms(package: &str) -> Result<()> {
 
 // ---- ADD --------------------------------------------------------------------
 
-async fn cmd_add(package: &str, dev: bool, yes: bool) -> Result<()> {
+async fn cmd_add(packages: Vec<String>, dev: bool, yes: bool) -> Result<()> {
+    anyhow::ensure!(!packages.is_empty(), "oath add: no packages specified");
     cmd_install(
-        vec![package.to_string()],
+        packages,
         dev,
         false,
         true,
@@ -1548,6 +1964,84 @@ async fn cmd_add(package: &str, dev: bool, yes: bool) -> Result<()> {
         false,
         false,
         None,
+        false,
+        WorkspaceArgs::default(),
+        None,
+    )
+    .await
+}
+
+async fn cmd_add_scoped(
+    packages: Vec<String>,
+    dev: bool,
+    yes: bool,
+    workspace: WorkspaceArgs,
+) -> Result<()> {
+    if !workspace.active() {
+        return cmd_add(packages, dev, yes).await;
+    }
+    anyhow::ensure!(!packages.is_empty(), "oath add: no packages specified");
+    let targets = selected_workspace_targets(&workspace)?;
+    let dependency_group = if dev {
+        "devDependencies"
+    } else {
+        "dependencies"
+    };
+    let mut transaction = WorkspaceManifestTransaction::begin(&targets, |manifest| {
+        if manifest.get(dependency_group).is_none() {
+            manifest[dependency_group] = serde_json::json!({});
+        }
+        let dependencies = manifest[dependency_group]
+            .as_object_mut()
+            .context("dependency group must be an object")?;
+        for package in &packages {
+            let (name, version) = parse_package_spec(package);
+            dependencies.insert(name, serde_json::Value::String(version));
+        }
+        Ok(())
+    })?;
+    cmd_install(
+        Vec::new(),
+        false,
+        false,
+        true,
+        yes,
+        false,
+        false,
+        false,
+        false,
+        None,
+        true,
+        workspace,
+        None,
+    )
+    .await?;
+    transaction.commit();
+    Ok(())
+}
+
+async fn cmd_update_scoped(packages: Vec<String>, workspace: WorkspaceArgs) -> Result<()> {
+    if !workspace.active() {
+        return cmd_update(packages).await;
+    }
+    let names = packages
+        .into_iter()
+        .map(|spec| parse_package_spec(&spec).0)
+        .collect();
+    cmd_install(
+        Vec::new(),
+        false,
+        false,
+        true,
+        false,
+        false,
+        true,
+        false,
+        false,
+        None,
+        true,
+        workspace,
+        Some(names),
     )
     .await
 }
@@ -1645,6 +2139,152 @@ fn run_root_lifecycle(event: &str) {
         Err(e) => eprintln!("  oath: warning -- failed to run root {event} script: {e}"),
         _ => {}
     }
+}
+
+struct CurrentDirectoryGuard(PathBuf);
+
+impl CurrentDirectoryGuard {
+    fn enter(path: &std::path::Path) -> Result<Self> {
+        let previous = std::env::current_dir()?;
+        std::env::set_current_dir(path)?;
+        Ok(Self(previous))
+    }
+}
+
+impl Drop for CurrentDirectoryGuard {
+    fn drop(&mut self) {
+        let _ = std::env::set_current_dir(&self.0);
+    }
+}
+
+#[derive(Clone, Debug)]
+struct WorkspaceTarget {
+    name: String,
+    path: PathBuf,
+}
+
+fn selected_workspace_targets(workspace: &WorkspaceArgs) -> Result<Vec<WorkspaceTarget>> {
+    anyhow::ensure!(workspace.active(), "workspace selection is not active");
+    let cwd = std::env::current_dir()?.canonicalize()?;
+    let root = detect_workspace_root(&cwd)
+        .context("workspace filters require a package.json workspace root")?;
+    let selected = root
+        .select_packages(&workspace.workspace, workspace.workspaces)
+        .map_err(anyhow::Error::msg)?;
+    let mut targets = Vec::new();
+    if workspace.include_workspace_root {
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(root.root.join("package.json"))?)?;
+        targets.push(WorkspaceTarget {
+            name: manifest["name"]
+                .as_str()
+                .unwrap_or("workspace-root")
+                .to_owned(),
+            path: root.root.clone(),
+        });
+    }
+    targets.extend(selected.into_iter().map(|package| WorkspaceTarget {
+        name: package.name.clone(),
+        path: package.path.clone(),
+    }));
+    anyhow::ensure!(!targets.is_empty(), "workspace selection is empty");
+    Ok(targets)
+}
+
+fn write_manifest_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
+    use std::io::Write;
+
+    let parent = path.parent().context("manifest path has no parent")?;
+    let temporary = parent.join(format!(
+        ".package.json.oath-{}-{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let mut file = std::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&temporary)?;
+    file.write_all(bytes)?;
+    file.sync_all()?;
+    std::fs::rename(temporary, path)?;
+    Ok(())
+}
+
+struct WorkspaceManifestTransaction {
+    originals: Vec<(PathBuf, Vec<u8>)>,
+    committed: bool,
+}
+
+impl WorkspaceManifestTransaction {
+    fn begin(
+        targets: &[WorkspaceTarget],
+        mut mutate: impl FnMut(&mut serde_json::Value) -> Result<()>,
+    ) -> Result<Self> {
+        let mut originals: Vec<(PathBuf, Vec<u8>)> = Vec::new();
+        for target in targets {
+            let path = target.path.join("package.json");
+            let original = std::fs::read(&path)
+                .with_context(|| format!("failed to read {}", path.display()))?;
+            let result = (|| -> Result<()> {
+                let mut manifest: serde_json::Value = serde_json::from_slice(&original)?;
+                mutate(&mut manifest)?;
+                let updated = format!("{}\n", serde_json::to_string_pretty(&manifest)?);
+                write_manifest_atomic(&path, updated.as_bytes())
+            })();
+            if let Err(error) = result {
+                for (changed, bytes) in originals.iter().rev() {
+                    let _ = write_manifest_atomic(changed, bytes);
+                }
+                return Err(error);
+            }
+            originals.push((path, original));
+        }
+        Ok(Self {
+            originals,
+            committed: false,
+        })
+    }
+
+    fn commit(&mut self) {
+        self.committed = true;
+    }
+}
+
+impl Drop for WorkspaceManifestTransaction {
+    fn drop(&mut self) {
+        if !self.committed {
+            for (path, bytes) in self.originals.iter().rev() {
+                let _ = write_manifest_atomic(path, bytes);
+            }
+        }
+    }
+}
+
+fn cmd_run_scoped(script: Option<&str>, args: &[String], workspace: &WorkspaceArgs) -> Result<()> {
+    if !workspace.active() {
+        return cmd_run(script, args);
+    }
+    let cwd = std::env::current_dir()?.canonicalize()?;
+    let root = detect_workspace_root(&cwd)
+        .context("workspace filters require a package.json workspace root")?;
+    let selected = root
+        .select_packages(&workspace.workspace, workspace.workspaces)
+        .map_err(anyhow::Error::msg)?;
+    anyhow::ensure!(!selected.is_empty(), "workspace selection is empty");
+
+    if workspace.include_workspace_root {
+        let _guard = CurrentDirectoryGuard::enter(&root.root)?;
+        cmd_run(script, args)?;
+    }
+    for package in selected {
+        println!("oath: workspace {}", package.name);
+        let _guard = CurrentDirectoryGuard::enter(&package.path)?;
+        cmd_run(script, args)
+            .with_context(|| format!("workspace {} command failed", package.name))?;
+    }
+    Ok(())
 }
 
 fn cmd_run(script: Option<&str>, args: &[String]) -> Result<()> {
@@ -2497,6 +3137,9 @@ async fn hydrate_missing_registry_metadata(plan: &mut PlacementPlan) -> Result<(
 struct DownloadSummary {
     downloaded: usize,
     bytes: u64,
+    download_time: std::time::Duration,
+    extraction_time: std::time::Duration,
+    integrity_time: std::time::Duration,
 }
 
 struct DownloadedPackage {
@@ -2537,15 +3180,24 @@ async fn download_missing_nodes(
         });
     }
 
+    let download_start = Instant::now();
+    let mut downloaded_packages = Vec::new();
     while let Some(res) = set.join_next().await {
-        let downloaded = res??;
+        downloaded_packages.push(res??);
+    }
+    summary.download_time = download_start.elapsed();
+
+    for downloaded in downloaded_packages {
         summary.bytes += downloaded.bytes;
         let tmp = tempfile::tempdir()?;
+        let extraction_start = Instant::now();
         oath_fetch::tarball::extract_tarball_file_limited(
             &downloaded.tarball_path,
             tmp.path(),
             &limits,
         )?;
+        summary.extraction_time += extraction_start.elapsed();
+        let integrity_start = Instant::now();
         store.store_package_variant_with_manifest(
             &downloaded.name,
             &downloaded.version,
@@ -2553,6 +3205,7 @@ async fn download_missing_nodes(
             downloaded.integrity.as_deref(),
             tmp.path(),
         )?;
+        summary.integrity_time += integrity_start.elapsed();
         drop(downloaded.temp_dir);
         summary.downloaded += 1;
     }
@@ -3220,6 +3873,97 @@ fn run_node_binary(
             sandbox_mode.as_str()
         )
     })
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn cmd_exec_scoped(
+    package: &str,
+    args: &[String],
+    yes: bool,
+    min_age: Option<&str>,
+    json: bool,
+    schema_version: u32,
+    require_grade: Option<&str>,
+    dry_run: bool,
+    sandbox: bool,
+    sandbox_mode: ExecSandboxMode,
+    deny_network: bool,
+    allow_degraded_sandbox: bool,
+    remember: bool,
+    workspace: &WorkspaceArgs,
+) -> Result<()> {
+    if !workspace.active() {
+        return cmd_exec(
+            package,
+            args,
+            yes,
+            min_age,
+            json,
+            schema_version,
+            require_grade,
+            dry_run,
+            sandbox,
+            sandbox_mode,
+            deny_network,
+            allow_degraded_sandbox,
+            remember,
+        )
+        .await;
+    }
+    let targets = selected_workspace_targets(workspace)?;
+    anyhow::ensure!(
+        !json || targets.len() == 1,
+        "--json requires exactly one selected workspace"
+    );
+    let executable = std::env::current_exe()?;
+    for target in targets {
+        println!("oath: workspace {}", target.name);
+        let mut command = std::process::Command::new(&executable);
+        command.current_dir(&target.path).arg("exec").arg(package);
+        if yes {
+            command.arg("--yes");
+        }
+        if let Some(min_age) = min_age {
+            command.arg("--min-age").arg(min_age);
+        }
+        if json {
+            command.arg("--json");
+        }
+        command
+            .arg("--schema-version")
+            .arg(schema_version.to_string());
+        if let Some(grade) = require_grade {
+            command.arg("--require-grade").arg(grade);
+        }
+        if dry_run {
+            command.arg("--dry-run");
+        }
+        if sandbox {
+            command.arg("--sandbox");
+        }
+        command.arg("--sandbox-mode").arg(sandbox_mode.as_str());
+        if deny_network {
+            command.arg("--deny-network");
+        }
+        if allow_degraded_sandbox {
+            command.arg("--allow-degraded-sandbox");
+        }
+        if remember {
+            command.arg("--remember");
+        }
+        if !args.is_empty() {
+            command.arg("--").args(args);
+        }
+        let status = command
+            .status()
+            .with_context(|| format!("failed to execute in workspace {}", target.name))?;
+        anyhow::ensure!(
+            status.success(),
+            "workspace {} exec failed with {status}",
+            target.name
+        );
+    }
+    Ok(())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -3973,6 +4717,715 @@ async fn cmd_info(package: &str) -> Result<()> {
     Ok(())
 }
 
+fn cmd_pack_scoped(
+    destination: &std::path::Path,
+    dry_run: bool,
+    json_output: bool,
+    workspace: &WorkspaceArgs,
+) -> Result<()> {
+    if !workspace.active() {
+        return cmd_pack(destination, dry_run, json_output);
+    }
+    let targets = selected_workspace_targets(workspace)?;
+    anyhow::ensure!(
+        !json_output || targets.len() == 1,
+        "--json requires exactly one selected workspace"
+    );
+    let destination = if destination.is_absolute() {
+        destination.to_path_buf()
+    } else {
+        std::env::current_dir()?.join(destination)
+    };
+    for target in targets {
+        println!("oath: workspace {}", target.name);
+        let _guard = CurrentDirectoryGuard::enter(&target.path)?;
+        cmd_pack(&destination, dry_run, json_output)?;
+    }
+    Ok(())
+}
+
+fn cmd_pack(destination: &std::path::Path, dry_run: bool, json_output: bool) -> Result<()> {
+    use sha2::{Digest, Sha256};
+
+    let manifest = read_package_json()?;
+    let name = manifest["name"]
+        .as_str()
+        .context("package.json name is required for pack")?;
+    let version = manifest["version"]
+        .as_str()
+        .context("package.json version is required for pack")?;
+    let safe = |value: &str| {
+        value
+            .trim_start_matches('@')
+            .chars()
+            .map(|character| {
+                if character.is_ascii_alphanumeric() || matches!(character, '.' | '_' | '-') {
+                    character
+                } else {
+                    '-'
+                }
+            })
+            .collect::<String>()
+    };
+    let filename = format!("{}-{}.tgz", safe(name), safe(version));
+    let tarball = pack_local_package(&std::env::current_dir()?)?;
+    let digest = format!("sha256:{}", hex::encode(Sha256::digest(&tarball)));
+    let output = destination.join(&filename);
+    if !dry_run {
+        std::fs::create_dir_all(destination)
+            .with_context(|| format!("create pack destination {}", destination.display()))?;
+        std::fs::write(&output, &tarball)
+            .with_context(|| format!("write package tarball {}", output.display()))?;
+    }
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "name": name,
+                "version": version,
+                "filename": filename,
+                "path": output,
+                "bytes": tarball.len(),
+                "sha256": digest,
+                "dry_run": dry_run,
+            }))?
+        );
+    } else if dry_run {
+        println!("{filename}");
+    } else {
+        println!("{}", output.display());
+    }
+    Ok(())
+}
+
+#[derive(Debug, serde::Serialize)]
+struct OutdatedDependency {
+    package: String,
+    dependency_type: &'static str,
+    current: Option<String>,
+    wanted: String,
+    latest: String,
+}
+
+async fn cmd_outdated(json_output: bool) -> Result<bool> {
+    let manifest = read_package_json()?;
+    let lockfile = Lockfile::read(&PathBuf::from("oath-lock.json"))
+        .context("oath outdated requires oath-lock.json; run oath install first")?;
+    let mut requested = Vec::new();
+    for (dependency_type, key) in [
+        ("dependencies", "dependencies"),
+        ("devDependencies", "devDependencies"),
+    ] {
+        for (name, spec) in extract_deps(&manifest, key) {
+            requested.push((name, spec, dependency_type));
+        }
+    }
+    requested.sort_by(|left, right| left.0.cmp(&right.0));
+
+    let client = RegistryClient::default_client()?;
+    let mut tasks = JoinSet::new();
+    for (name, spec, dependency_type) in requested {
+        let client = client.clone();
+        let registry_name = alias_registry_name(&name, &spec);
+        let current = direct_lock_version(&lockfile, &name);
+        tasks.spawn(async move {
+            let packument = client.fetch_packument(&registry_name).await?;
+            let wanted = oath_fetch::resolve_version(&packument, &spec)?
+                .version
+                .to_owned();
+            let latest = packument
+                .latest_version()
+                .context("registry packument has no latest dist-tag")?
+                .to_owned();
+            Ok::<_, anyhow::Error>(OutdatedDependency {
+                package: name,
+                dependency_type,
+                current,
+                wanted,
+                latest,
+            })
+        });
+    }
+    let mut outdated = Vec::new();
+    while let Some(result) = tasks.join_next().await {
+        let row = result??;
+        if row.current.as_deref() != Some(row.wanted.as_str())
+            || row.current.as_deref() != Some(row.latest.as_str())
+        {
+            outdated.push(row);
+        }
+    }
+    outdated.sort_by(|left, right| left.package.cmp(&right.package));
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string_pretty(&serde_json::json!({
+                "schema_version": 1,
+                "outdated": outdated,
+                "count": outdated.len(),
+            }))?
+        );
+    } else if outdated.is_empty() {
+        println!("All direct dependencies are current");
+    } else {
+        println!("Package\tCurrent\tWanted\tLatest\tType");
+        for row in &outdated {
+            println!(
+                "{}\t{}\t{}\t{}\t{}",
+                row.package,
+                row.current.as_deref().unwrap_or("MISSING"),
+                row.wanted,
+                row.latest,
+                row.dependency_type
+            );
+        }
+    }
+    Ok(!outdated.is_empty())
+}
+
+fn direct_lock_version(lockfile: &Lockfile, install_name: &str) -> Option<String> {
+    let direct_location = format!("node_modules/{install_name}");
+    lockfile
+        .packages
+        .get(&direct_location)
+        .or_else(|| {
+            lockfile.packages.iter().find_map(|(key, entry)| {
+                (lockfile.roots.contains(key)
+                    && (entry.package_name_for_key(key) == install_name
+                        || entry.alias.as_deref() == Some(install_name)))
+                .then_some(entry)
+            })
+        })
+        .map(|entry| entry.version.clone())
+}
+
+fn alias_registry_name(install_name: &str, spec: &str) -> String {
+    let Some(alias) = spec.strip_prefix("npm:") else {
+        return install_name.to_owned();
+    };
+    if let Some(scoped) = alias.strip_prefix('@') {
+        return scoped
+            .find('@')
+            .map(|separator| format!("@{}", &scoped[..separator]))
+            .unwrap_or_else(|| format!("@{scoped}"));
+    }
+    alias
+        .rsplit_once('@')
+        .map_or(alias, |(name, _)| name)
+        .to_owned()
+}
+
+fn cmd_config(key: Option<&str>, json_output: bool) -> Result<()> {
+    let config = oath_fetch::NpmrcConfig::load(&std::env::current_dir()?);
+    let registry = config
+        .default_registry
+        .clone()
+        .unwrap_or_else(|| "https://registry.npmjs.org".to_owned());
+    let mut token_hosts: Vec<_> = config.tokens.keys().cloned().collect();
+    token_hosts.sort();
+    let mut scopes: BTreeMap<_, _> = config.scoped_registries.into_iter().collect();
+    if let Some(key) = key {
+        let value = if key == "registry" {
+            Some(registry)
+        } else if let Some(scope) = key.strip_suffix(":registry") {
+            scopes.remove(scope)
+        } else {
+            None
+        };
+        let value = value.with_context(|| format!("unsupported or unset config key {key}"))?;
+        if json_output {
+            println!(
+                "{}",
+                serde_json::to_string(&serde_json::json!({ key: value }))?
+            );
+        } else {
+            println!("{value}");
+        }
+        return Ok(());
+    }
+    let report = serde_json::json!({
+        "schema_version": 1,
+        "registry": registry,
+        "scoped_registries": scopes.clone(),
+        "authenticated_hosts": token_hosts.clone(),
+        "tokens_redacted": true,
+    });
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else {
+        println!(
+            "registry={}",
+            report["registry"].as_str().unwrap_or_default()
+        );
+        for (scope, registry) in scopes {
+            println!("{scope}:registry={registry}");
+        }
+        for host in token_hosts {
+            println!("//{host}/:_authToken=(protected)");
+        }
+    }
+    Ok(())
+}
+
+async fn cmd_whoami(json_output: bool) -> Result<()> {
+    let config = oath_fetch::NpmrcConfig::load(&std::env::current_dir()?);
+    let registry = config
+        .default_registry
+        .clone()
+        .unwrap_or_else(|| "https://registry.npmjs.org".to_owned());
+    let url = reqwest::Url::parse(&format!("{}/-/whoami", registry.trim_end_matches('/')))?;
+    let host = url.host_str().context("registry URL has no host")?;
+    let token = config
+        .token_for_host(host)
+        .context("no authentication token configured for the default registry")?;
+    let response = reqwest::Client::builder()
+        .user_agent(concat!("oath/", env!("CARGO_PKG_VERSION")))
+        .build()?
+        .get(url)
+        .bearer_auth(token)
+        .send()
+        .await?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "registry identity request returned {}",
+        response.status()
+    );
+    let identity: serde_json::Value = response.json().await?;
+    let username = identity["username"]
+        .as_str()
+        .context("registry identity response has no username")?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({ "username": username }))?
+        );
+    } else {
+        println!("{username}");
+    }
+    Ok(())
+}
+
+fn validate_scope(scope: &str) -> Result<()> {
+    anyhow::ensure!(
+        scope.starts_with('@') && scope.len() > 1 && !scope.contains('/'),
+        "scope must have the form @name"
+    );
+    Ok(())
+}
+
+fn effective_registry(registry: Option<&str>, scope: Option<&str>) -> Result<String> {
+    if let Some(scope) = scope {
+        validate_scope(scope)?;
+    }
+    if let Some(registry) = registry {
+        return Ok(registry.trim_end_matches('/').to_owned());
+    }
+    let config = oath_fetch::NpmrcConfig::load(&std::env::current_dir()?);
+    if let Some(scope) = scope
+        && let Some(registry) = config.scoped_registries.get(scope)
+    {
+        return Ok(registry.trim_end_matches('/').to_owned());
+    }
+    Ok(config
+        .default_registry
+        .unwrap_or_else(|| "https://registry.npmjs.org".to_owned())
+        .trim_end_matches('/')
+        .to_owned())
+}
+
+fn user_npmrc_path() -> Result<PathBuf> {
+    if let Some(path) = std::env::var_os("NPM_CONFIG_USERCONFIG") {
+        return Ok(PathBuf::from(path));
+    }
+    Ok(oath_core::home_dir()
+        .context("could not determine home directory")?
+        .join(".npmrc"))
+}
+
+fn npmrc_auth_key(registry: &str) -> Result<String> {
+    let parsed = reqwest::Url::parse(registry).context("invalid registry URL")?;
+    anyhow::ensure!(
+        matches!(parsed.scheme(), "https" | "http"),
+        "registry URL must use HTTP or HTTPS"
+    );
+    let host = parsed.host_str().context("registry URL has no host")?;
+    let authority = match parsed.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_owned(),
+    };
+    let path = parsed.path().trim_matches('/');
+    Ok(if path.is_empty() {
+        format!("//{authority}/:_authToken")
+    } else {
+        format!("//{authority}/{path}/:_authToken")
+    })
+}
+
+fn update_user_npmrc(updates: &BTreeMap<String, Option<String>>) -> Result<()> {
+    use std::io::Write;
+
+    let path = user_npmrc_path()?;
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut seen = HashSet::new();
+    let mut lines = Vec::new();
+    for line in existing.lines() {
+        let key = line
+            .split_once('=')
+            .map(|(key, _)| key.trim())
+            .unwrap_or_default();
+        if let Some(value) = updates.get(key) {
+            seen.insert(key.to_owned());
+            if let Some(value) = value {
+                lines.push(format!("{key}={value}"));
+            }
+        } else {
+            lines.push(line.to_owned());
+        }
+    }
+    for (key, value) in updates {
+        if !seen.contains(key)
+            && let Some(value) = value
+        {
+            lines.push(format!("{key}={value}"));
+        }
+    }
+    while lines.last().is_some_and(String::is_empty) {
+        lines.pop();
+    }
+
+    let parent = path.parent().context("npmrc path has no parent")?;
+    std::fs::create_dir_all(parent)?;
+    let temporary = parent.join(format!(
+        ".npmrc.oath-{}-{}.tmp",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos()
+    ));
+    let mut options = std::fs::OpenOptions::new();
+    options.write(true).create_new(true);
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::OpenOptionsExt;
+        options.mode(0o600);
+    }
+    let mut file = options.open(&temporary)?;
+    if !lines.is_empty() {
+        file.write_all(lines.join("\n").as_bytes())?;
+        file.write_all(b"\n")?;
+    }
+    file.sync_all()?;
+    std::fs::rename(&temporary, &path)?;
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&path, std::fs::Permissions::from_mode(0o600))?;
+    }
+    Ok(())
+}
+
+async fn cmd_login(
+    registry: Option<&str>,
+    scope: Option<&str>,
+    token_stdin: bool,
+    auth_type: LoginAuthType,
+    json_output: bool,
+) -> Result<()> {
+    use std::io::Read;
+
+    let registry = effective_registry(registry, scope)?;
+    let environment_token = std::env::var("NPM_TOKEN").ok();
+    if !token_stdin && environment_token.is_none() {
+        anyhow::ensure!(
+            !json_output,
+            "interactive login cannot emit JSON; set NPM_TOKEN or use --token-stdin"
+        );
+        let cli = pinned_npm_cli_path()?;
+        let mut command = std::process::Command::new("node");
+        command
+            .arg(cli)
+            .arg("login")
+            .arg("--registry")
+            .arg(&registry)
+            .arg("--auth-type")
+            .arg(auth_type.as_str());
+        if let Some(scope) = scope {
+            command.arg("--scope").arg(scope);
+        }
+        let status = command
+            .status()
+            .context("failed to launch pinned npm login adapter")?;
+        anyhow::ensure!(status.success(), "registry login failed with {status}");
+        return Ok(());
+    }
+
+    let token = if token_stdin {
+        let mut token = String::new();
+        std::io::stdin().read_to_string(&mut token)?;
+        token.trim().to_owned()
+    } else {
+        environment_token.context("NPM_TOKEN disappeared while processing login")?
+    };
+    anyhow::ensure!(!token.trim().is_empty(), "registry token is empty");
+    anyhow::ensure!(
+        !token.contains(['\r', '\n']),
+        "registry token contains a newline"
+    );
+
+    let whoami = format!("{}/-/whoami", registry.trim_end_matches('/'));
+    let response = reqwest::Client::builder()
+        .user_agent(concat!("oath/", env!("CARGO_PKG_VERSION")))
+        .build()?
+        .get(&whoami)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .with_context(|| format!("failed to verify credentials with {registry}"))?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "registry rejected credentials with {}",
+        response.status()
+    );
+    let identity: serde_json::Value = response.json().await?;
+    let username = identity["username"]
+        .as_str()
+        .context("registry identity response has no username")?;
+
+    let mut updates = BTreeMap::new();
+    updates.insert(npmrc_auth_key(&registry)?, Some(token));
+    if let Some(scope) = scope {
+        updates.insert(format!("{scope}:registry"), Some(registry.clone()));
+    }
+    update_user_npmrc(&updates)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "username": username,
+                "registry": registry,
+                "scope": scope,
+                "credentials_stored": true,
+            }))?
+        );
+    } else {
+        println!("Logged in to {registry} as {username}");
+    }
+    Ok(())
+}
+
+fn user_npmrc_value(key: &str) -> Result<Option<String>> {
+    let path = user_npmrc_path()?;
+    let Ok(content) = std::fs::read_to_string(path) else {
+        return Ok(None);
+    };
+    Ok(content.lines().rev().find_map(|line| {
+        let (candidate, value) = line.split_once('=')?;
+        (candidate.trim() == key).then(|| value.trim().trim_matches(['\'', '"']).to_owned())
+    }))
+}
+
+async fn cmd_logout(registry: Option<&str>, scope: Option<&str>, json_output: bool) -> Result<()> {
+    let registry = effective_registry(registry, scope)?;
+    let auth_key = npmrc_auth_key(&registry)?;
+    let token = user_npmrc_value(&auth_key)?
+        .with_context(|| format!("not logged in to {registry}, so cannot log out"))?;
+    let mut revoke_url = reqwest::Url::parse(&registry)?;
+    revoke_url
+        .path_segments_mut()
+        .map_err(|_| anyhow::anyhow!("registry URL cannot be a base URL"))?
+        .pop_if_empty()
+        .push("-")
+        .push("user")
+        .push("token")
+        .push(&token);
+    let response = reqwest::Client::builder()
+        .user_agent(concat!("oath/", env!("CARGO_PKG_VERSION")))
+        .build()?
+        .delete(revoke_url)
+        .bearer_auth(&token)
+        .send()
+        .await
+        .with_context(|| format!("failed to revoke credentials with {registry}"))?;
+    anyhow::ensure!(
+        response.status().is_success(),
+        "registry rejected logout with {}",
+        response.status()
+    );
+
+    let mut updates = BTreeMap::new();
+    updates.insert(auth_key, None);
+    if let Some(scope) = scope {
+        updates.insert(format!("{scope}:registry"), None);
+    }
+    update_user_npmrc(&updates)?;
+    if json_output {
+        println!(
+            "{}",
+            serde_json::to_string(&serde_json::json!({
+                "registry": registry,
+                "scope": scope,
+                "credentials_removed": true,
+                "server_session_revoked": true
+            }))?
+        );
+    } else {
+        println!("Logged out of {registry}");
+    }
+    Ok(())
+}
+
+fn validate_link_package_name(name: &str) -> Result<()> {
+    let valid_component = |part: &str| {
+        !part.is_empty() && !matches!(part, "." | "..") && !part.contains(['/', '\\', '\0'])
+    };
+    if let Some(scoped) = name.strip_prefix('@') {
+        let (scope, package) = scoped
+            .split_once('/')
+            .context("scoped package must have the form @scope/name")?;
+        anyhow::ensure!(
+            valid_component(scope) && valid_component(package),
+            "invalid package name"
+        );
+    } else {
+        anyhow::ensure!(valid_component(name), "invalid package name");
+    }
+    Ok(())
+}
+
+fn remove_link_only(path: &std::path::Path) -> Result<bool> {
+    let Ok(metadata) = std::fs::symlink_metadata(path) else {
+        return Ok(false);
+    };
+    anyhow::ensure!(
+        metadata.file_type().is_symlink(),
+        "refusing to replace non-link path {}",
+        path.display()
+    );
+    std::fs::remove_file(path)?;
+    Ok(true)
+}
+
+fn create_directory_link(target: &std::path::Path, link: &std::path::Path) -> Result<()> {
+    if let Some(parent) = link.parent() {
+        std::fs::create_dir_all(parent)?;
+    }
+    remove_link_only(link)?;
+    platform_symlink_dir(target, link)
+        .with_context(|| format!("failed to link {} -> {}", link.display(), target.display()))?;
+    Ok(())
+}
+
+fn global_link_root() -> Result<PathBuf> {
+    Ok(oath_core::home_dir()
+        .context("could not determine home directory")?
+        .join(".oath")
+        .join("global"))
+}
+
+fn cmd_link(packages: Vec<String>, save: bool) -> Result<()> {
+    let global = global_link_root()?;
+    let global_modules = global.join("node_modules");
+    if packages.is_empty() {
+        let cwd = std::env::current_dir()?.canonicalize()?;
+        let package = read_package_json()?;
+        let name = package["name"]
+            .as_str()
+            .context("package.json must declare a name before it can be linked")?;
+        validate_link_package_name(name)?;
+        let destination = global_modules.join(name);
+        create_directory_link(&cwd, &destination)?;
+
+        let global_bin = global.join("bin");
+        std::fs::create_dir_all(&global_bin)?;
+        for (bin_name, relative) in safe_bin_entries(&package, name) {
+            let target = cwd.join(relative);
+            anyhow::ensure!(
+                target.is_file(),
+                "linked binary does not exist: {}",
+                target.display()
+            );
+            let bin_link = global_bin.join(bin_name);
+            remove_link_only(&bin_link)?;
+            platform_symlink_file(&target, &bin_link)?;
+        }
+        println!("Linked {name} globally to {}", cwd.display());
+        return Ok(());
+    }
+
+    let cwd = std::env::current_dir()?.canonicalize()?;
+    let local_modules = cwd.join("node_modules");
+    let mut saved = Vec::new();
+    for name in packages {
+        validate_link_package_name(&name)?;
+        let registered = global_modules.join(&name);
+        let metadata = std::fs::symlink_metadata(&registered).with_context(|| {
+            format!("{name} is not globally linked; run oath link in its source directory")
+        })?;
+        anyhow::ensure!(
+            metadata.file_type().is_symlink(),
+            "global registration for {name} is not a link"
+        );
+        let target = registered.canonicalize()?;
+        let destination = local_modules.join(&name);
+        create_directory_link(&target, &destination)?;
+        println!("Linked {name} -> {}", target.display());
+        saved.push((name, target));
+    }
+    if save {
+        let mut package = read_package_json()?;
+        if package.get("dependencies").is_none() {
+            package["dependencies"] = serde_json::json!({});
+        }
+        let dependencies = package["dependencies"]
+            .as_object_mut()
+            .context("package.json dependencies must be an object")?;
+        for (name, target) in saved {
+            dependencies.insert(
+                name,
+                serde_json::Value::String(format!("file:{}", target.display())),
+            );
+        }
+        std::fs::write(
+            "package.json",
+            format!("{}\n", serde_json::to_string_pretty(&package)?),
+        )?;
+    }
+    Ok(())
+}
+
+fn cmd_unlink(packages: Vec<String>) -> Result<()> {
+    let global = global_link_root()?;
+    if packages.is_empty() {
+        let package = read_package_json()?;
+        let name = package["name"]
+            .as_str()
+            .context("package.json must declare a name")?;
+        validate_link_package_name(name)?;
+        let removed = remove_link_only(&global.join("node_modules").join(name))?;
+        println!(
+            "{}",
+            if removed {
+                "Removed global link"
+            } else {
+                "No global link found"
+            }
+        );
+        return Ok(());
+    }
+    let local_modules = std::env::current_dir()?.join("node_modules");
+    for name in packages {
+        validate_link_package_name(&name)?;
+        let removed = remove_link_only(&local_modules.join(&name))?;
+        if removed {
+            println!("Unlinked {name}");
+        } else {
+            println!("No local link found for {name}");
+        }
+    }
+    Ok(())
+}
+
 fn format_downloads(n: u64) -> String {
     if n >= 1_000_000 {
         format!("{:.1}M", n as f64 / 1_000_000.0)
@@ -4147,6 +5600,52 @@ async fn cmd_remove(packages: Vec<String>) -> Result<()> {
         lockfile.write(&PathBuf::from("oath-lock.json"))?;
     }
 
+    Ok(())
+}
+
+async fn cmd_remove_scoped(packages: Vec<String>, workspace: WorkspaceArgs) -> Result<()> {
+    if !workspace.active() {
+        return cmd_remove(packages).await;
+    }
+    if packages.is_empty() {
+        println!("oath remove: no packages specified");
+        return Ok(());
+    }
+    let names: Vec<_> = packages
+        .iter()
+        .map(|package| parse_package_spec(package).0)
+        .collect();
+    let targets = selected_workspace_targets(&workspace)?;
+    let mut transaction = WorkspaceManifestTransaction::begin(&targets, |manifest| {
+        for group in ["dependencies", "devDependencies", "optionalDependencies"] {
+            if let Some(dependencies) = manifest
+                .get_mut(group)
+                .and_then(|value| value.as_object_mut())
+            {
+                for name in &names {
+                    dependencies.remove(name);
+                }
+            }
+        }
+        Ok(())
+    })?;
+    cmd_install(
+        Vec::new(),
+        false,
+        false,
+        true,
+        false,
+        false,
+        true,
+        false,
+        false,
+        None,
+        true,
+        workspace,
+        None,
+    )
+    .await?;
+    transaction.commit();
     Ok(())
 }
 
@@ -4551,6 +6050,33 @@ fn should_publish_exclude(rel: &str, excludes: &[&str], npmignore: &[String]) ->
         || rel.ends_with(".spec.js")
         || rel.ends_with(".test.ts")
         || rel.ends_with(".spec.ts")
+}
+
+async fn cmd_publish_scoped(
+    tag: Option<&str>,
+    access: Option<&str>,
+    dry_run: bool,
+    json: bool,
+    schema_version: u32,
+    stage: bool,
+    workspace: &WorkspaceArgs,
+) -> Result<()> {
+    if !workspace.active() {
+        return cmd_publish(tag, access, dry_run, json, schema_version, stage).await;
+    }
+    let targets = selected_workspace_targets(workspace)?;
+    anyhow::ensure!(
+        !json || targets.len() == 1,
+        "--json requires exactly one selected workspace"
+    );
+    for target in targets {
+        println!("oath: workspace {}", target.name);
+        let _guard = CurrentDirectoryGuard::enter(&target.path)?;
+        cmd_publish(tag, access, dry_run, json, schema_version, stage)
+            .await
+            .with_context(|| format!("workspace {} publish failed", target.name))?;
+    }
+    Ok(())
 }
 
 async fn cmd_publish(
@@ -5539,5 +7065,108 @@ mod tests {
             preferred_bin_path(&pkg, "@scope/pkg"),
             Some(PathBuf::from("bin/pkg.js"))
         );
+    }
+
+    #[test]
+    fn outdated_resolves_registry_identity_for_npm_aliases() {
+        assert_eq!(alias_registry_name("alias", "^1.0.0"), "alias");
+        assert_eq!(
+            alias_registry_name("alias", "npm:is-number@^7.0.0"),
+            "is-number"
+        );
+        assert_eq!(
+            alias_registry_name("alias", "npm:@scope/package@^2.0.0"),
+            "@scope/package"
+        );
+    }
+
+    #[test]
+    fn npmrc_auth_keys_include_registry_paths_and_ports() {
+        assert_eq!(
+            npmrc_auth_key("https://registry.npmjs.org").unwrap(),
+            "//registry.npmjs.org/:_authToken"
+        );
+        assert_eq!(
+            npmrc_auth_key("https://registry.example.test:8443/npm/").unwrap(),
+            "//registry.example.test:8443/npm/:_authToken"
+        );
+        assert!(npmrc_auth_key("file:///tmp/registry").is_err());
+    }
+
+    #[test]
+    fn development_link_names_reject_path_traversal() {
+        assert!(validate_link_package_name("pkg").is_ok());
+        assert!(validate_link_package_name("@scope/pkg").is_ok());
+        for invalid in ["../pkg", "@scope/../pkg", "@scope", "a/b", ".", ""] {
+            assert!(validate_link_package_name(invalid).is_err(), "{invalid}");
+        }
+    }
+
+    #[test]
+    fn workspace_cli_accepts_repeated_filters() {
+        let cli = Cli::try_parse_from([
+            "oath",
+            "run",
+            "test",
+            "--workspace",
+            "@repo/core",
+            "-w",
+            "apps/web",
+            "--include-workspace-root",
+        ])
+        .unwrap();
+        let Commands::Run { workspace, .. } = cli.command else {
+            panic!("expected run command");
+        };
+        assert_eq!(workspace.workspace, ["@repo/core", "apps/web"]);
+        assert!(workspace.include_workspace_root);
+    }
+
+    #[test]
+    fn every_required_command_accepts_workspace_filters() {
+        let commands: &[&[&str]] = &[
+            &["oath", "add", "left-pad", "-w", "pkg"],
+            &["oath", "remove", "left-pad", "-w", "pkg"],
+            &["oath", "update", "left-pad", "-w", "pkg"],
+            &["oath", "exec", "eslint", "-w", "pkg", "--dry-run"],
+            &["oath", "pack", "-w", "pkg", "--dry-run"],
+            &["oath", "publish", "-w", "pkg", "--dry-run"],
+        ];
+        for command in commands {
+            Cli::try_parse_from(*command).unwrap_or_else(|error| {
+                panic!("failed to parse {command:?}: {error}");
+            });
+        }
+    }
+
+    #[test]
+    fn workspace_manifest_transaction_rolls_back_uncommitted_changes() {
+        let directory = tempfile::tempdir().unwrap();
+        let path = directory.path().join("package.json");
+        let original = b"{\"name\":\"pkg\",\"version\":\"1.0.0\"}\n";
+        std::fs::write(&path, original).unwrap();
+        let target = WorkspaceTarget {
+            name: "pkg".into(),
+            path: directory.path().to_path_buf(),
+        };
+        {
+            let _transaction =
+                WorkspaceManifestTransaction::begin(std::slice::from_ref(&target), |manifest| {
+                    manifest["version"] = serde_json::Value::String("2.0.0".into());
+                    Ok(())
+                })
+                .unwrap();
+            assert!(std::fs::read_to_string(&path).unwrap().contains("2.0.0"));
+        }
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+
+        let mut transaction = WorkspaceManifestTransaction::begin(&[target], |manifest| {
+            manifest["version"] = serde_json::Value::String("3.0.0".into());
+            Ok(())
+        })
+        .unwrap();
+        transaction.commit();
+        drop(transaction);
+        assert!(std::fs::read_to_string(path).unwrap().contains("3.0.0"));
     }
 }

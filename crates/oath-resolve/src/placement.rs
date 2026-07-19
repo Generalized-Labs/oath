@@ -15,6 +15,8 @@ const INSTALL_CHECKS_VERSION: &str = "8.0.0";
 const PACKLIST_VERSION: &str = "10.0.4";
 const NPM_RUNTIME: &[u8] = include_bytes!("../vendor/npm-11.12.1.tgz");
 const NPM_RUNTIME_SHA256: &str = "e679850e663b16f5f146ee425d0eb0e3442c1d2bda3d513bbfd7c81f5ee5db38";
+const NPM_RUNTIME_TREE_SHA256: &str =
+    "c2edcae26e1e00752863da3f86a991acf9129771ecb13b2d4fadadfc65eb6254";
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct PlacementPlan {
@@ -155,6 +157,8 @@ pub struct PlacementRequest {
     pub update: Option<serde_json::Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub save_type: Option<String>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub workspaces: Vec<String>,
 }
 
 impl PlacementRequest {
@@ -314,8 +318,16 @@ fn hydrate_from_persisted_plan(project: &Path, plan: &mut PlacementPlan) {
 }
 
 struct BundledRuntime {
-    _temp: tempfile::TempDir,
     package_root: std::path::PathBuf,
+}
+
+/// Return the pinned npm CLI entrypoint used by Oath's compatibility adapters.
+/// The runtime is content-addressed and integrity-verified before this path is returned.
+pub fn pinned_npm_cli_path() -> Result<std::path::PathBuf> {
+    let runtime = BundledRuntime::extract()?;
+    let path = runtime.package_root.join("bin").join("npm-cli.js");
+    anyhow::ensure!(path.is_file(), "pinned npm CLI entrypoint is missing");
+    Ok(path)
 }
 
 impl BundledRuntime {
@@ -329,30 +341,65 @@ impl BundledRuntime {
             actual == NPM_RUNTIME_SHA256,
             "bundled npm runtime checksum mismatch"
         );
-        let temp = tempfile::tempdir().context("create pinned Arborist runtime directory")?;
+        let cache_root = std::env::var_os("OATH_RUNTIME_CACHE_DIR")
+            .map(std::path::PathBuf::from)
+            .or_else(|| std::env::var_os("OATH_HOME").map(std::path::PathBuf::from))
+            .or_else(|| oath_core::home_dir().map(|home| home.join(".oath")))
+            .context("HOME, USERPROFILE, OATH_HOME, or OATH_RUNTIME_CACHE_DIR must be set")?
+            .join("runtime");
+        Self::extract_at(&cache_root)
+    }
+
+    fn extract_at(cache_root: &Path) -> Result<Self> {
+        let runtime_root = cache_root.join(format!("npm-{NPM_RUNTIME_SHA256}"));
+        let package_root = runtime_root.join("package");
+        if verify_runtime_tree(&package_root).is_ok() {
+            return Ok(Self { package_root });
+        }
+
+        std::fs::create_dir_all(cache_root).context("create pinned npm runtime cache")?;
+        let lock_path = cache_root.join(format!("npm-{NPM_RUNTIME_SHA256}.lock"));
+        let _lock = RuntimeCacheLock::acquire(&lock_path, &package_root)?;
+        if verify_runtime_tree(&package_root).is_ok() {
+            return Ok(Self { package_root });
+        }
+        if runtime_root.exists() {
+            std::fs::remove_dir_all(&runtime_root)
+                .context("remove corrupt pinned npm runtime cache")?;
+        }
+        let temp = tempfile::Builder::new()
+            .prefix("npm-runtime-")
+            .tempdir_in(cache_root)
+            .context("create pinned npm runtime staging directory")?;
         tar::Archive::new(GzDecoder::new(Cursor::new(NPM_RUNTIME)))
             .unpack(temp.path())
             .context("extract bundled npm runtime")?;
-        let package_root = temp.path().join("package");
+        let staged_package = temp.path().join("package");
+        verify_runtime_tree(&staged_package)?;
         verify_runtime_package(
-            &package_root.join("node_modules/@npmcli/arborist/package.json"),
+            &staged_package.join("node_modules/@npmcli/arborist/package.json"),
             "@npmcli/arborist",
             ARBORIST_VERSION,
         )?;
         verify_runtime_package(
-            &package_root.join("node_modules/npm-install-checks/package.json"),
+            &staged_package.join("node_modules/npm-install-checks/package.json"),
             "npm-install-checks",
             INSTALL_CHECKS_VERSION,
         )?;
         verify_runtime_package(
-            &package_root.join("node_modules/npm-packlist/package.json"),
+            &staged_package.join("node_modules/npm-packlist/package.json"),
             "npm-packlist",
             PACKLIST_VERSION,
         )?;
-        Ok(Self {
-            _temp: temp,
-            package_root,
-        })
+        let staged_root = temp.keep();
+        std::fs::rename(&staged_root, &runtime_root).with_context(|| {
+            format!(
+                "commit pinned npm runtime cache {} -> {}",
+                staged_root.display(),
+                runtime_root.display()
+            )
+        })?;
+        Ok(Self { package_root })
     }
 
     fn arborist_path(&self) -> std::path::PathBuf {
@@ -366,6 +413,102 @@ impl BundledRuntime {
     fn packlist_path(&self) -> std::path::PathBuf {
         self.package_root.join("node_modules/npm-packlist")
     }
+}
+
+struct RuntimeCacheLock {
+    path: std::path::PathBuf,
+}
+
+impl RuntimeCacheLock {
+    fn acquire(path: &Path, package_root: &Path) -> Result<Self> {
+        use std::io::ErrorKind;
+        for _ in 0..400 {
+            match std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(path)
+            {
+                Ok(_) => {
+                    return Ok(Self {
+                        path: path.to_path_buf(),
+                    });
+                }
+                Err(error) if error.kind() == ErrorKind::AlreadyExists => {
+                    if verify_runtime_tree(package_root).is_ok() {
+                        return Ok(Self {
+                            path: std::path::PathBuf::new(),
+                        });
+                    }
+                    let stale = std::fs::metadata(path)
+                        .and_then(|metadata| metadata.modified())
+                        .ok()
+                        .and_then(|modified| modified.elapsed().ok())
+                        .is_some_and(|age| age.as_secs() > 60);
+                    if stale {
+                        let _ = std::fs::remove_file(path);
+                    } else {
+                        std::thread::sleep(std::time::Duration::from_millis(25));
+                    }
+                }
+                Err(error) => return Err(error).context("acquire pinned npm runtime cache lock"),
+            }
+        }
+        anyhow::bail!("timed out waiting for pinned npm runtime cache lock")
+    }
+}
+
+impl Drop for RuntimeCacheLock {
+    fn drop(&mut self) {
+        if !self.path.as_os_str().is_empty() {
+            let _ = std::fs::remove_file(&self.path);
+        }
+    }
+}
+
+fn verify_runtime_tree(root: &Path) -> Result<()> {
+    fn collect(root: &Path, directory: &Path, files: &mut Vec<std::path::PathBuf>) -> Result<()> {
+        for entry in std::fs::read_dir(directory)? {
+            let entry = entry?;
+            let path = entry.path();
+            let metadata = std::fs::symlink_metadata(&path)?;
+            if metadata.file_type().is_symlink() || metadata.is_file() {
+                files.push(path.strip_prefix(root)?.to_path_buf());
+            } else if metadata.is_dir() {
+                collect(root, &path, files)?;
+            }
+        }
+        Ok(())
+    }
+
+    anyhow::ensure!(root.is_dir(), "pinned npm runtime cache is missing");
+    let mut files = Vec::new();
+    collect(root, root, &mut files)?;
+    files.sort_by(|left, right| {
+        left.to_string_lossy()
+            .replace('\\', "/")
+            .cmp(&right.to_string_lossy().replace('\\', "/"))
+    });
+    let mut digest = Sha256::new();
+    for relative in files {
+        let portable = relative.to_string_lossy().replace('\\', "/");
+        digest.update(portable.as_bytes());
+        digest.update([0]);
+        let path = root.join(&relative);
+        if std::fs::symlink_metadata(&path)?.file_type().is_symlink() {
+            digest.update(b"l\0");
+            digest.update(std::fs::read_link(&path)?.to_string_lossy().as_bytes());
+        } else {
+            digest.update(b"f\0");
+            digest.update(std::fs::read(&path)?);
+        }
+        digest.update([0xff]);
+    }
+    let actual = hex::encode(digest.finalize());
+    anyhow::ensure!(
+        actual == NPM_RUNTIME_TREE_SHA256,
+        "pinned npm runtime cache checksum mismatch"
+    );
+    Ok(())
 }
 
 fn verify_runtime_package(path: &Path, name: &str, expected_version: &str) -> Result<()> {
