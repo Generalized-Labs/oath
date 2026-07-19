@@ -274,6 +274,7 @@ async function installSamples({ installer, seed, root, count, cacheState, timeou
     sample.tree = await treeDigest(cwd);
     samples.push(sample);
     await rm(cwd, { recursive: true, force: true });
+    if (cacheState === "cold_empty_cache") await rm(home, { recursive: true, force: true });
   }
   return samples;
 }
