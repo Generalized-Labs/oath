@@ -97,6 +97,7 @@ pub struct TransparencyCheckpoint {
     pub merkle_root: String,
     pub latest_hash: Option<String>,
     pub canonicalization: String,
+    pub domain: String,
     pub public_key: String,
     pub signature: String,
 }

@@ -52,8 +52,8 @@ Required configuration:
 | `OATH_REGISTRY_BIND` | Listener address and port. Defaults to `0.0.0.0:4873`. |
 | `OATH_REQUIRE_STEP_UP_APPROVAL` | Set to `true` in every hosted deployment. Approval then requires a fresh OIDC token whose `amr`/`acr` proves MFA, OTP, hardware-key, FIDO, or WebAuthn authentication. |
 | `OATH_REGISTRY_RATE_LIMIT_BACKEND` | `postgres` (default) or `redis`; Redis additionally requires `REDIS_URL`. |
-| `OATH_REGISTRY_SIGNER` | `file` (default) or `remote`. Remote signing requires `OATH_REGISTRY_SIGNER_URL` and normally `OATH_REGISTRY_SIGNER_TOKEN`; returned Ed25519 signatures are verified locally. |
-| `OATH_ANALYZER_BACKEND` | `inline` (default) or `remote`. Remote analysis requires `OATH_ANALYZER_URL` and `OATH_ANALYZER_TOKEN`. |
+| `OATH_REGISTRY_SIGNER` | `file` (default) or `remote`. Remote signing requires `OATH_REGISTRY_SIGNER_URL` and `OATH_REGISTRY_SIGNER_TOKEN`; returned Ed25519 signatures are verified locally over the versioned, domain-separated SHA-256 digest. |
+| `OATH_ANALYZER_BACKEND` | `inline` (default) or `remote`. Remote analysis requires `OATH_ANALYZER_URL` and `OATH_ANALYZER_TOKEN`. HTTPS is mandatory except loopback; `OATH_ANALYZER_ALLOW_INSECURE_INTERNAL=1` is a development-only escape hatch for an isolated Compose or Kubernetes network and must be removed in favor of mTLS/HTTPS before production qualification. |
 
 One-time bootstrap configuration:
 
@@ -88,7 +88,9 @@ Optional integrations are fail-closed configuration pairs:
 `OATH_REGISTRY_MAX_STAGE_REQUEST_BYTES` controls the JSON stage-request limit.
 It defaults to 64 MiB and accepts 1 MiB through 1 GiB. Because tarballs are
 base64 encoded in the current beta API, usable tarball bytes are lower than the
-HTTP limit. Enforce a matching authenticated route limit at the reverse proxy.
+HTTP limit. The isolated analysis worker reads the same value and derives a
+base64-plus-JSON body limit, so every API and worker deployment must receive the
+same setting. Enforce a matching authenticated route limit at the reverse proxy.
 `OATH_REGISTRY_REQUESTS_PER_MINUTE` defaults to 6,000 and is enforced through a
 PostgreSQL or Redis atomic window keyed by bearer-token hash (or the anonymous bucket).
 `OATH_REGISTRY_MAX_PENDING_STAGES` defaults to 100 and is enforced atomically

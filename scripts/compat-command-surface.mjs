@@ -122,6 +122,37 @@ async function packageManifests(root) {
   return entries;
 }
 
+const UPDATE_DEPENDENCIES = {
+  "package.json": ["lodash", "4.17.20", "^4.17.0"],
+  "packages/a/package.json": ["chalk", "4.1.0", "^4.0.0"],
+  "packages/b/package.json": ["debug", "4.3.4", "^4.0.0"],
+};
+
+async function configureUpdateManifests(root, useRanges) {
+  for (const [relative, [name, exact, range]] of Object.entries(UPDATE_DEPENDENCIES)) {
+    const path = join(root, relative);
+    const manifest = await readJson(path);
+    manifest.dependencies = { [name]: useRanges ? range : exact };
+    await writeJson(path, manifest);
+  }
+}
+
+async function workspaceDependencyVersions(root) {
+  const versions = {};
+  for (const [relative, [dependency]] of Object.entries(UPDATE_DEPENDENCIES)) {
+    const manifest = await readJson(join(root, relative));
+    const workspace = manifest.name;
+    const workspaceRoot = dirname(join(root, relative));
+    const candidates = [
+      join(workspaceRoot, "node_modules", dependency, "package.json"),
+      join(root, "node_modules", dependency, "package.json"),
+    ];
+    const packagePath = candidates.find(candidate => existsSync(candidate));
+    versions[workspace] = packagePath ? (await readJson(packagePath)).version : null;
+  }
+  return versions;
+}
+
 async function semanticState(root) {
   const tree = await installedTree(join(root, "node_modules"));
   const manifests = await packageManifests(root);
@@ -165,6 +196,7 @@ async function installProbeBin(packageRoot) {
   await mkdir(dirname(bin), { recursive: true });
   await writeFile(bin, `#!/usr/bin/env node\nconst fs=require("node:fs");const p=JSON.parse(fs.readFileSync("package.json","utf8"));console.log(JSON.stringify({name:p.name,args:process.argv.slice(2)}));\n`);
   await chmod(bin, 0o755);
+  await writeFile(`${bin}.cmd`, `@ECHO OFF\r\nnode "%~dp0\\oath-compat-probe" %*\r\n`);
 }
 
 async function createTwin(root, options = {}) {
@@ -386,10 +418,21 @@ async function runBaseCase(command) {
       case "link": {
         npmResult = run(npmCommand, ["link", "--ignore-scripts"], twin.npmDir, twin.npmHome);
         oathResult = run(oath, ["link"], twin.oathDir, twin.oathHome);
-        const npmLink = join(twin.npmHome, ".npm-global", "lib", "node_modules", "oath-command-surface");
+        const npmRoot = run(npmCommand, ["root", "--global"], twin.npmDir, twin.npmHome);
+        const npmLink = join(npmRoot.stdout.trim(), "oath-command-surface");
         const oathLink = join(twin.oathHome, ".oath", "global", "node_modules", "oath-command-surface");
-        npmExtra.link_valid = await exists(npmLink) && (await readlink(npmLink)).length > 0;
+        npmExtra.link_valid = npmRoot.status === 0 && await exists(npmLink) && (await readlink(npmLink)).length > 0;
         oathExtra.link_valid = await exists(oathLink) && (await readlink(oathLink)).length > 0;
+        break;
+      }
+      case "unlink": {
+        const npmLinked = run(npmCommand, ["link", "--ignore-scripts"], twin.npmDir, twin.npmHome);
+        const oathLinked = run(oath, ["link"], twin.oathDir, twin.oathHome);
+        npmResult = npmLinked.status === 0 ? run(npmCommand, ["unlink", "--global", "--ignore-scripts"], twin.npmDir, twin.npmHome) : npmLinked;
+        oathResult = oathLinked.status === 0 ? run(oath, ["unlink"], twin.oathDir, twin.oathHome) : oathLinked;
+        const npmRoot = run(npmCommand, ["root", "--global"], twin.npmDir, twin.npmHome);
+        npmExtra.link_removed = npmRoot.status === 0 && !(await exists(join(npmRoot.stdout.trim(), "oath-command-surface")));
+        oathExtra.link_removed = !(await exists(join(twin.oathHome, ".oath", "global", "node_modules", "oath-command-surface")));
         break;
       }
       case "cache":
@@ -410,7 +453,9 @@ async function runBaseCase(command) {
         registry = await startRegistry(root);
         await writeAuth(twin.npmHome, registry.url);
         npmResult = run(npmCommand, ["whoami", "--registry", registry.url], twin.npmDir, twin.npmHome);
+        npmExtra.authenticated_requests = (await authRequests(registry.logFile)).filter(request => request.authorization === "present");
         oathResult = run(oath, ["login", "--registry", registry.url, "--token-stdin", "--json"], twin.oathDir, twin.oathHome, { input: `${registryToken}\n` });
+        oathExtra.authenticated_requests = (await authRequests(registry.logFile)).slice(npmExtra.authenticated_requests.length).filter(request => request.authorization === "present");
         npmExtra.identity = npmResult.stdout.trim().replaceAll('"', "");
         oathExtra.identity = jsonObjects(oathResult.stdout)?.username ?? null;
         npmExtra.reference_invocation = "npm whoami with a pre-provisioned token (npm has no non-interactive token-login command)";
@@ -422,7 +467,9 @@ async function runBaseCase(command) {
         await writeAuth(twin.npmHome, registry.url);
         await writeAuth(twin.oathHome, registry.url);
         npmResult = run(npmCommand, ["logout", "--registry", registry.url], twin.npmDir, twin.npmHome);
+        npmExtra.authenticated_requests = (await authRequests(registry.logFile)).filter(request => request.authorization === "present");
         oathResult = run(oath, ["logout", "--registry", registry.url, "--json"], twin.oathDir, twin.oathHome);
+        oathExtra.authenticated_requests = (await authRequests(registry.logFile)).slice(npmExtra.authenticated_requests.length).filter(request => request.authorization === "present");
         npmExtra.token_present = await tokenPresent(twin.npmHome);
         oathExtra.token_present = await tokenPresent(twin.oathHome);
         break;
@@ -432,7 +479,9 @@ async function runBaseCase(command) {
         await writeAuth(twin.npmHome, registry.url);
         await writeAuth(twin.oathHome, registry.url);
         npmResult = run(npmCommand, ["whoami", "--registry", registry.url], twin.npmDir, twin.npmHome);
+        npmExtra.authenticated_requests = (await authRequests(registry.logFile)).filter(request => request.authorization === "present");
         oathResult = run(oath, ["whoami", "--json"], twin.oathDir, twin.oathHome, { env: { npm_config_registry: registry.url } });
+        oathExtra.authenticated_requests = (await authRequests(registry.logFile)).slice(npmExtra.authenticated_requests.length).filter(request => request.authorization === "present");
         npmExtra.identity = npmResult.stdout.trim().replaceAll('"', "");
         oathExtra.identity = jsonObjects(oathResult.stdout)?.username ?? null;
         break;
@@ -441,10 +490,6 @@ async function runBaseCase(command) {
         throw new Error(`unimplemented command case: ${command}`);
     }
 
-    if (registry) {
-      npmExtra.authenticated_requests = (await authRequests(registry.logFile)).filter(request => request.authorization === "present").length;
-      oathExtra.authenticated_requests = npmExtra.authenticated_requests;
-    }
     const npmState = await semanticState(twin.npmDir);
     const oathState = await semanticState(twin.oathDir);
     const npmObservation = comparableObservation(observation(command, npmResult, npmState, npmExtra));
@@ -477,7 +522,7 @@ function workspaceCommandArgs(command, form) {
   switch (command) {
     case "add": return { npm: ["install", "is-number@7.0.0", "--save", "--ignore-scripts", "--no-audit", ...npmFilter], oath: ["add", "is-number@7.0.0", "--yes", ...oathFilter] };
     case "remove": return { npm: ["uninstall", "is-number", "--ignore-scripts", "--no-audit", ...npmFilter], oath: ["remove", "is-number", ...oathFilter] };
-    case "update": return { npm: ["update", "is-number", "--ignore-scripts", "--no-audit", ...npmFilter], oath: ["update", "is-number", ...oathFilter] };
+    case "update": return { npm: ["update", "--ignore-scripts", "--no-audit", ...npmFilter], oath: ["update", ...oathFilter] };
     case "exec": return { npm: ["exec", ...npmFilter, "--", "oath-compat-probe", "workspace"], oath: ["exec", "oath-compat-probe", ...oathFilter, "workspace"] };
     case "pack": return { npm: ["pack", "--dry-run", "--json", "--ignore-scripts", ...npmFilter], oath: ["pack", "--dry-run", "--json", ...oathFilter] };
     case "publish": return { npm: ["publish", "--dry-run", "--json", "--ignore-scripts", ...npmFilter], oath: ["publish", "--dry-run", "--json", ...oathFilter] };
@@ -489,7 +534,11 @@ async function runWorkspaceCase(command, form) {
   const root = await mkdtemp(join(tmpdir(), `oath-workspace-${command}-${form.id}-`));
   try {
     const needsDependency = command === "remove" || command === "update";
-    const twin = await createTwin(root, { workspace: true, dependencies: needsDependency ? { "is-number": command === "update" ? "^6.0.0" : "7.0.0" } : {} });
+    const twin = await createTwin(root, { workspace: true, dependencies: needsDependency ? { "is-number": "7.0.0" } : {} });
+    if (command === "update") {
+      await configureUpdateManifests(twin.npmDir, false);
+      await configureUpdateManifests(twin.oathDir, false);
+    }
     if (command === "publish") {
       for (const project of [twin.npmDir, twin.oathDir]) {
         for (const relative of ["package.json", "packages/a/package.json", "packages/b/package.json"]) {
@@ -506,6 +555,10 @@ async function runWorkspaceCase(command, form) {
         return { id: `workspace-${command}-${form.id}`, command, form: form.id, bootstrap: prepared, equivalent: false, reason: "workspace bootstrap failed" };
       }
     }
+    if (command === "update") {
+      await configureUpdateManifests(twin.npmDir, true);
+      await configureUpdateManifests(twin.oathDir, true);
+    }
     if (command === "exec") {
       for (const relative of [".", "packages/a", "packages/b"]) {
         await installProbeBin(join(twin.npmDir, relative));
@@ -514,6 +567,8 @@ async function runWorkspaceCase(command, form) {
     }
     const beforeNpm = await packageManifests(twin.npmDir);
     const beforeOath = await packageManifests(twin.oathDir);
+    const beforeNpmVersions = command === "update" ? await workspaceDependencyVersions(twin.npmDir) : null;
+    const beforeOathVersions = command === "update" ? await workspaceDependencyVersions(twin.oathDir) : null;
     const args = workspaceCommandArgs(command, form);
     const npmResult = run(npmCommand, args.npm, twin.npmDir, twin.npmHome);
     const oathResult = run(oath, args.oath, twin.oathDir, twin.oathHome);
@@ -527,12 +582,13 @@ async function runWorkspaceCase(command, form) {
       : packageNamesFromJson(result.stdout).length
         ? packageNamesFromJson(result.stdout)
         : namesFromOutput(`${result.stdout}\n${result.stderr}`);
+    const changedVersions = (before, after) => Object.keys(after).filter(name => after[name] !== before[name]).sort();
     const npmNames = command === "exec" || command === "pack" || command === "publish"
       ? outputSelected(npmResult)
-      : command === "update" && npmResult.status === 0 ? [...form.selected] : changed(beforeNpm, afterNpm);
+      : command === "update" ? changedVersions(beforeNpmVersions, await workspaceDependencyVersions(twin.npmDir)) : changed(beforeNpm, afterNpm);
     const oathNames = command === "exec" || command === "pack" || command === "publish"
       ? outputSelected(oathResult)
-      : command === "update" && oathResult.status === 0 ? [...form.selected] : changed(beforeOath, afterOath);
+      : command === "update" ? changedVersions(beforeOathVersions, await workspaceDependencyVersions(twin.oathDir)) : changed(beforeOath, afterOath);
     const npmObservation = {
       status: npmResult.status,
       selected: npmNames,

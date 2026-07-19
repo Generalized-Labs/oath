@@ -2,6 +2,8 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: oath-analysis-worker
+  annotations:
+    oath.dev/transport-note: "Base uses authenticated cluster HTTP; require mTLS or a service mesh before production"
 spec:
   replicas: 1
   selector:
@@ -25,6 +27,8 @@ spec:
             - name: OATH_ANALYZER_TOKEN
               valueFrom:
                 secretKeyRef: {name: oath-registry-secrets, key: analyzer-token}
+            - name: OATH_REGISTRY_MAX_STAGE_REQUEST_BYTES
+              value: "67108864"
           ports:
             - {name: http, containerPort: 4874}
           readinessProbe:

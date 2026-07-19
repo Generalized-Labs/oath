@@ -40,3 +40,6 @@ rayon = "1"
 node-semver.workspace = true
 ed25519-dalek.workspace = true
 getrandom.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Storage_FileSystem"] }

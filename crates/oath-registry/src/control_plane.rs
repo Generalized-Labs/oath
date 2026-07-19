@@ -503,19 +503,36 @@ impl PostgresControlPlane {
     }
 
     pub async fn record_download(&self, name: &str, version: &str) -> Result<()> {
-        query("UPDATE versions SET download_count=download_count+1 WHERE name=$1 AND version=$2")
+        let recorded: bool = query_scalar("SELECT oath_record_download($1,$2)")
             .bind(name)
             .bind(version)
-            .execute(&self.pool)
+            .fetch_one(&self.pool)
             .await?;
+        anyhow::ensure!(
+            recorded,
+            "active package version disappeared before download accounting"
+        );
         Ok(())
     }
 
     pub async fn dist_tags(&self, name: &str) -> Result<Vec<(String, String)>> {
+        self.dist_tags_for(name, None).await
+    }
+
+    pub async fn dist_tags_for(
+        &self,
+        name: &str,
+        organization: Option<&str>,
+    ) -> Result<Vec<(String, String)>> {
+        let mut tx = self.pool.begin().await?;
+        if let Some(organization) = organization {
+            set_tenant(&mut tx, organization).await?;
+        }
         let rows = query("SELECT tag,version FROM dist_tags WHERE name=$1")
             .bind(name)
-            .fetch_all(&self.pool)
+            .fetch_all(&mut *tx)
             .await?;
+        tx.commit().await?;
         Ok(rows
             .into_iter()
             .map(|row| (row.get("tag"), row.get("version")))

@@ -2,7 +2,10 @@
 
 Oath decision contracts use Ed25519 over `oath-json-v1` bytes. The detached
 signature object carries the base64 public key, base64 signature, algorithm,
-and canonicalization version needed to reject unknown encodings.
+and canonicalization version needed to reject unknown encodings. Registry
+signatures may use `oath-json-v1+oath-domain-sha256-v1` plus a non-empty
+`domain`; verifiers hash the version tag, length-prefixed domain, and SHA-256
+payload digest before Ed25519 verification.
 
 To verify an `ExecAssessment v3`, `PublishAssessment v2`, or
 `RegistryVerdict v1`:

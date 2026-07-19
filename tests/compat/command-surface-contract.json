@@ -16,6 +16,7 @@
     "outdated",
     "dedupe",
     "link",
+    "unlink",
     "cache",
     "config",
     "login",

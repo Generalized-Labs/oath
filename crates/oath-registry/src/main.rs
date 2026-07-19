@@ -75,7 +75,7 @@ async fn run_analysis_worker() -> Result<()> {
     tracing::info!(%bind, mode = "analysis-worker", "oath analyzer listening");
     axum::serve(
         listener,
-        oath_registry::analysis_backend::worker_router(&token),
+        oath_registry::analysis_backend::worker_router(&token)?,
     )
     .await?;
     Ok(())

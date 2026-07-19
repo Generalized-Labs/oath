@@ -1142,7 +1142,7 @@ async fn cmd_install(
     // plain `oath install` of the project, not when adding specific packages.
     if packages.is_empty() && !ignore_scripts {
         let lifecycle_start = Instant::now();
-        run_root_lifecycle("preinstall");
+        run_root_lifecycle("preinstall")?;
         timings.record("lifecycle", lifecycle_start.elapsed());
     }
 
@@ -1355,10 +1355,16 @@ async fn cmd_install(
             store_pkg_dir
         };
 
-        // Trusted: run without prompting
+        // Analysis must complete successfully before any lifecycle execution,
+        // including trusted dependencies and --yes approvals.
+        PackageScanner::scan(&node.name, &node.version, &pkg_dir).with_context(|| {
+            format!("analyze {} before contained lifecycle execution", node.name)
+        })?;
+
+        // Trusted: run after analysis, but always inside verified containment.
         if trusted_deps.contains(&node.name) || yes_flag {
             if pkg_dir.exists() {
-                run_install_script(&node.name, &pkg_dir);
+                run_install_script(&node.name, &pkg_dir)?;
             }
             continue;
         }
@@ -1384,7 +1390,7 @@ async fn cmd_install(
             );
             match decision {
                 prompts::ScriptDecision::Allow | prompts::ScriptDecision::Always => {
-                    run_install_script(&node.name, &pkg_dir);
+                    run_install_script(&node.name, &pkg_dir)?;
                 }
                 prompts::ScriptDecision::Deny => {}
             }
@@ -1484,9 +1490,9 @@ async fn cmd_install(
     // covers the common husky `prepare` and any project postinstall.
     if packages.is_empty() && !ignore_scripts {
         let lifecycle_start = Instant::now();
-        run_root_lifecycle("install");
-        run_root_lifecycle("postinstall");
-        run_root_lifecycle("prepare");
+        run_root_lifecycle("install")?;
+        run_root_lifecycle("postinstall")?;
+        run_root_lifecycle("prepare")?;
         timings.record("lifecycle", lifecycle_start.elapsed());
     }
 
@@ -1691,6 +1697,7 @@ async fn cmd_install_workspace(
     } else {
         HashSet::new()
     };
+    let updating = update_packages.is_some();
     let mut request =
         update_packages.map_or_else(PlacementRequest::default, PlacementRequest::update);
     request.workspaces = if filtered {
@@ -1698,7 +1705,35 @@ async fn cmd_install_workspace(
     } else {
         Vec::new()
     };
+    // Arborist's dry-run update path can still rewrite workspace manifests.
+    // Oath owns manifest changes, so snapshot every workspace source and restore
+    // it even if the planner exits with an error.
+    let planner_manifest_guard = if updating {
+        let all_workspaces =
+            detect_workspace_root(&ws.root).context("workspace root disappeared")?;
+        let mut planner_targets = all_workspaces
+            .packages
+            .iter()
+            .map(|package| WorkspaceTarget {
+                name: package.name.clone(),
+                path: package.path.clone(),
+            })
+            .collect::<Vec<_>>();
+        let root_manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(ws.root.join("package.json"))?)?;
+        planner_targets.push(WorkspaceTarget {
+            name: root_manifest["name"]
+                .as_str()
+                .unwrap_or("workspace-root")
+                .to_owned(),
+            path: ws.root.clone(),
+        });
+        Some(WorkspaceManifestTransaction::snapshot(&planner_targets)?)
+    } else {
+        None
+    };
     let mut placement_plan = ArboristPlanner::plan_with(&ws.root, &request)?;
+    drop(planner_manifest_guard);
     if filtered {
         placement_plan.nodes.retain(|node| {
             !node.link
@@ -2083,10 +2118,28 @@ async fn cmd_update_scoped(packages: Vec<String>, workspace: WorkspaceArgs) -> R
     if !workspace.active() {
         return cmd_update(packages).await;
     }
-    let names = packages
+    let requested = packages
         .into_iter()
         .map(|spec| parse_package_spec(&spec).0)
-        .collect();
+        .collect::<HashSet<_>>();
+    let mut names = HashSet::new();
+    for target in selected_workspace_targets(&workspace)? {
+        let manifest: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(target.path.join("package.json"))?)?;
+        for group in ["dependencies", "devDependencies", "optionalDependencies"] {
+            for name in extract_deps(&manifest, group).into_keys() {
+                if requested.is_empty() || requested.contains(&name) {
+                    names.insert(name);
+                }
+            }
+        }
+    }
+    let mut names = names.into_iter().collect::<Vec<_>>();
+    names.sort();
+    anyhow::ensure!(
+        !names.is_empty(),
+        "oath update: no matching dependencies in selected workspaces"
+    );
     cmd_install(
         Vec::new(),
         false,
@@ -2163,10 +2216,10 @@ fn npm_package_env(pkg: &serde_json::Value) -> Vec<(String, String)> {
 /// These are the project's OWN scripts (trusted), so -- unlike third-party
 /// dependency install scripts -- they always run, matching npm/bun. A failure
 /// warns but does not abort the install.
-fn run_root_lifecycle(event: &str) {
+fn run_root_lifecycle(event: &str) -> Result<()> {
     let pkg = match read_package_json() {
         Ok(p) => p,
-        Err(_) => return,
+        Err(_) => return Ok(()),
     };
     let cmd = match pkg
         .get("scripts")
@@ -2174,30 +2227,25 @@ fn run_root_lifecycle(event: &str) {
         .and_then(|v| v.as_str())
     {
         Some(c) => c,
-        None => return,
+        None => return Ok(()),
     };
-    let path_env = format!(
-        "./node_modules/.bin:{}",
-        std::env::var("PATH").unwrap_or_default()
-    );
-    let npm_env = npm_package_env(&pkg);
-    println!("> {event}: {cmd}");
-    let status = std::process::Command::new("sh")
-        .arg("-c")
-        .arg(cmd)
-        .env("PATH", &path_env)
-        .env("npm_lifecycle_event", event)
-        .env("npm_lifecycle_script", cmd)
-        .envs(npm_env.iter().map(|(k, v)| (k, v)))
-        .status();
-    match status {
-        Ok(s) if !s.success() => eprintln!(
-            "  oath: warning -- root {event} script exited with {}",
-            s.code().unwrap_or(-1)
-        ),
-        Err(e) => eprintln!("  oath: warning -- failed to run root {event} script: {e}"),
-        _ => {}
+    let mut npm_env = npm_package_env(&pkg);
+    let mut paths = vec![std::path::PathBuf::from("./node_modules/.bin")];
+    if let Some(path) = std::env::var_os("PATH") {
+        paths.extend(std::env::split_paths(&path));
     }
+    npm_env.push((
+        "PATH".into(),
+        std::env::join_paths(paths)?.to_string_lossy().into_owned(),
+    ));
+    println!("> {event}: {cmd}");
+    run_contained_lifecycle(
+        "root-project",
+        &std::env::current_dir()?,
+        event,
+        cmd,
+        &npm_env,
+    )
 }
 
 struct CurrentDirectoryGuard(PathBuf);
@@ -2267,7 +2315,39 @@ fn write_manifest_atomic(path: &std::path::Path, bytes: &[u8]) -> Result<()> {
         .open(&temporary)?;
     file.write_all(bytes)?;
     file.sync_all()?;
-    std::fs::rename(temporary, path)?;
+    replace_file(&temporary, path)?;
+    Ok(())
+}
+
+#[cfg(not(windows))]
+fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+    std::fs::rename(source, destination)?;
+    Ok(())
+}
+
+#[cfg(windows)]
+fn replace_file(source: &std::path::Path, destination: &std::path::Path) -> Result<()> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows_sys::Win32::Storage::FileSystem::{
+        MOVEFILE_REPLACE_EXISTING, MOVEFILE_WRITE_THROUGH, MoveFileExW,
+    };
+
+    let source: Vec<u16> = source.as_os_str().encode_wide().chain(Some(0)).collect();
+    let destination: Vec<u16> = destination
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let result = unsafe {
+        MoveFileExW(
+            source.as_ptr(),
+            destination.as_ptr(),
+            MOVEFILE_REPLACE_EXISTING | MOVEFILE_WRITE_THROUGH,
+        )
+    };
+    if result == 0 {
+        return Err(std::io::Error::last_os_error().into());
+    }
     Ok(())
 }
 
@@ -2277,6 +2357,22 @@ struct WorkspaceManifestTransaction {
 }
 
 impl WorkspaceManifestTransaction {
+    fn snapshot(targets: &[WorkspaceTarget]) -> Result<Self> {
+        let originals = targets
+            .iter()
+            .map(|target| {
+                let path = target.path.join("package.json");
+                let bytes = std::fs::read(&path)
+                    .with_context(|| format!("failed to read {}", path.display()))?;
+                Ok((path, bytes))
+            })
+            .collect::<Result<Vec<_>>>()?;
+        Ok(Self {
+            originals,
+            committed: false,
+        })
+    }
+
     fn begin(
         targets: &[WorkspaceTarget],
         mut mutate: impl FnMut(&mut serde_json::Value) -> Result<()>,
@@ -3604,47 +3700,126 @@ fn detect_install_script(pkg_dir: &std::path::Path) -> Option<String> {
     None
 }
 
-/// Run a package's install scripts unsandboxed.
-fn run_install_script(pkg_name: &str, pkg_dir: &std::path::Path) {
+/// Run a package's install scripts through verified native containment.
+fn run_install_script(pkg_name: &str, pkg_dir: &std::path::Path) -> Result<()> {
     let pkg_json_path = pkg_dir.join("package.json");
     let content = match std::fs::read_to_string(&pkg_json_path) {
         Ok(c) => c,
-        Err(_) => return,
+        Err(_) => return Ok(()),
     };
     let value: serde_json::Value = match serde_json::from_str(&content) {
         Ok(v) => v,
-        Err(_) => return,
+        Err(_) => return Ok(()),
     };
     let scripts = match value.get("scripts").and_then(|s| s.as_object()) {
         Some(s) => s.clone(),
-        None => return,
+        None => return Ok(()),
     };
-    let npm_env = npm_package_env(&value);
+    let mut npm_env = npm_package_env(&value);
+    let dependency_bin = pkg_dir
+        .ancestors()
+        .find(|path| path.file_name().is_some_and(|name| name == "node_modules"))
+        .map(|modules| modules.join(".bin"));
+    if let Some(bin) = dependency_bin {
+        let mut paths = vec![bin];
+        if let Some(path) = std::env::var_os("PATH") {
+            paths.extend(std::env::split_paths(&path));
+        }
+        npm_env.push((
+            "PATH".into(),
+            std::env::join_paths(paths)?.to_string_lossy().into_owned(),
+        ));
+    }
 
     for hook in &["preinstall", "install", "postinstall"] {
         if let Some(cmd) = scripts.get(*hook).and_then(|v| v.as_str()) {
             tracing::debug!("running {hook} for {pkg_name}: {cmd}");
-            let status = std::process::Command::new("sh")
-                .arg("-c")
-                .arg(cmd)
-                .current_dir(pkg_dir)
-                .env("npm_lifecycle_event", *hook)
-                .envs(npm_env.iter().map(|(k, v)| (k, v)))
-                .status();
-            match status {
-                Ok(s) if !s.success() => {
-                    eprintln!(
-                        "  oath: warning -- {hook} for {pkg_name} exited with {}",
-                        s.code().unwrap_or(-1)
-                    );
-                }
-                Err(e) => {
-                    eprintln!("  oath: warning -- failed to run {hook} for {pkg_name}: {e}");
-                }
-                _ => {}
-            }
+            run_contained_lifecycle(pkg_name, pkg_dir, hook, cmd, &npm_env)?;
         }
     }
+    Ok(())
+}
+
+fn run_contained_lifecycle(
+    package: &str,
+    workdir: &std::path::Path,
+    hook: &str,
+    command: &str,
+    environment: &[(String, String)],
+) -> Result<()> {
+    let capabilities = oath_sandbox::verified_native_capabilities();
+    anyhow::ensure!(
+        capabilities.available
+            && capabilities.filesystem_isolation
+            && capabilities.network_isolation
+            && capabilities.process_isolation
+            && capabilities.resource_limits,
+        "verified native lifecycle containment is unavailable ({}); use --ignore-scripts: {}",
+        capabilities.backend,
+        capabilities
+            .degraded_reason
+            .as_deref()
+            .unwrap_or("required controls were not verified")
+    );
+    let mut plan = oath_sandbox::SandboxPlan::strict(package, workdir.to_path_buf());
+    if let Some(modules) = workdir
+        .ancestors()
+        .find(|path| path.file_name().is_some_and(|name| name == "node_modules"))
+    {
+        plan.read_only_paths.push(modules.to_path_buf());
+    }
+
+    #[cfg(not(target_os = "windows"))]
+    let (program, args) = {
+        fn quote(value: &str) -> String {
+            format!("'{}'", value.replace('\'', "'\"'\"'"))
+        }
+        let mut prefix = format!(
+            "export npm_lifecycle_event={} npm_lifecycle_script={}; ",
+            quote(hook),
+            quote(command)
+        );
+        for (name, value) in environment {
+            if name.chars().enumerate().all(|(index, character)| {
+                character == '_'
+                    || character.is_ascii_alphanumeric()
+                        && (index > 0 || !character.is_ascii_digit())
+            }) {
+                prefix.push_str(&format!("export {name}={}; ", quote(value)));
+            }
+        }
+        (
+            std::path::PathBuf::from("/bin/sh"),
+            vec!["-c".to_owned(), format!("{prefix}{command}")],
+        )
+    };
+    #[cfg(target_os = "windows")]
+    let (program, args) = {
+        let escaped = command.replace('%', "%%");
+        (
+            std::path::PathBuf::from(
+                std::env::var("ComSpec")
+                    .unwrap_or_else(|_| "C:\\Windows\\System32\\cmd.exe".into()),
+            ),
+            vec!["/D".into(), "/S".into(), "/C".into(), escaped],
+        )
+    };
+
+    #[cfg(target_os = "linux")]
+    let status = oath_sandbox::linux::run(&plan, &program, &args)?;
+    #[cfg(target_os = "macos")]
+    let status = oath_sandbox::macos::run(&plan, &program, &args)?;
+    #[cfg(target_os = "windows")]
+    let status = oath_sandbox::windows::run(&plan, &program, &args)?;
+    #[cfg(not(any(target_os = "linux", target_os = "macos", target_os = "windows")))]
+    anyhow::bail!("native lifecycle containment is unsupported on this platform");
+
+    anyhow::ensure!(
+        status.success(),
+        "contained {hook} lifecycle for {package} exited with {}",
+        status.code().unwrap_or(-1)
+    );
+    Ok(())
 }
 
 // ---- EXEC -------------------------------------------------------------------
@@ -5057,6 +5232,7 @@ async fn cmd_whoami(json_output: bool) -> Result<()> {
         .default_registry
         .clone()
         .unwrap_or_else(|| "https://registry.npmjs.org".to_owned());
+    let registry = credential_registry_url(&registry)?;
     let url = reqwest::Url::parse(&format!("{}/-/whoami", registry.trim_end_matches('/')))?;
     let host = url.host_str().context("registry URL has no host")?;
     let token = config
@@ -5145,6 +5321,22 @@ fn npmrc_auth_key(registry: &str) -> Result<String> {
     })
 }
 
+fn credential_registry_url(registry: &str) -> Result<String> {
+    let parsed = reqwest::Url::parse(registry).context("invalid registry URL")?;
+    let loopback = parsed.host_str().is_some_and(|host| {
+        let normalized = host.trim_matches(['[', ']']);
+        normalized == "localhost"
+            || normalized
+                .parse::<std::net::IpAddr>()
+                .is_ok_and(|address| address.is_loopback())
+    });
+    anyhow::ensure!(
+        parsed.scheme() == "https" || (parsed.scheme() == "http" && loopback),
+        "credential-bearing registry requests require HTTPS except on loopback"
+    );
+    Ok(registry.trim_end_matches('/').to_owned())
+}
+
 fn update_user_npmrc(updates: &BTreeMap<String, Option<String>>) -> Result<()> {
     use std::io::Write;
 
@@ -5199,7 +5391,7 @@ fn update_user_npmrc(updates: &BTreeMap<String, Option<String>>) -> Result<()> {
         file.write_all(b"\n")?;
     }
     file.sync_all()?;
-    std::fs::rename(&temporary, &path)?;
+    replace_file(&temporary, &path)?;
     #[cfg(unix)]
     {
         use std::os::unix::fs::PermissionsExt;
@@ -5217,7 +5409,7 @@ async fn cmd_login(
 ) -> Result<()> {
     use std::io::Read;
 
-    let registry = effective_registry(registry, scope)?;
+    let registry = credential_registry_url(&effective_registry(registry, scope)?)?;
     let environment_token = std::env::var("NPM_TOKEN").ok();
     if !token_stdin && environment_token.is_none() {
         anyhow::ensure!(
@@ -5309,7 +5501,7 @@ fn user_npmrc_value(key: &str) -> Result<Option<String>> {
 }
 
 async fn cmd_logout(registry: Option<&str>, scope: Option<&str>, json_output: bool) -> Result<()> {
-    let registry = effective_registry(registry, scope)?;
+    let registry = credential_registry_url(&effective_registry(registry, scope)?)?;
     let auth_key = npmrc_auth_key(&registry)?;
     let token = user_npmrc_value(&auth_key)?
         .with_context(|| format!("not logged in to {registry}, so cannot log out"))?;
@@ -7211,6 +7403,15 @@ mod tests {
             "//registry.example.test:8443/npm/:_authToken"
         );
         assert!(npmrc_auth_key("file:///tmp/registry").is_err());
+    }
+
+    #[test]
+    fn credential_registry_transport_is_encrypted_or_loopback() {
+        assert!(credential_registry_url("https://registry.npmjs.org").is_ok());
+        assert!(credential_registry_url("http://127.0.0.1:4873").is_ok());
+        assert!(credential_registry_url("http://[::1]:4873").is_ok());
+        assert!(credential_registry_url("http://registry.example.test").is_err());
+        assert!(credential_registry_url("file:///tmp/registry").is_err());
     }
 
     #[test]

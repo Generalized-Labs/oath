@@ -38,6 +38,8 @@ services:
       OATH_ANALYZER_BACKEND: remote
       OATH_ANALYZER_URL: http://analysis-worker:4874
       OATH_ANALYZER_TOKEN: ${OATH_ANALYZER_TOKEN:?set OATH_ANALYZER_TOKEN}
+      # Local Compose uses an isolated bridge. Production must provide HTTPS/mTLS.
+      OATH_ANALYZER_ALLOW_INSECURE_INTERNAL: "1"
       OATH_REGISTRY_RATE_LIMIT_BACKEND: ${OATH_REGISTRY_RATE_LIMIT_BACKEND:-postgres}
       REDIS_URL: ${REDIS_URL:-redis://redis:6379}
       OATH_REGISTRY_SIGNER: ${OATH_REGISTRY_SIGNER:-file}
@@ -62,6 +64,7 @@ services:
     environment:
       OATH_ANALYZER_BIND: 0.0.0.0:4874
       OATH_ANALYZER_TOKEN: ${OATH_ANALYZER_TOKEN:?set OATH_ANALYZER_TOKEN}
+      OATH_REGISTRY_MAX_STAGE_REQUEST_BYTES: ${OATH_REGISTRY_MAX_STAGE_REQUEST_BYTES:-67108864}
     healthcheck:
       test: ["CMD-SHELL", "wget -q -O /dev/null --header='Authorization: Bearer ${OATH_ANALYZER_TOKEN}' http://localhost:4874/readyz"]
       interval: 5s

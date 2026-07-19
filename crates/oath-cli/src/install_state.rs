@@ -168,7 +168,8 @@ fn tree_structure_digest(root: &Path) -> Result<String> {
                 entries.push((relative, b'd', String::new()));
                 collect(root, &path, entries)?;
             } else if metadata.is_file() {
-                entries.push((relative, b'f', String::new()));
+                let content_digest = hex::encode(Sha256::digest(std::fs::read(&path)?));
+                entries.push((relative, b'f', content_digest));
             }
         }
         Ok(())
@@ -196,5 +197,18 @@ mod tests {
     fn missing_state_is_not_current() {
         let root = tempfile::tempdir().unwrap();
         assert!(!is_current(root.path(), true, true, false, false).unwrap());
+    }
+
+    #[test]
+    fn tree_digest_detects_content_tampering() {
+        let root = tempfile::tempdir().unwrap();
+        let modules = root.path().join("node_modules/example");
+        std::fs::create_dir_all(&modules).unwrap();
+        let file = modules.join("index.js");
+        std::fs::write(&file, "safe").unwrap();
+        let before = tree_structure_digest(&root.path().join("node_modules")).unwrap();
+        std::fs::write(&file, "evil").unwrap();
+        let after = tree_structure_digest(&root.path().join("node_modules")).unwrap();
+        assert_ne!(before, after);
     }
 }

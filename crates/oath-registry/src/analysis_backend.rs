@@ -73,12 +73,23 @@ pub struct RemoteAnalysis {
 }
 
 impl RemoteAnalysis {
-    pub fn connect(endpoint: String, bearer: String) -> Result<Self> {
+    pub fn connect(
+        endpoint: String,
+        bearer: String,
+        allow_insecure_internal: bool,
+    ) -> Result<Self> {
         let parsed = url::Url::parse(&endpoint).context("parse OATH_ANALYZER_URL")?;
-        let loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+        let loopback = parsed.host_str().is_some_and(|host| {
+            let host = host.trim_matches(['[', ']']);
+            host == "localhost"
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
+        });
         anyhow::ensure!(
-            parsed.scheme() == "https" || (parsed.scheme() == "http" && loopback),
-            "remote analyzer must use HTTPS except on loopback"
+            parsed.scheme() == "https"
+                || (parsed.scheme() == "http" && (loopback || allow_insecure_internal)),
+            "remote analyzer must use HTTPS except on loopback; the explicit insecure-internal override is for isolated development networks only"
         );
         Ok(Self {
             client: reqwest::Client::new(),
@@ -143,6 +154,7 @@ pub fn analysis_backend_from_env() -> Result<SharedAnalysisBackend> {
         "remote" => Ok(Arc::new(RemoteAnalysis::connect(
             std::env::var("OATH_ANALYZER_URL").context("OATH_ANALYZER_URL is required")?,
             std::env::var("OATH_ANALYZER_TOKEN").context("OATH_ANALYZER_TOKEN is required")?,
+            std::env::var("OATH_ANALYZER_ALLOW_INSECURE_INTERNAL").as_deref() == Ok("1"),
         )?)),
         value => anyhow::bail!("unsupported OATH_ANALYZER_BACKEND `{value}`"),
     }
@@ -153,18 +165,38 @@ struct WorkerState {
     token_hash: String,
 }
 
-pub fn worker_router(token: &str) -> Router {
-    Router::new()
+pub fn worker_router(token: &str) -> Result<Router> {
+    anyhow::ensure!(
+        !token.trim().is_empty(),
+        "analysis worker token must not be empty"
+    );
+    let stage_limit = std::env::var("OATH_REGISTRY_MAX_STAGE_REQUEST_BYTES")
+        .ok()
+        .map(|value| value.parse::<usize>())
+        .transpose()
+        .context("OATH_REGISTRY_MAX_STAGE_REQUEST_BYTES must be an integer")?
+        .unwrap_or(64 * 1024 * 1024);
+    anyhow::ensure!(
+        (1024 * 1024..=1024 * 1024 * 1024).contains(&stage_limit),
+        "OATH_REGISTRY_MAX_STAGE_REQUEST_BYTES must be between 1 MiB and 1 GiB"
+    );
+    let body_limit = stage_limit
+        .checked_mul(4)
+        .and_then(|value| value.checked_add(2))
+        .map(|value| value / 3)
+        .and_then(|value| value.checked_add(1024 * 1024))
+        .context("analysis worker body limit overflow")?;
+    Ok(Router::new()
         .route(
             "/livez",
             get(|| async { Json(serde_json::json!({"status":"ok"})) }),
         )
         .route("/readyz", get(worker_ready))
         .route("/v1/analyze", post(worker_analyze))
-        .layer(DefaultBodyLimit::max(96 * 1024 * 1024))
+        .layer(DefaultBodyLimit::max(body_limit))
         .with_state(WorkerState {
             token_hash: crate::hex_sha256(token.as_bytes()),
-        })
+        }))
 }
 
 async fn worker_ready(
@@ -224,9 +256,49 @@ mod tests {
     use http_body_util::BodyExt;
     use tower::ServiceExt;
 
+    #[test]
+    fn remote_transport_is_https_or_explicitly_development_only() {
+        assert!(
+            RemoteAnalysis::connect("https://analyzer.example".into(), "token".into(), false)
+                .is_ok()
+        );
+        assert!(
+            RemoteAnalysis::connect("http://127.0.0.1:4874".into(), "token".into(), false).is_ok()
+        );
+        assert!(
+            RemoteAnalysis::connect("http://analysis-worker:4874".into(), "token".into(), false)
+                .is_err()
+        );
+        assert!(
+            RemoteAnalysis::connect("http://analysis-worker:4874".into(), "token".into(), true)
+                .is_ok()
+        );
+    }
+
+    fn analysis_request(schema_version: u8, tarball_base64: &str) -> Request<Body> {
+        Request::builder()
+            .method("POST")
+            .uri("/v1/analyze")
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                serde_json::json!({
+                    "schema_version": schema_version,
+                    "tarball_base64": tarball_base64,
+                    "manifest": {"name":"pkg","version":"1.0.0"},
+                    "name": "pkg",
+                    "version": "1.0.0",
+                    "publisher": "test",
+                    "registry": "https://registry.example.test"
+                })
+                .to_string(),
+            ))
+            .unwrap()
+    }
+
     #[tokio::test]
     async fn analysis_worker_fails_closed_without_authentication() {
         let response = worker_router("secret")
+            .unwrap()
             .oneshot(
                 Request::builder()
                     .uri("/readyz")
@@ -241,6 +313,7 @@ mod tests {
     #[tokio::test]
     async fn analysis_worker_reports_readiness_with_valid_token() {
         let response = worker_router("secret")
+            .unwrap()
             .oneshot(
                 Request::builder()
                     .uri("/readyz")
@@ -260,5 +333,30 @@ mod tests {
                 .to_bytes()
                 .is_empty()
         );
+    }
+
+    #[tokio::test]
+    async fn analysis_endpoint_fails_closed_before_processing_invalid_requests() {
+        let app = worker_router("secret").unwrap();
+        let missing_auth = app
+            .clone()
+            .oneshot(analysis_request(1, "not-base64"))
+            .await
+            .unwrap();
+        assert_eq!(missing_auth.status(), StatusCode::UNAUTHORIZED);
+
+        let mut wrong_schema = analysis_request(2, "not-base64");
+        wrong_schema
+            .headers_mut()
+            .insert(header::AUTHORIZATION, "Bearer secret".parse().unwrap());
+        let wrong_schema = app.clone().oneshot(wrong_schema).await.unwrap();
+        assert_eq!(wrong_schema.status(), StatusCode::BAD_REQUEST);
+
+        let mut invalid_base64 = analysis_request(1, "not-base64");
+        invalid_base64
+            .headers_mut()
+            .insert(header::AUTHORIZATION, "Bearer secret".parse().unwrap());
+        let invalid_base64 = app.oneshot(invalid_base64).await.unwrap();
+        assert_eq!(invalid_base64.status(), StatusCode::BAD_REQUEST);
     }
 }

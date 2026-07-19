@@ -50,6 +50,9 @@ spec:
               value: remote
             - name: OATH_ANALYZER_URL
               value: http://oath-analysis-worker:4874
+            # Development base only. Overlay this with HTTPS/mTLS for production.
+            - name: OATH_ANALYZER_ALLOW_INSECURE_INTERNAL
+              value: "1"
             - name: OATH_ANALYZER_TOKEN
               valueFrom:
                 secretKeyRef:

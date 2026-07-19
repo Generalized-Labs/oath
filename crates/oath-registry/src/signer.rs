@@ -33,8 +33,10 @@ impl FileSigner {
 
 #[async_trait]
 impl RegistrySigner for FileSigner {
-    async fn sign(&self, _domain: &str, payload: &[u8]) -> Result<Vec<u8>> {
-        Ok(self.key.sign(payload).to_bytes().to_vec())
+    async fn sign(&self, domain: &str, payload: &[u8]) -> Result<Vec<u8>> {
+        anyhow::ensure!(!domain.is_empty(), "signing domain must not be empty");
+        let digest = oath_contracts::domain_separated_digest(domain, payload);
+        Ok(self.key.sign(&digest).to_bytes().to_vec())
     }
 
     async fn ready(&self) -> Result<()> {
@@ -64,11 +66,11 @@ struct PublicKeyResponse {
     public_key: String,
 }
 
-#[derive(Serialize)]
-struct SignRequest<'a> {
+#[derive(Serialize, Deserialize)]
+struct SignRequest {
     schema_version: u8,
-    domain: &'a str,
-    payload_base64: String,
+    domain: String,
+    digest_sha256_base64: String,
 }
 
 #[derive(Deserialize)]
@@ -81,7 +83,13 @@ impl RemoteSigner {
     pub async fn connect(endpoint: &str, bearer: Option<String>) -> Result<Self> {
         let endpoint = endpoint.trim_end_matches('/').to_owned();
         let parsed = url::Url::parse(&endpoint).context("parse OATH_REGISTRY_SIGNER_URL")?;
-        let loopback = matches!(parsed.host_str(), Some("localhost" | "127.0.0.1" | "::1"));
+        let loopback = parsed.host_str().is_some_and(|host| {
+            let host = host.trim_matches(['[', ']']);
+            host == "localhost"
+                || host
+                    .parse::<std::net::IpAddr>()
+                    .is_ok_and(|address| address.is_loopback())
+        });
         anyhow::ensure!(
             parsed.scheme() == "https" || (parsed.scheme() == "http" && loopback),
             "remote signer must use HTTPS except on loopback"
@@ -119,8 +127,9 @@ impl RegistrySigner for RemoteSigner {
         anyhow::ensure!(!domain.is_empty(), "signing domain must not be empty");
         let request = SignRequest {
             schema_version: 1,
-            domain,
-            payload_base64: base64::engine::general_purpose::STANDARD.encode(payload),
+            domain: domain.to_owned(),
+            digest_sha256_base64: base64::engine::general_purpose::STANDARD
+                .encode(oath_contracts::domain_separated_digest(domain, payload)),
         };
         let response = add_auth(
             self.client.post(format!("{}/v1/sign", self.endpoint)),
@@ -140,8 +149,9 @@ impl RegistrySigner for RemoteSigner {
             .decode(response.signature)
             .context("decode remote signer signature")?;
         let signature = Signature::from_slice(&bytes).context("invalid remote signer signature")?;
+        let digest = oath_contracts::domain_separated_digest(domain, payload);
         VerifyingKey::from_bytes(&self.public_key)?
-            .verify(payload, &signature)
+            .verify(&digest, &signature)
             .context("remote signer returned a signature that does not verify")?;
         Ok(bytes)
     }
@@ -176,8 +186,16 @@ pub async fn signer_from_env(key_path: &Path) -> Result<SharedSigner> {
         "remote" => {
             let endpoint = std::env::var("OATH_REGISTRY_SIGNER_URL")
                 .context("OATH_REGISTRY_SIGNER_URL is required for remote signing")?;
-            let bearer = std::env::var("OATH_REGISTRY_SIGNER_TOKEN").ok();
-            Ok(Arc::new(RemoteSigner::connect(&endpoint, bearer).await?))
+            let bearer = std::env::var("OATH_REGISTRY_SIGNER_TOKEN").context(
+                "OATH_REGISTRY_SIGNER_TOKEN is required for authenticated remote signing",
+            )?;
+            anyhow::ensure!(
+                !bearer.trim().is_empty(),
+                "OATH_REGISTRY_SIGNER_TOKEN must not be empty"
+            );
+            Ok(Arc::new(
+                RemoteSigner::connect(&endpoint, Some(bearer)).await?,
+            ))
         }
         value => anyhow::bail!("unsupported OATH_REGISTRY_SIGNER backend `{value}`"),
     }
@@ -200,10 +218,19 @@ mod tests {
         let payload = b"payload";
         let signature =
             Signature::from_slice(&signer.sign("test", payload).await.unwrap()).unwrap();
+        let digest = oath_contracts::domain_separated_digest("test", payload);
         VerifyingKey::from_bytes(signer.public_key())
             .unwrap()
-            .verify(payload, &signature)
+            .verify(&digest, &signature)
             .unwrap();
+        let other = oath_contracts::domain_separated_digest("other", payload);
+        assert!(
+            VerifyingKey::from_bytes(signer.public_key())
+                .unwrap()
+                .verify(&other, &signature)
+                .is_err()
+        );
+        assert!(signer.sign("", payload).await.is_err());
     }
 
     #[tokio::test]
@@ -227,5 +254,35 @@ mod tests {
             .await
             .unwrap();
         assert!(signer.sign("test", b"payload").await.is_err());
+    }
+
+    #[tokio::test]
+    async fn remote_signer_uses_the_domain_separated_digest_contract() {
+        let key = Arc::new(SigningKey::from_bytes(&[9; 32]));
+        let app = Router::new()
+            .route("/v1/public-key", get({
+                let key = key.clone();
+                move || async move { Json(json!({"algorithm":"ed25519","public_key":base64::engine::general_purpose::STANDARD.encode(key.verifying_key().to_bytes())})) }
+            }))
+            .route("/v1/sign", post(|State(key): State<Arc<SigningKey>>, Json(request): Json<SignRequest>| async move {
+                assert_eq!(request.schema_version, 1);
+                assert!(!request.domain.is_empty());
+                let digest = base64::engine::general_purpose::STANDARD.decode(request.digest_sha256_base64).unwrap();
+                assert_eq!(digest.len(), 32);
+                Json(json!({"algorithm":"ed25519","signature":base64::engine::general_purpose::STANDARD.encode(key.sign(&digest).to_bytes())}))
+            }))
+            .with_state(key);
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+        let signer = RemoteSigner::connect(&format!("http://{address}"), None)
+            .await
+            .unwrap();
+        let first = signer.sign("assessment-verdict", b"payload").await.unwrap();
+        let second = signer
+            .sign("transparency-checkpoint", b"payload")
+            .await
+            .unwrap();
+        assert_ne!(first, second);
     }
 }

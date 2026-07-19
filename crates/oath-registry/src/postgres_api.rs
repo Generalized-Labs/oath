@@ -24,6 +24,7 @@ use crate::{
     ApiError, DecisionRequest, PackageRoleRequest, Principal, RevokeRequest, StageRecord,
     StageRequest, TokenRequest, TransparencyCheckpoint,
     analysis_backend::{SharedAnalysisBackend, analysis_backend_from_env},
+    assessment::RegistryAssessmentBundle,
     billing::StripeBilling,
     control_plane::PostgresControlPlane,
     hex_sha256,
@@ -149,7 +150,8 @@ impl PostgresRegistry {
     ) -> Result<oath_contracts::DetachedSignature> {
         Ok(oath_contracts::DetachedSignature {
             algorithm: "ed25519".into(),
-            canonicalization: "oath-json-v1".into(),
+            canonicalization: "oath-json-v1+oath-domain-sha256-v1".into(),
+            domain: Some(domain.to_owned()),
             public_key: base64::engine::general_purpose::STANDARD.encode(self.signer.public_key()),
             signature: base64::engine::general_purpose::STANDARD
                 .encode(self.signer.sign(domain, payload).await?),
@@ -486,6 +488,46 @@ fn manifest_from_tarball(
     Ok(manifest)
 }
 
+fn validate_assessment_bundle(
+    bundle: &RegistryAssessmentBundle,
+    tarball: &[u8],
+    manifest: &Value,
+    name: &str,
+    version: &str,
+    publisher: &str,
+    registry: &str,
+) -> Result<(), ApiError> {
+    let expected_package_digest = format!("sha256:{}", hex_sha256(tarball));
+    let expected_manifest_digest =
+        oath_contracts::digest_json(manifest).map_err(ApiError::internal)?;
+    let verdict = &bundle.verdict;
+    let evidence_package_digest = bundle
+        .evidence
+        .get("package_digest")
+        .and_then(Value::as_str);
+    let evidence_manifest_digest = bundle
+        .evidence
+        .get("manifest_digest")
+        .and_then(Value::as_str);
+    let assessment_digest =
+        oath_contracts::digest_json(&bundle.evidence).map_err(ApiError::internal)?;
+    let valid = verdict.package.name == name
+        && verdict.package.version == version
+        && verdict.package.registry == registry
+        && verdict.package.publisher.as_deref() == Some(publisher)
+        && verdict.package.integrity.as_deref() == Some(expected_package_digest.as_str())
+        && verdict.package_digest == expected_package_digest
+        && evidence_package_digest == Some(expected_package_digest.as_str())
+        && evidence_manifest_digest == Some(expected_manifest_digest.as_str())
+        && verdict.assessment_digest == assessment_digest;
+    if !valid {
+        return Err(ApiError::bad(
+            "analysis response is not bound to the submitted package, manifest, publisher, and registry",
+        ));
+    }
+    Ok(())
+}
+
 async fn livez() -> Json<Value> {
     Json(json!({"status":"ok","service":"oath-registry","schema_version":1}))
 }
@@ -559,6 +601,15 @@ async fn create_stage(
         )
         .await
         .map_err(|error| ApiError::bad(format!("server assessment failed: {error}")))?;
+    validate_assessment_bundle(
+        &server_bundle,
+        &tarball,
+        &manifest,
+        &request.name,
+        &request.version,
+        &principal.organization,
+        &registry.public_url,
+    )?;
     let verdict_bytes =
         oath_contracts::canonical_json_bytes(&server_bundle.verdict).map_err(ApiError::internal)?;
     server_bundle.verdict.signature = Some(
@@ -814,7 +865,10 @@ async fn package_metadata(
     }
     let tags = registry
         .control
-        .dist_tags(&name)
+        .dist_tags_for(
+            &name,
+            principal.as_ref().map(|value| value.organization.as_str()),
+        )
         .await
         .map_err(ApiError::internal)?
         .into_iter()
@@ -877,7 +931,8 @@ async fn revoke_version(
         "tombstone": {
             "payload": payload,
             "algorithm": "ed25519",
-            "canonicalization": "oath-json-v1",
+            "canonicalization": "oath-json-v1+oath-domain-sha256-v1",
+            "domain": "revocation-tombstone",
             "signature": signature,
             "public_key": public_key
         }
@@ -981,7 +1036,8 @@ async fn checkpoint(
         event_count: hashes.len(),
         merkle_root: root,
         latest_hash: hashes.last().cloned(),
-        canonicalization: "oath-json-v1".into(),
+        canonicalization: "oath-json-v1+oath-domain-sha256-v1".into(),
+        domain: "transparency-checkpoint".into(),
         public_key: base64::engine::general_purpose::STANDARD.encode(registry.signer.public_key()),
         signature,
     }))
@@ -1109,7 +1165,8 @@ async fn verdict_bundle(
         "checkpoint":{
             "payload":checkpoint_payload,
             "algorithm":"ed25519",
-            "canonicalization":"oath-json-v1",
+            "canonicalization":"oath-json-v1+oath-domain-sha256-v1",
+            "domain":"transparency-checkpoint",
             "public_key":base64::engine::general_purpose::STANDARD.encode(registry.signer.public_key()),
             "signature":checkpoint_signature,
         }
@@ -1133,7 +1190,8 @@ fn tombstone_bundle(value: Value) -> Result<Value, ApiError> {
             "created_at": field("created_at")?
         },
         "algorithm": "ed25519",
-        "canonicalization": "oath-json-v1",
+        "canonicalization": "oath-json-v1+oath-domain-sha256-v1",
+        "domain": "revocation-tombstone",
         "signature": field("signature")?,
         "public_key": field("public_key")?
     }))
@@ -1702,6 +1760,46 @@ mod tests {
         assert!(manifest_from_tarball(b"not-a-tarball", "demo", "1.2.3").is_err());
     }
 
+    #[test]
+    fn assessment_bundle_is_cryptographically_bound_to_stage_inputs() {
+        let tarball = package_tarball("demo", "1.2.3");
+        let manifest = manifest_from_tarball(&tarball, "demo", "1.2.3").unwrap();
+        let mut bundle = crate::assessment::assess_tarball(
+            &tarball,
+            &manifest,
+            "demo",
+            "1.2.3",
+            "acme",
+            "https://registry.example",
+        )
+        .unwrap();
+        assert!(
+            validate_assessment_bundle(
+                &bundle,
+                &tarball,
+                &manifest,
+                "demo",
+                "1.2.3",
+                "acme",
+                "https://registry.example",
+            )
+            .is_ok()
+        );
+        bundle.evidence["manifest_digest"] = json!("sha256:deadbeef");
+        assert!(
+            validate_assessment_bundle(
+                &bundle,
+                &tarball,
+                &manifest,
+                "demo",
+                "1.2.3",
+                "acme",
+                "https://registry.example",
+            )
+            .is_err()
+        );
+    }
+
     #[tokio::test]
     async fn live_postgres_enforces_tenants_publish_download_and_revoke() {
         let Ok(database_url) = std::env::var("OATH_TEST_DATABASE_URL") else {
@@ -1904,6 +2002,9 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .into(),
+            domain: private_bundle["checkpoint"]["domain"]
+                .as_str()
+                .map(str::to_owned),
             public_key: private_bundle["checkpoint"]["public_key"]
                 .as_str()
                 .unwrap()
@@ -2027,6 +2128,9 @@ mod tests {
                 .as_str()
                 .unwrap()
                 .to_owned(),
+            domain: revocation["tombstone"]["domain"]
+                .as_str()
+                .map(str::to_owned),
             public_key: revocation["tombstone"]["public_key"]
                 .as_str()
                 .unwrap()
@@ -2345,12 +2449,22 @@ mod tests {
             .execute(&mut *rls_write)
             .await
             .unwrap();
-        query("SELECT set_config('oath.organization','acme',true)")
+        query("SELECT set_config('oath.organization','rival',true)")
             .execute(&mut *rls_write)
             .await
             .unwrap();
-        assert!(query("INSERT INTO packages(name,organization,private,created_at) VALUES ('cross-tenant-write','rival',true,0)")
+        assert!(query("INSERT INTO packages(name,organization,private,created_at) VALUES ('cross-tenant-write','acme',true,0)")
             .execute(&mut *rls_write).await.is_err());
+        let public_delete = query("DELETE FROM packages WHERE name='public-tool'")
+            .execute(&mut *rls_write)
+            .await
+            .unwrap();
+        assert_eq!(public_delete.rows_affected(), 0);
+        let public_update = query("UPDATE packages SET private=true WHERE name='public-tool'")
+            .execute(&mut *rls_write)
+            .await
+            .unwrap();
+        assert_eq!(public_update.rows_affected(), 0);
         rls_write.rollback().await.unwrap();
 
         let api_control = PostgresControlPlane::connect_with_role(&database_url, Some("oath_api"))

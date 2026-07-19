@@ -4,7 +4,7 @@ import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
 import { cp, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { arch, cpus, freemem, homedir, hostname, platform, release, tmpdir, totalmem } from "node:os";
-import { dirname, join, resolve } from "node:path";
+import { delimiter, dirname, isAbsolute, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { installedTree } from "./tree-evidence.mjs";
 
@@ -195,7 +195,16 @@ function commandVersion(command, args, cwd, home, timeoutMs) {
 
 function fileSha256(path) {
   try {
-    return createHash("sha256").update(readFileSync(path)).digest("hex");
+    const direct = isAbsolute(path) || path.includes("/") || path.includes("\\");
+    const extensions = process.platform === "win32"
+      ? (process.env.PATHEXT ?? ".COM;.EXE;.BAT;.CMD").split(";")
+      : [""];
+    const candidates = direct
+      ? [path]
+      : (process.env.PATH ?? "").split(delimiter).flatMap(directory => extensions.map(extension => join(directory, `${path}${extension}`)));
+    const executable = candidates.find(candidate => existsSync(candidate));
+    if (!executable) return null;
+    return createHash("sha256").update(readFileSync(executable)).digest("hex");
   } catch {
     return null;
   }
@@ -384,7 +393,7 @@ async function main() {
       ? await repeatedSamples({ command: config.oath, args: ["exec", "--dry-run", "--json", config.packageSpec], cwd: runtimeCwd, home: runtimeHome, count: config.assessmentSamples, timeoutMs: config.timeoutMs, cacheState: "cached_package_and_assessment_inputs" })
       : Array.from({ length: config.assessmentSamples }, (_, index) => ({ ...prime, index }));
     const exec = prime.status === 0
-      ? await repeatedSamples({ command: config.oath, args: ["exec", config.packageSpec, "--", "--version"], cwd: runtimeCwd, home: runtimeHome, count: config.execSamples, timeoutMs: config.timeoutMs, cacheState: "cached_package_and_prior_assessment" })
+      ? await repeatedSamples({ command: config.oath, args: ["exec", "--yes", config.packageSpec, "--", "--version"], cwd: runtimeCwd, home: runtimeHome, count: config.execSamples, timeoutMs: config.timeoutMs, cacheState: "cached_package_and_prior_assessment" })
       : Array.from({ length: config.execSamples }, (_, index) => ({ ...prime, index }));
 
     const benchmarks = {
