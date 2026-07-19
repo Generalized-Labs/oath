@@ -102,3 +102,22 @@ test("PerformanceEvidence v1 schema and runtime validator require the complete e
   assert.deepEqual(errors, []);
   assert.ok(validatePerformanceEvidence({}).length >= 7);
 });
+
+test("PerformanceEvidence v2 requires warm no-op and phase regression evidence", async () => {
+  const schemaPath = fileURLToPath(new URL("../contracts/performance-evidence-v2.schema.json", import.meta.url));
+  const schema = JSON.parse(await readFile(schemaPath, "utf8"));
+  assert.equal(schema.properties.schema_version.const, 2);
+  assert.ok(schema.properties.benchmarks.required.includes("warm_noop"));
+  assert.ok(schema.properties.gates.required.includes("phase_regression"));
+
+  const errors = validatePerformanceEvidence({
+    schema_version: 2,
+    evidence_type: "PerformanceEvidence",
+    environment: { node_version: process.version },
+    tools: { npm: { version: "11.12.1" }, oath: { version: "0.3.0" } },
+    benchmarks: Object.fromEntries(["cold_install", "warm_install", "warm_noop", "cached_assessment", "cached_exec"].map((key) => [key, {}])),
+    phase_catalog: schema.properties.phase_catalog.items.enum,
+    gates: { ...Object.fromEntries(["cold_install", "warm_install", "warm_noop", "cached_assessment", "cached_exec", "phase_regression"].map((key) => [key, {}])), overall: { status: "pass" } },
+  });
+  assert.deepEqual(errors, []);
+});

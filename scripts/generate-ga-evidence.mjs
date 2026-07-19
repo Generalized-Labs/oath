@@ -44,6 +44,10 @@ const generated = artifacts.filter((item) =>
 );
 const summaries = artifacts.map((item) => item.summary).filter(Boolean);
 const exactCommit = (report) => releaseCommit !== "local" && report?.release_commit === releaseCommit;
+const fresh = (report, maximumDays = 30) => {
+  const generated = Date.parse(report?.generated_at);
+  return Number.isFinite(generated) && generated <= Date.now() + 5 * 60 * 1000 && generated >= Date.now() - maximumDays * 86400 * 1000;
+};
 const sha256Digest = (value) => /^sha256:[0-9a-f]{64}$/.test(value ?? "");
 const completeMeasurement = (measurement) =>
   Number(measurement?.discovered) > 0 &&
@@ -56,6 +60,7 @@ const detection = summaries.find((item) =>
 );
 const detectionCorpora = detection?.corpora ?? {};
 const detectionPassed = exactCommit(detection) &&
+  fresh(detection) &&
   detection?.qualification === "qualifying" &&
   detection?.qualifies_for_ga === true &&
   Array.isArray(detection?.errors) && detection.errors.length === 0 &&
@@ -92,14 +97,16 @@ const deploymentPassed = exactCommit(deployment) &&
   Object.values(deployment.controls).every((value) => value === true);
 
 const performanceReports = summaries.filter((item) =>
-  item?.evidence_type === "PerformanceEvidence" && item?.schema_version === 1
+  item?.evidence_type === "PerformanceEvidence" && [1, 2].includes(item?.schema_version)
 );
 const qualifyingPerformance = performanceReports.filter((item) =>
   releaseCommit !== "local" && item?.environment?.git_commit === releaseCommit &&
+  fresh(item) &&
   item?.integrity?.tree_equivalent === true && item?.gates?.overall?.status === "pass" &&
-  ["cold_install", "warm_install", "cached_assessment", "cached_exec"].every(
+  ["cold_install", "warm_install", "warm_noop", "cached_assessment", "cached_exec", "phase_regression"].every(
     (name) => item?.gates?.[name]?.status === "pass",
   ) &&
+  item?.schema_version === 2 &&
   Number(item?.configuration?.minimum_qualifying_samples?.cold_install) >= 200 &&
   Number(item?.configuration?.minimum_qualifying_samples?.warm_install) >= 200 &&
   Number(item?.configuration?.minimum_qualifying_samples?.cached_assessment) >= 1000 &&
@@ -109,6 +116,20 @@ const performancePlatforms = new Set(qualifyingPerformance.map((item) => item.en
 const performancePassed = ["linux", "darwin", "win32"].every((platform) =>
   performancePlatforms.has(platform)
 );
+
+const compatibility = summaries.find((item) =>
+  item?.evidence_type === "CompatibilityEvidence" && item?.schema_version === 1
+);
+const compatibilityPlatforms = new Set(
+  Array.isArray(compatibility?.platforms) ? compatibility.platforms : [],
+);
+const compatibilityPassed = exactCommit(compatibility) && fresh(compatibility) &&
+  compatibility?.qualifies_for_cli_ga === true &&
+  Number(compatibility?.summary?.executed) > 0 &&
+  Number(compatibility?.summary?.failed) === 0 &&
+  Number(compatibility?.summary?.equivalent) === Number(compatibility?.summary?.executed) &&
+  ["linux", "darwin", "win32"].every((platform) => compatibilityPlatforms.has(platform)) &&
+  Array.isArray(compatibility?.node_versions) && compatibility.node_versions.length >= 2;
 
 const checkpoint = summaries.find((item) =>
   item?.evidence_class === "transparency-checkpoint" && item?.schema_version === 3
@@ -147,7 +168,7 @@ const realProjects = {
   exact_equivalents: Number(project?.summary?.exact_equivalents ?? 0),
   failures: project?.summary?.failures ?? [],
 };
-const evidenceGates = [
+const sharedCliGates = [
   {
     name: "100 independent workflows across required platforms",
     passed: independentBehavioral.platform_reports >= 3 &&
@@ -172,6 +193,16 @@ const evidenceGates = [
     passed: detectionPassed,
   },
   {
+    name: "cross-platform npm/npx compatibility manifest",
+    passed: compatibilityPassed,
+  },
+  {
+    name: "cross-platform performance v2 thresholds",
+    passed: performancePassed,
+  },
+];
+const registryGates = [
+  {
     name: "witnessed transparency checkpoint",
     passed: checkpointPassed,
   },
@@ -188,12 +219,16 @@ const evidenceGates = [
     passed: deploymentPassed,
   },
   {
-    name: "cross-platform performance thresholds",
-    passed: performancePassed,
+    name: "registry release candidate deployment identity",
+    passed: sha256Digest(deployment?.deployment_digest),
   },
 ];
 
+const evidenceGates = [...sharedCliGates, ...registryGates];
+
 const technicalReady = evidenceGates.every((gate) => gate.passed);
+const cliTechnicalReady = sharedCliGates.every((gate) => gate.passed);
+const registryTechnicalReady = registryGates.every((gate) => gate.passed);
 
 const manifest = {
   schema_version: 1,
@@ -209,6 +244,7 @@ const manifest = {
     generated_stress: stress,
     real_projects: realProjects,
     detection_quality: detection ?? null,
+    compatibility: compatibility ?? null,
     transparency_checkpoint: checkpoint ?? null,
     independent_audits: audits,
     production_beta: betaValidation ?? null,
@@ -224,6 +260,31 @@ const manifest = {
       "commercial adoption thresholds",
       "legal and compliance approval",
     ],
+  },
+  release_tracks: {
+    cli: {
+      status: "developer-preview",
+      technical_ready: cliTechnicalReady,
+      ready: false,
+      completed_evidence_gates: sharedCliGates.filter((gate) => gate.passed).map((gate) => gate.name),
+      open_evidence_gates: sharedCliGates.filter((gate) => !gate.passed).map((gate) => gate.name),
+      open_external_gates: ["30-day public release-candidate qualification", "legal and release approval"],
+    },
+    registry: {
+      status: "developer-preview",
+      technical_ready: registryTechnicalReady,
+      ready: false,
+      completed_evidence_gates: registryGates.filter((gate) => gate.passed).map((gate) => gate.name),
+      open_evidence_gates: registryGates.filter((gate) => !gate.passed).map((gate) => gate.name),
+      open_external_gates: ["60-day production qualification", "external audit acceptance", "legal and release approval"],
+    },
+  },
+  release_identity: {
+    source_commit: releaseCommit,
+    lockfile_sha256: process.env.OATH_LOCKFILE_SHA256 ?? null,
+    toolchain: process.env.OATH_TOOLCHAIN ?? null,
+    binary_digests: process.env.OATH_BINARY_DIGESTS ? JSON.parse(process.env.OATH_BINARY_DIGESTS) : {},
+    deployment_id: deployment?.deployment_digest ?? null,
   },
   artifacts,
 };

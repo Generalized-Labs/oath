@@ -51,13 +51,22 @@ version.
 
 ## GA evidence contracts
 
-The bundle also publishes closed JSON Schemas for `DetectionEvidenceReport v2`,
-`PerformanceEvidence v1`, `OperationalDrillReport v2`, `ProductionDeploymentEvidence v1`,
+The bundle also publishes closed JSON Schemas for `CompatibilityEvidence v1`,
+`DetectionEvidenceReport v2`, `PerformanceEvidence v1` and v2,
+`OperationalDrillReport v2`, `ProductionDeploymentEvidence v1`,
 `TransparencyCheckpoint v3`, and `IndependentAuditReport v1`. These reports do
 not authorize package execution and are not signed agent verdicts. They are
 exact-commit inputs to the GA manifest, distributed with checksums and GitHub
 artifact provenance. Missing, stale, self-test, expired, incomplete, or
 threshold-failing reports remain open gates.
+
+PerformanceEvidence v1 remains immutable for existing consumers. Version 2 adds
+the verified warm no-op benchmark and per-install phase timings. The published
+npm compatibility manifest is the authoritative list of GA-required commands,
+semantics, implemented surfaces, preview surfaces, and intentional divergences.
+`RegistryReplicationEvent v1` defines the provider-neutral immutable
+event/object/checkpoint handoff for a future regional replicator; its presence
+does not claim that multi-region replication has been deployed or qualified.
 
 Two witness signatures are required for a qualifying transparency checkpoint;
 the registry's own checkpoint signature is not an independent witness. Audit

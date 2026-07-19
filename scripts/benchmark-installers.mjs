@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
+import { existsSync, readFileSync, rmSync } from "node:fs";
 import { cp, mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
 import { arch, cpus, freemem, homedir, hostname, platform, release, tmpdir, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
@@ -27,8 +28,9 @@ const DEFAULTS = Object.freeze({
   minimumAssessmentSamples: 1000,
   minimumExecSamples: 200,
   timeoutMs: 10 * 60 * 1000,
-  coldRatioLimit: 1.2,
+  coldRatioLimit: 1,
   warmRatioLimit: 1,
+  warmNoopRatioLimit: 0.5,
   assessmentP95LimitMs: 100,
   execP95LimitMs: 2000,
   packageSpec: "prettier@3.7.4",
@@ -69,7 +71,7 @@ export function parseConfiguration(argv = process.argv.slice(2)) {
   const assessmentSamples = integer(option(argv, "--assessment-samples", "OATH_BENCHMARK_ASSESSMENT_SAMPLES"), "assessment samples", DEFAULTS.assessmentSamples);
   const execSamples = integer(option(argv, "--exec-samples", "OATH_BENCHMARK_EXEC_SAMPLES"), "exec samples", DEFAULTS.execSamples);
   return {
-    output: resolve(option(argv, "--output", "OATH_BENCHMARK_OUTPUT", "compat-results/benchmarks/performance-evidence-v1.json")),
+    output: resolve(option(argv, "--output", "OATH_BENCHMARK_OUTPUT", "compat-results/benchmarks/performance-evidence-v2.json")),
     oath: resolve(option(argv, "--oath-bin", "OATH_BIN", "target/release/oath")),
     npm: option(argv, "--npm-bin", "OATH_BENCHMARK_NPM_BIN", "npm"),
     bun: option(argv, "--bun-bin", "OATH_BENCHMARK_BUN_BIN", "bun"),
@@ -84,9 +86,11 @@ export function parseConfiguration(argv = process.argv.slice(2)) {
     timeoutMs: integer(option(argv, "--timeout-ms", "OATH_BENCHMARK_TIMEOUT_MS"), "timeout", DEFAULTS.timeoutMs),
     coldRatioLimit: number(option(argv, "--cold-ratio-limit", "OATH_BENCHMARK_COLD_RATIO_LIMIT"), "cold ratio limit", DEFAULTS.coldRatioLimit),
     warmRatioLimit: number(option(argv, "--warm-ratio-limit", "OATH_BENCHMARK_WARM_RATIO_LIMIT"), "warm ratio limit", DEFAULTS.warmRatioLimit),
+    warmNoopRatioLimit: number(option(argv, "--warm-noop-ratio-limit", "OATH_BENCHMARK_WARM_NOOP_RATIO_LIMIT"), "warm no-op ratio limit", DEFAULTS.warmNoopRatioLimit),
     assessmentP95LimitMs: number(option(argv, "--assessment-p95-limit-ms", "OATH_BENCHMARK_ASSESSMENT_P95_LIMIT_MS"), "assessment p95 limit", DEFAULTS.assessmentP95LimitMs),
     execP95LimitMs: number(option(argv, "--exec-p95-limit-ms", "OATH_BENCHMARK_EXEC_P95_LIMIT_MS"), "exec p95 limit", DEFAULTS.execP95LimitMs),
     packageSpec: option(argv, "--package", "OATH_BENCHMARK_PACKAGE", DEFAULTS.packageSpec),
+    phaseWaiverReason: option(argv, "--phase-waiver-reason", "OATH_PHASE_WAIVER_REASON", null),
   };
 }
 
@@ -156,6 +160,12 @@ export function evaluateGates(benchmarks, config, integrity = {}) {
     cached_assessment: absoluteGate("cached_assessment", benchmarks.cached_assessment.tools.oath, config.minimumAssessmentSamples, config.assessmentP95LimitMs),
     cached_exec: absoluteGate("cached_exec", benchmarks.cached_exec.tools.oath, config.minimumExecSamples, config.execP95LimitMs),
   };
+  if (benchmarks.warm_noop) {
+    gates.warm_noop = ratioGate("warm_noop", benchmarks.warm_noop.tools.oath, benchmarks.warm_noop.tools.npm, config.minimumInstallSamples, config.warmNoopRatioLimit);
+    gates.phase_regression = integrity.phaseRegression === true
+      ? { name: "phase_regression", status: "pass", observed: integrity.maximumPhaseRegression ?? null, requirement: { metric: "maximum phase p95 regression", maximum: 0.1, waiver: integrity.phaseWaiverReason ?? null }, reasons: integrity.phaseWaiverReason ? [`explicit waiver: ${integrity.phaseWaiverReason}`] : [] }
+      : insufficient("phase_regression", ["no accepted phase baseline was supplied"], null, { metric: "maximum phase p95 regression", maximum: 0.1 });
+  }
   if (integrity.treeEquivalent === false) {
     for (const key of ["cold_install", "warm_install"]) {
       gates[key] = insufficient(key, ["npm and Oath produced different node_modules trees"], gates[key].observed, gates[key].requirement);
@@ -183,6 +193,7 @@ function commandVersion(command, args, cwd, home, timeoutMs) {
 }
 
 function run(command, args, cwd, home, timeoutMs, cacheState, sampleIndex) {
+  const timingPath = join(cwd, `.oath-phase-timings-${process.pid}-${sampleIndex}.json`);
   const started = process.hrtime.bigint();
   const result = spawnSync(command, args, {
     cwd,
@@ -197,8 +208,17 @@ function run(command, args, cwd, home, timeoutMs, cacheState, sampleIndex) {
       OATH_HOME: join(home, ".oath"),
       npm_config_cache: join(home, ".npm"),
       BUN_INSTALL_CACHE_DIR: join(home, ".bun-cache"),
+      OATH_TIMINGS_FILE: timingPath,
     },
   });
+  let phaseTimings = null;
+  if (existsSync(timingPath)) {
+    try {
+      phaseTimings = JSON.parse(readFileSync(timingPath, "utf8")).phases_ms ?? null;
+    } finally {
+      rmSync(timingPath, { force: true });
+    }
+  }
   return {
     index: sampleIndex,
     elapsed_ms: Number(process.hrtime.bigint() - started) / 1e6,
@@ -209,6 +229,7 @@ function run(command, args, cwd, home, timeoutMs, cacheState, sampleIndex) {
     cache_state: cacheState,
     stdout_tail: (result.stdout ?? "").slice(-1000),
     stderr_tail: (result.stderr ?? "").slice(-1000),
+    phase_timings_ms: phaseTimings,
   };
 }
 
@@ -258,6 +279,24 @@ async function installSamples({ installer, seed, root, count, cacheState, timeou
   return samples;
 }
 
+async function noOpSamples({ installer, seed, root, count, timeoutMs }) {
+  const cwd = join(root, `${installer.name}-warm-noop-project`);
+  const home = join(root, `${installer.name}-warm-noop-home`);
+  await cp(seed, cwd, { recursive: true });
+  await mkdir(home, { recursive: true });
+  const prime = run(installer.command, installer.args, cwd, home, timeoutMs, "warm_noop_prime", 0);
+  if (prime.status !== 0) {
+    return Array.from({ length: count }, (_, index) => ({ ...prime, index, cache_state: "warm_verified_noop" }));
+  }
+  const samples = [];
+  for (let index = 0; index < count; index += 1) {
+    const sample = run(installer.command, installer.args, cwd, home, timeoutMs, "warm_verified_noop", index);
+    sample.tree = await treeDigest(cwd);
+    samples.push(sample);
+  }
+  return samples;
+}
+
 async function repeatedSamples({ command, args, cwd, home, count, timeoutMs, cacheState }) {
   const samples = [];
   for (let index = 0; index < count; index += 1) samples.push(run(command, args, cwd, home, timeoutMs, cacheState, index));
@@ -284,10 +323,17 @@ function captureEnvironment() {
 
 export function validatePerformanceEvidence(evidence) {
   const errors = [];
-  if (evidence?.schema_version !== 1 || evidence?.evidence_type !== "PerformanceEvidence") errors.push("schema identity is invalid");
+  if (![1, 2].includes(evidence?.schema_version) || evidence?.evidence_type !== "PerformanceEvidence") errors.push("schema identity is invalid");
   for (const key of ["cold_install", "warm_install", "cached_assessment", "cached_exec"]) {
     if (!evidence?.benchmarks?.[key]) errors.push(`missing benchmark ${key}`);
     if (!evidence?.gates?.[key]) errors.push(`missing gate ${key}`);
+  }
+  if (evidence?.schema_version === 2) {
+    for (const key of ["warm_noop", "phase_regression"]) {
+      if (!evidence?.benchmarks?.[key] && key === "warm_noop") errors.push(`missing benchmark ${key}`);
+      if (!evidence?.gates?.[key]) errors.push(`missing gate ${key}`);
+    }
+    if (!Array.isArray(evidence?.phase_catalog) || evidence.phase_catalog.length < 12) errors.push("complete phase catalog is required");
   }
   if (!evidence?.tools?.npm?.version || !evidence?.tools?.oath?.version) errors.push("exact npm and Oath versions are required");
   if (!evidence?.environment?.node_version) errors.push("environment.node_version is required");
@@ -315,9 +361,11 @@ async function main() {
 
     const cold = {};
     const warm = {};
+    const warmNoop = {};
     for (const installer of installers) {
       cold[installer.name] = summarizeSamples(await installSamples({ installer, seed, root, count: config.installSamples, cacheState: "cold_empty_cache", timeoutMs: config.timeoutMs }));
       warm[installer.name] = summarizeSamples(await installSamples({ installer, seed, root, count: config.installSamples, cacheState: "warm_shared_cache_no_node_modules", timeoutMs: config.timeoutMs }));
+      warmNoop[installer.name] = summarizeSamples(await noOpSamples({ installer, seed, root, count: config.installSamples, timeoutMs: config.timeoutMs }));
     }
 
     const runtimeHome = join(root, "oath-runtime-home");
@@ -336,6 +384,7 @@ async function main() {
     const benchmarks = {
       cold_install: { unit: "milliseconds", cache_state: "fresh isolated cache and no node_modules for every sample", tools: cold },
       warm_install: { unit: "milliseconds", cache_state: "shared primed cache and no node_modules for every sample", tools: warm },
+      warm_noop: { unit: "milliseconds", cache_state: "unchanged manifest, lockfile, policy, cache, lifecycle state, and node_modules", tools: warmNoop },
       cached_assessment: { unit: "milliseconds", cache_state: "package and assessment inputs cached after an untimed prime", tools: { oath: summarizeSamples(assessment) } },
       cached_exec: { unit: "milliseconds", cache_state: "package and assessment cached; measured command executes --version", tools: { oath: summarizeSamples(exec) } },
     };
@@ -347,20 +396,21 @@ async function main() {
     const npmTrees = new Set([...cold.npm.raw_samples, ...warm.npm.raw_samples].filter((sample) => sample.status === 0).map((sample) => sample.tree.sha256));
     const oathTrees = new Set([...cold.oath.raw_samples, ...warm.oath.raw_samples].filter((sample) => sample.status === 0).map((sample) => sample.tree.sha256));
     const integrity = { tree_equivalent: npmTrees.size === 1 && oathTrees.size === 1 && [...npmTrees][0] === [...oathTrees][0], npm_tree_digests: [...npmTrees], oath_tree_digests: [...oathTrees] };
-    const gates = evaluateGates(benchmarks, config, { treeEquivalent: integrity.tree_equivalent, versionsComplete: Boolean(tools.npm.version && tools.oath.version) });
+    const gates = evaluateGates(benchmarks, config, { treeEquivalent: integrity.tree_equivalent, versionsComplete: Boolean(tools.npm.version && tools.oath.version), phaseRegression: Boolean(config.phaseWaiverReason), phaseWaiverReason: config.phaseWaiverReason });
     const evidence = {
-      schema_version: 1,
+      schema_version: 2,
       evidence_type: "PerformanceEvidence",
       generated_at: new Date().toISOString(),
       environment: captureEnvironment(),
       tools,
       configuration: {
-        requested_samples: { cold_install: config.installSamples, warm_install: config.installSamples, cached_assessment: config.assessmentSamples, cached_exec: config.execSamples },
-        minimum_qualifying_samples: { cold_install: config.minimumInstallSamples, warm_install: config.minimumInstallSamples, cached_assessment: config.minimumAssessmentSamples, cached_exec: config.minimumExecSamples },
-        thresholds: { cold_install_oath_to_npm_p95_maximum: config.coldRatioLimit, warm_install_oath_to_npm_p95_maximum: config.warmRatioLimit, cached_assessment_p95_ms_maximum: config.assessmentP95LimitMs, cached_exec_p95_ms_maximum: config.execP95LimitMs },
+        requested_samples: { cold_install: config.installSamples, warm_install: config.installSamples, warm_noop: config.installSamples, cached_assessment: config.assessmentSamples, cached_exec: config.execSamples },
+        minimum_qualifying_samples: { cold_install: config.minimumInstallSamples, warm_install: config.minimumInstallSamples, warm_noop: config.minimumInstallSamples, cached_assessment: config.minimumAssessmentSamples, cached_exec: config.minimumExecSamples },
+        thresholds: { cold_install_oath_to_npm_p95_maximum: config.coldRatioLimit, warm_install_oath_to_npm_p95_maximum: config.warmRatioLimit, warm_noop_oath_to_npm_p95_maximum: config.warmNoopRatioLimit, maximum_phase_p95_regression: 0.1, cached_assessment_p95_ms_maximum: config.assessmentP95LimitMs, cached_exec_p95_ms_maximum: config.execP95LimitMs },
         timeout_ms: config.timeoutMs,
         package_spec: config.packageSpec,
         dependency_manifest: DEFAULT_MANIFEST.dependencies,
+        phase_regression_waiver: config.phaseWaiverReason,
       },
       methodology: {
         percentile: "nearest-rank over successful samples; rank = ceil(q * n)",
@@ -372,6 +422,7 @@ async function main() {
         exclusions: [],
       },
       integrity,
+      phase_catalog: ["noop_validation", "resolve", "metadata", "download", "integrity", "extraction", "analysis", "policy", "link", "lifecycle", "lockfile", "cleanup"],
       benchmarks,
       gates,
     };

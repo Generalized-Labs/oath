@@ -51,11 +51,13 @@ test("moves satisfied measured gates out of the open list", async () => {
 
   assert.deepEqual(manifest.ga_gate.open_evidence_gates, [
     "qualifying detection thresholds",
+    "cross-platform npm/npx compatibility manifest",
+    "cross-platform performance v2 thresholds",
     "witnessed transparency checkpoint",
     "independent architecture, penetration, and sandbox reviews",
     "60-day production SLO and disaster-drill ledger",
     "multi-region production registry deployment",
-    "cross-platform performance thresholds",
+    "registry release candidate deployment identity",
   ]);
   assert.equal(manifest.ga_gate.technical_ready, false);
   assert.deepEqual(manifest.ga_gate.completed_evidence_gates, [
@@ -103,14 +105,16 @@ test("fails closed when a detection report claims pass with incomplete scans", a
 
 test("accepts performance only after every supported OS passes on the exact commit", async () => {
   const performance = (platform) => ({
-    schema_version: 1,
+    schema_version: 2,
     evidence_type: "PerformanceEvidence",
+    generated_at: new Date().toISOString(),
     environment: { platform, git_commit: "a".repeat(40) },
     integrity: { tree_equivalent: true },
     configuration: {
       minimum_qualifying_samples: {
         cold_install: 200,
         warm_install: 200,
+        warm_noop: 200,
         cached_assessment: 1000,
         cached_exec: 200,
       },
@@ -118,6 +122,8 @@ test("accepts performance only after every supported OS passes on the exact comm
     gates: {
       cold_install: { status: "pass" },
       warm_install: { status: "pass" },
+      warm_noop: { status: "pass" },
+      phase_regression: { status: "pass" },
       cached_assessment: { status: "pass" },
       cached_exec: { status: "pass" },
       overall: { status: "pass" },
@@ -129,7 +135,25 @@ test("accepts performance only after every supported OS passes on the exact comm
     executions: 10000,
     extraReports: [performance("linux"), performance("darwin"), performance("win32")],
   });
-  assert.equal(manifest.ga_gate.completed_evidence_gates.includes("cross-platform performance thresholds"), true);
+  assert.equal(manifest.ga_gate.completed_evidence_gates.includes("cross-platform performance v2 thresholds"), true);
+  assert.equal(manifest.release_tracks.cli.completed_evidence_gates.includes("cross-platform performance v2 thresholds"), true);
+});
+
+test("keeps CLI and Registry readiness independent", async () => {
+  const compatibility = {
+    schema_version: 1,
+    evidence_type: "CompatibilityEvidence",
+    generated_at: new Date().toISOString(),
+    release_commit: "a".repeat(40),
+    platforms: ["linux", "darwin", "win32"],
+    node_versions: ["20", "22", "24"],
+    commands: [{}],
+    summary: { executed: 10, equivalent: 10, failed: 0 },
+    qualifies_for_cli_ga: true,
+  };
+  const manifest = await generateEvidence({ workflows: 100, projects: 250, executions: 10000, extraReports: [compatibility] });
+  assert.equal(manifest.release_tracks.cli.completed_evidence_gates.includes("cross-platform npm/npx compatibility manifest"), true);
+  assert.equal(manifest.release_tracks.registry.completed_evidence_gates.includes("cross-platform npm/npx compatibility manifest"), false);
 });
 
 test("keeps under-threshold measured gates open", async () => {
