@@ -193,6 +193,19 @@ function commandVersion(command, args, cwd, home, timeoutMs) {
   return result.status === 0 ? result.stdout_tail.trim().split(/\r?\n/).at(-1) || null : null;
 }
 
+function fileSha256(path) {
+  try {
+    return createHash("sha256").update(readFileSync(path)).digest("hex");
+  } catch {
+    return null;
+  }
+}
+
+function sourceTreeClean() {
+  const result = spawnSync("git", ["status", "--porcelain"], { cwd: process.cwd(), encoding: "utf8" });
+  return result.status === 0 && result.stdout.trim() === "";
+}
+
 function run(command, args, cwd, home, timeoutMs, cacheState, sampleIndex) {
   const timingPath = join(cwd, `.oath-phase-timings-${process.pid}-${sampleIndex}.json`);
   const started = process.hrtime.bigint();
@@ -304,6 +317,7 @@ function captureEnvironment() {
     ci: process.env.CI ?? null,
     github_run_id: process.env.GITHUB_RUN_ID ?? null,
     git_commit: process.env.GITHUB_SHA ?? commandVersion("git", ["rev-parse", "HEAD"], process.cwd(), homedir(), 10_000),
+    source_tree_clean: sourceTreeClean(),
   };
 }
 
@@ -320,6 +334,11 @@ export function validatePerformanceEvidence(evidence) {
       if (!evidence?.gates?.[key]) errors.push(`missing gate ${key}`);
     }
     if (!Array.isArray(evidence?.phase_catalog) || evidence.phase_catalog.length < 12) errors.push("complete phase catalog is required");
+    if (evidence?.environment?.source_tree_clean !== true) errors.push("performance evidence must be generated from a clean source tree");
+    if (!/^[a-f0-9]{64}$/.test(evidence?.integrity?.input_lock_sha256 ?? "")) errors.push("exact input lockfile digest is required");
+    for (const tool of ["npm", "oath"]) {
+      if (!/^[a-f0-9]{64}$/.test(evidence?.tools?.[tool]?.binary_sha256 ?? "")) errors.push(`${tool} binary digest is required`);
+    }
   }
   if (!evidence?.tools?.npm?.version || !evidence?.tools?.oath?.version) errors.push("exact npm and Oath versions are required");
   if (!evidence?.environment?.node_version) errors.push("environment.node_version is required");
@@ -375,13 +394,13 @@ async function main() {
       cached_exec: { unit: "milliseconds", cache_state: "package and assessment cached; measured command executes --version", tools: { oath: summarizeSamples(exec) } },
     };
     const tools = {
-      npm: { command: config.npm, version: commandVersion(config.npm, ["--version"], root, seedHome, config.timeoutMs) },
-      oath: { command: config.oath, version: commandVersion(config.oath, ["--version"], root, runtimeHome, config.timeoutMs) },
+      npm: { command: config.npm, version: commandVersion(config.npm, ["--version"], root, seedHome, config.timeoutMs), binary_sha256: fileSha256(config.npm) },
+      oath: { command: config.oath, version: commandVersion(config.oath, ["--version"], root, runtimeHome, config.timeoutMs), binary_sha256: fileSha256(config.oath) },
       ...(config.includeBun ? { bun: { command: config.bun, version: commandVersion(config.bun, ["--version"], root, seedHome, config.timeoutMs) } } : {}),
     };
     const npmTrees = new Set([...cold.npm.raw_samples, ...warm.npm.raw_samples].filter((sample) => sample.status === 0).map((sample) => sample.tree.sha256));
     const oathTrees = new Set([...cold.oath.raw_samples, ...warm.oath.raw_samples].filter((sample) => sample.status === 0).map((sample) => sample.tree.sha256));
-    const integrity = { tree_equivalent: npmTrees.size === 1 && oathTrees.size === 1 && [...npmTrees][0] === [...oathTrees][0], npm_tree_digests: [...npmTrees], oath_tree_digests: [...oathTrees] };
+    const integrity = { tree_equivalent: npmTrees.size === 1 && oathTrees.size === 1 && [...npmTrees][0] === [...oathTrees][0], npm_tree_digests: [...npmTrees], oath_tree_digests: [...oathTrees], input_lock_sha256: fileSha256(join(seed, "package-lock.json")) };
     const gates = evaluateGates(benchmarks, config, { treeEquivalent: integrity.tree_equivalent, versionsComplete: Boolean(tools.npm.version && tools.oath.version), phaseRegression: Boolean(config.phaseWaiverReason), phaseWaiverReason: config.phaseWaiverReason });
     const evidence = {
       schema_version: 2,

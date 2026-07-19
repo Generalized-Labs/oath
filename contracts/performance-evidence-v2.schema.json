@@ -11,7 +11,7 @@
     "generated_at": { "type": "string", "format": "date-time" },
     "environment": {
       "type": "object",
-      "required": ["platform", "architecture", "os_release", "hostname_hash", "cpu_model", "logical_cpu_count", "total_memory_bytes", "free_memory_bytes_at_start", "node_version", "ci", "github_run_id", "git_commit"],
+      "required": ["platform", "architecture", "os_release", "hostname_hash", "cpu_model", "logical_cpu_count", "total_memory_bytes", "free_memory_bytes_at_start", "node_version", "ci", "github_run_id", "git_commit", "source_tree_clean"],
       "properties": {
         "platform": { "type": "string", "minLength": 1 },
         "architecture": { "type": "string", "minLength": 1 },
@@ -24,7 +24,8 @@
         "node_version": { "type": "string", "minLength": 1 },
         "ci": { "type": ["string", "null"] },
         "github_run_id": { "type": ["string", "null"] },
-        "git_commit": { "type": ["string", "null"] }
+        "git_commit": { "type": ["string", "null"] },
+        "source_tree_clean": { "type": "boolean" }
       }
     },
     "tools": {
@@ -40,11 +41,12 @@
     "methodology": { "type": "object" },
     "integrity": {
       "type": "object",
-      "required": ["tree_equivalent", "npm_tree_digests", "oath_tree_digests"],
+      "required": ["tree_equivalent", "npm_tree_digests", "oath_tree_digests", "input_lock_sha256"],
       "properties": {
         "tree_equivalent": { "type": "boolean" },
         "npm_tree_digests": { "type": "array", "items": { "$ref": "#/$defs/sha256" }, "uniqueItems": true },
-        "oath_tree_digests": { "type": "array", "items": { "$ref": "#/$defs/sha256" }, "uniqueItems": true }
+        "oath_tree_digests": { "type": "array", "items": { "$ref": "#/$defs/sha256" }, "uniqueItems": true },
+        "input_lock_sha256": { "$ref": "#/$defs/sha256" }
       }
     },
     "phase_catalog": {
@@ -90,10 +92,11 @@
     "sha256": { "type": "string", "pattern": "^[a-f0-9]{64}$" },
     "tool": {
       "type": "object",
-      "required": ["command", "version"],
+      "required": ["command", "version", "binary_sha256"],
       "properties": {
         "command": { "type": "string", "minLength": 1 },
-        "version": { "type": ["string", "null"] }
+        "version": { "type": ["string", "null"] },
+        "binary_sha256": { "type": ["string", "null"], "pattern": "^[a-f0-9]{64}$" }
       }
     },
     "phase_timings": {
