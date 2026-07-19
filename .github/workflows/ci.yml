@@ -139,9 +139,21 @@ jobs:
           node-version: 24.13.0
       - name: Test the 60-day evidence evaluator
         run: node scripts/validate-beta-ledger.mjs --self-test
+      - name: Test signed qualification ledgers and monitoring
+        run: |
+          node scripts/qualification-ledger.mjs --self-test
+          node scripts/monitor-qualification.mjs --self-test
+      - name: Install Linux containment dependency
+        run: sudo apt-get update && sudo apt-get install -y libseccomp-dev
+      - name: Build Oath for internal containment review
+        run: cargo build --locked --bin oath
+      - name: Run internal containment and adversarial review
+        run: node scripts/run-internal-containment-review.mjs --output internal-containment-review.json
+        env:
+          OATH_BIN: target/debug/oath
       - name: Build exact-commit external audit inputs
         run: |
-          node scripts/build-audit-bundle.mjs audit-dist
+          node scripts/build-audit-bundle.mjs audit-dist --internal-review internal-containment-review.json
           (cd audit-dist && sha256sum --check SHA256SUMS)
           tar -czf oath-audit-inputs.tar.gz -C audit-dist .
           sha256sum oath-audit-inputs.tar.gz > oath-audit-inputs.tar.gz.sha256
@@ -159,6 +171,7 @@ jobs:
             oath-audit-inputs.tar.gz
             oath-audit-inputs.tar.gz.sha256
             audit-dist/
+            internal-containment-review.json
 
   independent-behavioral:
     strategy:
@@ -181,12 +194,17 @@ jobs:
         run: node scripts/compat-behavioral.mjs --execute
         env:
           OATH_BIN: ${{ runner.os == 'Windows' && 'target/debug/oath.exe' || 'target/debug/oath' }}
-          OATH_COMPAT_RESULTS: compat-results/behavioral-${{ runner.os }}
+          OATH_COMPAT_RESULTS: compat-results/behavioral-${{ runner.os }}/install-ci
+      - name: Run full npm command-surface contract
+        run: node scripts/compat-command-surface.mjs --execute
+        env:
+          OATH_BIN: ${{ runner.os == 'Windows' && 'target/debug/oath.exe' || 'target/debug/oath' }}
+          OATH_COMPAT_RESULTS: compat-results/behavioral-${{ runner.os }}/command-surface
       - uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7
         if: always()
         with:
           name: compatibility-independent-behavioral-${{ runner.os }}-node-${{ matrix.node }}
-          path: compat-results/behavioral-${{ runner.os }}/behavioral-summary.json
+          path: compat-results/behavioral-${{ runner.os }}/
 
   npm-reference-canary:
     continue-on-error: true

@@ -27,7 +27,7 @@ const reports = await Promise.all((await filesUnder(input)).map(async (path) => 
 const commands = reports.flatMap((report) => report.results.map((result) => ({
   case: result.id,
   command: result.command,
-  args: [],
+  args: result.args ?? [],
   platform: report.platform,
   node_version: report.node_version,
   npm_exit_code: result.npm?.status ?? null,

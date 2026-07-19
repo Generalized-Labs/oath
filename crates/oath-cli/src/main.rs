@@ -1523,6 +1523,29 @@ async fn cmd_ci() -> Result<()> {
     let start = Instant::now();
     let lock_path = PathBuf::from("oath-lock.json");
     if !lock_path.exists() {
+        if PathBuf::from("package-lock.json").exists() {
+            let node_modules = PathBuf::from("node_modules");
+            if node_modules.exists() {
+                std::fs::remove_dir_all(&node_modules)
+                    .context("failed to clean node_modules before npm lockfile import")?;
+            }
+            return cmd_install(
+                Vec::new(),
+                false,
+                false,
+                true,
+                false,
+                false,
+                true,
+                false,
+                false,
+                None,
+                true,
+                WorkspaceArgs::default(),
+                None,
+            )
+            .await;
+        }
         anyhow::bail!("no lockfile found, run oath install first");
     }
 
@@ -1624,7 +1647,9 @@ async fn cmd_install_workspace(
 
     if external_deps.is_empty() && workspace_links.is_empty() {
         println!("  nothing to install");
-        return Ok(());
+        if dry_run {
+            return Ok(());
+        }
     }
 
     if dry_run {
@@ -1642,6 +1667,30 @@ async fn cmd_install_workspace(
     }
 
     println!("  planning npm-compatible workspace layout with Arborist...");
+    let selected_names = ws
+        .packages
+        .iter()
+        .map(|package| package.name.as_str())
+        .collect::<HashSet<_>>();
+    // Arborist may create workspace symlinks while constructing its ideal tree.
+    // Snapshot links that genuinely predated planning so a filtered operation
+    // preserves earlier unselected installs without treating planner side effects
+    // as pre-existing state.
+    let preserved_unselected_links = if filtered {
+        detect_workspace_root(&ws.root)
+            .map(|all_workspaces| {
+                all_workspaces
+                    .packages
+                    .iter()
+                    .filter(|package| !selected_names.contains(package.name.as_str()))
+                    .map(|package| format!("node_modules/{}", package.name))
+                    .filter(|location| ws.root.join(location).symlink_metadata().is_ok())
+                    .collect::<HashSet<_>>()
+            })
+            .unwrap_or_default()
+    } else {
+        HashSet::new()
+    };
     let mut request =
         update_packages.map_or_else(PlacementRequest::default, PlacementRequest::update);
     request.workspaces = if filtered {
@@ -1650,6 +1699,16 @@ async fn cmd_install_workspace(
         Vec::new()
     };
     let mut placement_plan = ArboristPlanner::plan_with(&ws.root, &request)?;
+    if filtered {
+        placement_plan.nodes.retain(|node| {
+            !node.link
+                || selected_names.contains(node.name.as_str())
+                || preserved_unselected_links.contains(&node.location)
+        });
+        placement_plan
+            .removed_locations
+            .retain(|location| !preserved_unselected_links.contains(location));
+    }
     hydrate_missing_registry_metadata(&mut placement_plan).await?;
     let graph = placement_plan.to_dep_graph()?;
     let empty_dev_deps: HashMap<String, String> = HashMap::new();
@@ -1996,7 +2055,7 @@ async fn cmd_add_scoped(
             .context("dependency group must be an object")?;
         for package in &packages {
             let (name, version) = parse_package_spec(package);
-            dependencies.insert(name, serde_json::Value::String(version));
+            dependencies.insert(name, serde_json::Value::String(npm_save_spec(&version)));
         }
         Ok(())
     })?;
@@ -3393,6 +3452,14 @@ fn parse_package_spec(spec: &str) -> (String, String) {
     (spec.to_string(), "latest".to_string())
 }
 
+fn npm_save_spec(requested: &str) -> String {
+    if requested.parse::<node_semver::Version>().is_ok() {
+        format!("^{requested}")
+    } else {
+        requested.to_string()
+    }
+}
+
 fn dependency_manifest_spec(pkg_name: &str, requested_spec: &str, graph: &DepGraph) -> String {
     if requested_spec.starts_with("npm:") || is_git_like_spec(requested_spec) {
         return requested_spec.to_string();
@@ -4727,15 +4794,20 @@ fn cmd_pack_scoped(
         return cmd_pack(destination, dry_run, json_output);
     }
     let targets = selected_workspace_targets(workspace)?;
-    anyhow::ensure!(
-        !json_output || targets.len() == 1,
-        "--json requires exactly one selected workspace"
-    );
     let destination = if destination.is_absolute() {
         destination.to_path_buf()
     } else {
         std::env::current_dir()?.join(destination)
     };
+    if json_output {
+        let mut reports = Vec::with_capacity(targets.len());
+        for target in targets {
+            let _guard = CurrentDirectoryGuard::enter(&target.path)?;
+            reports.push(pack_report(&destination, dry_run)?);
+        }
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+        return Ok(());
+    }
     for target in targets {
         println!("oath: workspace {}", target.name);
         let _guard = CurrentDirectoryGuard::enter(&target.path)?;
@@ -4745,6 +4817,18 @@ fn cmd_pack_scoped(
 }
 
 fn cmd_pack(destination: &std::path::Path, dry_run: bool, json_output: bool) -> Result<()> {
+    let report = pack_report(destination, dry_run)?;
+    if json_output {
+        println!("{}", serde_json::to_string_pretty(&report)?);
+    } else if dry_run {
+        println!("{}", report["filename"].as_str().unwrap_or("package.tgz"));
+    } else {
+        println!("{}", report["path"].as_str().unwrap_or_default());
+    }
+    Ok(())
+}
+
+fn pack_report(destination: &std::path::Path, dry_run: bool) -> Result<serde_json::Value> {
     use sha2::{Digest, Sha256};
 
     let manifest = read_package_json()?;
@@ -4777,26 +4861,25 @@ fn cmd_pack(destination: &std::path::Path, dry_run: bool, json_output: bool) -> 
         std::fs::write(&output, &tarball)
             .with_context(|| format!("write package tarball {}", output.display()))?;
     }
-    if json_output {
-        println!(
-            "{}",
-            serde_json::to_string_pretty(&serde_json::json!({
-                "schema_version": 1,
-                "name": name,
-                "version": version,
-                "filename": filename,
-                "path": output,
-                "bytes": tarball.len(),
-                "sha256": digest,
-                "dry_run": dry_run,
-            }))?
-        );
-    } else if dry_run {
-        println!("{filename}");
-    } else {
-        println!("{}", output.display());
-    }
-    Ok(())
+    let files = npm_authoritative_packlist(&std::env::current_dir()?)?
+        .into_iter()
+        .filter_map(|path| {
+            path.strip_prefix(std::env::current_dir().ok()?)
+                .ok()
+                .map(|relative| serde_json::json!({ "path": relative.to_string_lossy() }))
+        })
+        .collect::<Vec<_>>();
+    Ok(serde_json::json!({
+        "schema_version": 1,
+        "name": name,
+        "version": version,
+        "filename": filename,
+        "path": output,
+        "bytes": tarball.len(),
+        "sha256": digest,
+        "dry_run": dry_run,
+        "files": files,
+    }))
 }
 
 #[derive(Debug, serde::Serialize)]
@@ -6065,12 +6148,49 @@ async fn cmd_publish_scoped(
         return cmd_publish(tag, access, dry_run, json, schema_version, stage).await;
     }
     let targets = selected_workspace_targets(workspace)?;
-    anyhow::ensure!(
-        !json || targets.len() == 1,
-        "--json requires exactly one selected workspace"
-    );
+    if json && targets.len() > 1 {
+        anyhow::ensure!(
+            dry_run,
+            "oath publish --json is an assessment-only interface and requires --dry-run"
+        );
+        let executable = std::env::current_exe().context("failed to locate the Oath executable")?;
+        let mut reports = Vec::with_capacity(targets.len());
+        for target in targets {
+            let mut command = std::process::Command::new(&executable);
+            command
+                .args(["publish", "--dry-run", "--json", "--schema-version"])
+                .arg(schema_version.to_string())
+                .current_dir(&target.path);
+            if let Some(tag) = tag {
+                command.args(["--tag", tag]);
+            }
+            if let Some(access) = access {
+                command.args(["--access", access]);
+            }
+            if stage {
+                command.arg("--stage");
+            }
+            let output = command
+                .output()
+                .with_context(|| format!("failed to assess workspace {}", target.name))?;
+            anyhow::ensure!(
+                output.status.success(),
+                "workspace {} publish failed: {}",
+                target.name,
+                String::from_utf8_lossy(&output.stderr)
+            );
+            reports.push(
+                serde_json::from_slice::<serde_json::Value>(&output.stdout)
+                    .with_context(|| format!("workspace {} emitted invalid JSON", target.name))?,
+            );
+        }
+        println!("{}", serde_json::to_string_pretty(&reports)?);
+        return Ok(());
+    }
     for target in targets {
-        println!("oath: workspace {}", target.name);
+        if !json {
+            println!("oath: workspace {}", target.name);
+        }
         let _guard = CurrentDirectoryGuard::enter(&target.path)?;
         cmd_publish(tag, access, dry_run, json, schema_version, stage)
             .await
@@ -7137,6 +7257,15 @@ mod tests {
                 panic!("failed to parse {command:?}: {error}");
             });
         }
+    }
+
+    #[test]
+    fn exact_versions_use_npm_default_save_prefix() {
+        assert_eq!(npm_save_spec("1.2.3"), "^1.2.3");
+        assert_eq!(npm_save_spec("1.2.3-beta.1"), "^1.2.3-beta.1");
+        assert_eq!(npm_save_spec("^1.2.3"), "^1.2.3");
+        assert_eq!(npm_save_spec("latest"), "latest");
+        assert_eq!(npm_save_spec("workspace:*"), "workspace:*");
     }
 
     #[test]

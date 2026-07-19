@@ -39,6 +39,7 @@ const evidenceSchemas = [
   ["performance-evidence-v1.schema.json", 1],
   ["performance-evidence-v2.schema.json", 2],
   ["production-deployment-evidence-v1.schema.json", 1],
+  ["qualification-ledger-v1.schema.json", 1],
   ["registry-replication-event-v1.schema.json", 1],
   ["transparency-checkpoint-v3.schema.json", 3],
 ];

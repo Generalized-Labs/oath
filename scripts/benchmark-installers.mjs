@@ -2,10 +2,11 @@
 import { createHash } from "node:crypto";
 import { spawnSync } from "node:child_process";
 import { existsSync, readFileSync, rmSync } from "node:fs";
-import { cp, mkdtemp, mkdir, readdir, rm, writeFile } from "node:fs/promises";
+import { cp, mkdtemp, mkdir, rm, writeFile } from "node:fs/promises";
 import { arch, cpus, freemem, homedir, hostname, platform, release, tmpdir, totalmem } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
+import { installedTree } from "./tree-evidence.mjs";
 
 const DEFAULT_MANIFEST = {
   name: "oath-installer-benchmark",
@@ -234,22 +235,7 @@ function run(command, args, cwd, home, timeoutMs, cacheState, sampleIndex) {
 }
 
 async function treeDigest(dir) {
-  const entries = [];
-  async function walk(path, prefix = "") {
-    let children;
-    try {
-      children = await readdir(path, { withFileTypes: true });
-    } catch {
-      return;
-    }
-    for (const child of children.sort((a, b) => a.name.localeCompare(b.name))) {
-      if ([".bin", ".cache", ".oath"].includes(child.name)) continue;
-      const relative = join(prefix, child.name);
-      entries.push(`${child.isDirectory() ? "d" : "f"}:${relative}`);
-      if (child.isDirectory()) await walk(join(path, child.name), relative);
-    }
-  }
-  await walk(join(dir, "node_modules"));
+  const entries = await installedTree(join(dir, "node_modules"));
   return { entries: entries.length, sha256: createHash("sha256").update(entries.join("\n")).digest("hex") };
 }
 

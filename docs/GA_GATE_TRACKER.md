@@ -18,7 +18,8 @@ qualification window unless it changes the deployed Registry contract.
 | Detection quality | `DetectionEvidenceReport v2` producer and fail-closed aggregator implemented; historical quality still failing | Qualifying frozen malware/private holdout/benign/exfiltration run with corpus digests, exclusions, confidence intervals, and independent holdout custody |
 | Native containment | Fail-closed selection implemented; native evidence partial | Zero escapes/leaks/writes/connections/bypasses on every supported OS and external corpus |
 | Performance | `PerformanceEvidence v2`, twelve install phases, verified warm no-op, and checksum-verified persistent planner runtime implemented; cross-platform qualification remains open | Exact-commit Linux/macOS/Windows p50/p95 cold/warm/no-op/assessment/exec reports with 200/1,000 required samples, equivalent trees, and accepted phase baseline |
-| npm/npx command surface | Machine-readable manifest and `CompatibilityEvidence v1` implemented; every required command is exposed, including verified token and interactive web/legacy login, server-side logout revocation, development linking, and transactional name/path/parent workspace filters for install, run, add, remove, update, exec, pack, and publish | Produce Node 22/24 × Linux/macOS/Windows differential evidence for every command with zero unexplained differences |
+| npm/npx command surface | Machine-readable manifest, `CompatibilityEvidence v1`, and a 55-case executable command/workspace differential suite are implemented; exact cross-platform qualification remains open | Produce Node 22/24 × Linux/macOS/Windows differential evidence for every command with zero unexplained differences |
+| CLI RC window | Signed exact-candidate ledger, prerequisite enforcement, reset rules, and freshness monitor implemented; no real window started | Thirty consecutive public RC days on the exact signed candidate, with daily checksummed observations and no reset-triggering change |
 
 ## Registry track
 
@@ -32,6 +33,7 @@ qualification window unless it changes the deployed Registry contract.
 | Independent security | Checksum-locked audit input bundle ready; reviews open | Architecture review, penetration test, and sandbox escape review with no unresolved high/critical findings |
 | Legal/compliance | Open | Approved and effective documents listed in `LEGAL_READINESS.md` |
 | Customer validation | Open | 50 accepted partners, required active teams/tenants/publishers, retention/conversion/margin metrics, ten verified replacements |
+| Registry production window | Signed exact-deployment ledger, prerequisite enforcement, reset rules, and freshness monitor implemented; no real window started | Sixty consecutive production days on the exact signed candidate after all hosted and external prerequisites pass |
 
 The GA evidence generator now emits independent `release_tracks.cli` and
 `release_tracks.registry` results while retaining the conservative aggregate
