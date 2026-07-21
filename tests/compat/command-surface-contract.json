@@ -1,0 +1,69 @@
+{
+  "schema_version": 1,
+  "description": "Executable npm/Oath command-surface and workspace-selector differential contract.",
+  "commands": [
+    "install",
+    "ci",
+    "add",
+    "remove",
+    "update",
+    "run",
+    "exec",
+    "pack",
+    "publish",
+    "view",
+    "ls",
+    "outdated",
+    "dedupe",
+    "link",
+    "unlink",
+    "cache",
+    "config",
+    "login",
+    "logout",
+    "whoami"
+  ],
+  "workspace_commands": ["add", "remove", "update", "exec", "pack", "publish"],
+  "workspace_forms": [
+    {
+      "id": "short-name",
+      "args": ["-w", "@oath-compat/a"],
+      "selected": ["@oath-compat/a"]
+    },
+    {
+      "id": "long-path",
+      "args": ["--workspace", "packages/a"],
+      "selected": ["@oath-compat/a"]
+    },
+    {
+      "id": "parent-directory",
+      "args": ["--workspace", "packages"],
+      "selected": ["@oath-compat/a", "@oath-compat/b"]
+    },
+    {
+      "id": "all",
+      "args": ["--workspaces"],
+      "selected": ["@oath-compat/a", "@oath-compat/b"]
+    },
+    {
+      "id": "include-root",
+      "args": ["--workspaces", "--include-workspace-root"],
+      "selected": ["@oath-compat/a", "@oath-compat/b", "@oath-compat/root"]
+    },
+    {
+      "id": "repeated",
+      "args": ["--workspace", "@oath-compat/a", "--workspace", "@oath-compat/b"],
+      "selected": ["@oath-compat/a", "@oath-compat/b"]
+    }
+  ],
+  "comparison_boundaries": [
+    "exit-code",
+    "manifest-state",
+    "installed-tree",
+    "workspace-selection",
+    "executable-resolution",
+    "pack-file-list",
+    "registry-auth-request",
+    "credential-removal"
+  ]
+}

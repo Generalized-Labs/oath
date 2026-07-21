@@ -5,11 +5,14 @@ exec, workspaces, lockfile import, registry authentication, peer dependencies,
 overrides, aliases, git/file/tarball dependencies, lifecycle behavior, and exit
 status. Registry administration commands are outside this contract.
 
-`scripts/npm-parity.mjs` is the executable differential specification. It runs
-the same fixture in isolated temporary directories and emits a versioned JSON
-artifact containing the pinned npm version, command results, normalized
-`node_modules` trees, and equivalence decision. Differences are failures unless
-documented as intentional security divergences with a stable Oath reason code.
+`scripts/npm-parity.mjs` covers deep install materialization. The independent
+`scripts/compat-behavioral.mjs` suite covers install/ci workflow states, while
+`scripts/compat-command-surface.mjs` executes all 19 GA commands plus six
+workspace-filter forms for add, remove, update, exec, pack, and publish: 55
+command-surface cases in total. Each runs npm and Oath in isolated twins and
+records versions, arguments, command results, normalized state, authentication
+requests, and equivalence. Differences fail unless documented as intentional
+security divergences with a stable Oath reason code.
 
 The semantic tree comparison follows package links and excludes npm's
 `.package-lock.json` plus Oath's `.oath` content-addressed implementation data.

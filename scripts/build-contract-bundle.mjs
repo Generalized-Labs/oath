@@ -31,6 +31,19 @@ const examples = [
   "publish-assessment-v2.signed.json",
   "registry-verdict-v1.signed.json",
 ];
+const evidenceSchemas = [
+  ["compatibility-evidence-v1.schema.json", 1],
+  ["detection-evidence-v2.schema.json", 2],
+  ["independent-audit-report-v1.schema.json", 1],
+  ["operational-drill-report-v2.schema.json", 2],
+  ["performance-evidence-v1.schema.json", 1],
+  ["performance-evidence-v2.schema.json", 2],
+  ["production-deployment-evidence-v1.schema.json", 1],
+  ["qualification-ledger-v1.schema.json", 1],
+  ["registry-replication-event-v1.schema.json", 1],
+  ["transparency-checkpoint-v3.schema.json", 3],
+];
+const compatibilityManifest = "npm-compatibility-manifest-v1.json";
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -83,6 +96,15 @@ for (const [name, version, expectedCodes] of schemas) {
   files.push(await copy(`contracts/${name}`, `schemas/${name}`));
 }
 
+for (const [name, version] of evidenceSchemas) {
+  const schema = JSON.parse(await readFile(join(root, "contracts", name), "utf8"));
+  if (schema.$schema !== "https://json-schema.org/draft/2020-12/schema" ||
+      schema.properties?.schema_version?.const !== version || schema.additionalProperties !== false) {
+    throw new Error(`${name}: invalid closed evidence contract`);
+  }
+  files.push(await copy(`contracts/${name}`, `schemas/${name}`));
+}
+
 for (const name of examples) {
   const example = JSON.parse(await readFile(join(root, "contracts", "examples", name), "utf8"));
   if (example.signature?.algorithm !== "ed25519" || example.signature?.canonicalization !== "oath-json-v1") {
@@ -90,6 +112,8 @@ for (const name of examples) {
   }
   files.push(await copy(`contracts/examples/${name}`, `examples/${name}`));
 }
+
+files.push(await copy(`contracts/${compatibilityManifest}`, `manifests/${compatibilityManifest}`));
 
 files.push(await copy("contracts/oath-contracts.ts", "types/oath-contracts.ts"));
 for (const [source, destination] of [
@@ -112,16 +136,29 @@ const commit = process.env.OATH_CONTRACT_COMMIT
   ?? process.env.GITHUB_SHA
   ?? execFileSync("git", ["rev-parse", "HEAD"], { cwd: root, encoding: "utf8" }).trim();
 if (!/^[0-9a-f]{40}$/.test(commit)) throw new Error(`invalid contract commit: ${commit}`);
+const workingTreeStatus = execFileSync(
+  "git",
+  ["status", "--porcelain", "--", "contracts", "scripts/build-contract-bundle.mjs"],
+  { cwd: root, encoding: "utf8" },
+).trim();
+const sourceTreeClean = workingTreeStatus.length === 0;
+if (!sourceTreeClean && process.env.OATH_CONTRACT_ALLOW_DIRTY !== "1") {
+  throw new Error("contract inputs differ from the recorded commit; commit them or set OATH_CONTRACT_ALLOW_DIRTY=1 for a non-release local bundle");
+}
 
 const manifest = {
   schema_version: 1,
   bundle: "oath-agent-contracts",
   source_commit: commit,
+  source_tree_clean: sourceTreeClean,
   contract_versions: {
     ExecAssessment: 3,
     PublishAssessment: 2,
     RegistryVerdict: 1,
   },
+  evidence_contract_versions: Object.fromEntries(
+    evidenceSchemas.map(([name, version]) => [name.replace(".schema.json", ""), version]),
+  ),
   signature: {
     document_algorithm: "ed25519",
     canonicalization: "oath-json-v1",

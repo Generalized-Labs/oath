@@ -73,3 +73,6 @@ anti-squatting governance, external security review, reliability SLOs, and
 commercial adoption gates in [RELEASE_COMPLETE_PLAN.md](RELEASE_COMPLETE_PLAN.md)
 remain open. `v0.2.5` must be described as a developer preview or private beta,
 not a production-wide npm replacement.
+
+The measurable product boundary, named `2x better` gates, and critical path are
+tracked in [SOTA_REPLACEMENT_ROADMAP.md](SOTA_REPLACEMENT_ROADMAP.md).
