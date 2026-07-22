@@ -9,6 +9,7 @@ use crate::graph::{DepGraph, DepNode};
 
 pub const PLACEMENT_PLAN_VERSION: u32 = 2;
 const PLANNER: &str = include_str!("arborist-plan.cjs");
+const QUERY: &str = include_str!("arborist-query.cjs");
 const NPM_REFERENCE_VERSION: &str = "11.12.1";
 const ARBORIST_VERSION: &str = "9.4.2";
 const INSTALL_CHECKS_VERSION: &str = "8.0.0";
@@ -45,6 +46,8 @@ pub struct PlacementNode {
     pub integrity: Option<String>,
     pub dev: bool,
     pub optional: bool,
+    #[serde(default)]
+    pub peer: bool,
     pub has_install_script: bool,
     #[serde(default)]
     pub reuse_existing: bool,
@@ -159,6 +162,8 @@ pub struct PlacementRequest {
     pub save_type: Option<String>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub workspaces: Vec<String>,
+    #[serde(default)]
+    pub prefer_dedupe: bool,
 }
 
 impl PlacementRequest {
@@ -241,6 +246,27 @@ impl ArboristPlanner {
         hydrate_from_persisted_plan(project, &mut plan);
         validate_locations(&plan)?;
         Ok(plan)
+    }
+
+    /// Evaluate npm's complete dependency-selector language against Oath's
+    /// materialized tree using the integrity-pinned Arborist runtime.
+    pub fn query(project: &Path, selector: &str) -> Result<serde_json::Value> {
+        let runtime = BundledRuntime::extract()?;
+        let script = tempfile::NamedTempFile::new().context("create Arborist query script")?;
+        std::fs::write(script.path(), QUERY)?;
+        let output = std::process::Command::new("node")
+            .arg(script.path())
+            .arg(node_process_path(project))
+            .arg(selector)
+            .env("OATH_ARBORIST_PATH", runtime.arborist_path())
+            .output()
+            .context("launch Arborist dependency query")?;
+        anyhow::ensure!(
+            output.status.success(),
+            "dependency query failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        serde_json::from_slice(&output.stdout).context("decode Arborist query result")
     }
 }
 
@@ -328,6 +354,62 @@ pub fn pinned_npm_cli_path() -> Result<std::path::PathBuf> {
     let path = runtime.package_root.join("bin").join("npm-cli.js");
     anyhow::ensure!(path.is_file(), "pinned npm CLI entrypoint is missing");
     Ok(path)
+}
+
+/// Return integrity-verified npm library entrypoints used for Sigstore
+/// provenance generation and npm package-URL normalization.
+pub fn pinned_npm_provenance_paths() -> Result<(std::path::PathBuf, std::path::PathBuf)> {
+    let runtime = BundledRuntime::extract()?;
+    let provenance = runtime
+        .package_root
+        .join("node_modules/libnpmpublish/lib/provenance.js");
+    let package_arg = runtime.package_root.join("node_modules/npm-package-arg");
+    anyhow::ensure!(
+        provenance.is_file(),
+        "pinned npm provenance module is missing"
+    );
+    anyhow::ensure!(
+        package_arg.is_dir(),
+        "pinned npm package-arg module is missing"
+    );
+    Ok((provenance, package_arg))
+}
+
+/// Create npm-compatible package executable links. Windows requires cmd-shim
+/// wrappers rather than privileged file symlinks.
+pub fn link_package_binary(from: &Path, to: &Path) -> Result<()> {
+    #[cfg(unix)]
+    {
+        std::os::unix::fs::symlink(from, to)?;
+        Ok(())
+    }
+    #[cfg(windows)]
+    {
+        let runtime = BundledRuntime::extract()?;
+        let cmd_shim = runtime.package_root.join("node_modules/cmd-shim");
+        anyhow::ensure!(cmd_shim.is_dir(), "pinned npm cmd-shim module is missing");
+        let source = if from.is_absolute() {
+            from.to_path_buf()
+        } else {
+            to.parent().context("binary link has no parent")?.join(from)
+        };
+        let output = std::process::Command::new("node")
+            .args([
+                "-e",
+                "require(process.argv[1])(process.argv[2], process.argv[3]).catch(e=>{console.error(e.stack||e);process.exit(1)})",
+            ])
+            .arg(cmd_shim)
+            .arg(source)
+            .arg(to)
+            .output()
+            .context("launch npm cmd-shim")?;
+        anyhow::ensure!(
+            output.status.success(),
+            "npm cmd-shim failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        );
+        Ok(())
+    }
 }
 
 impl BundledRuntime {
@@ -607,6 +689,7 @@ mod tests {
                 integrity: None,
                 dev: false,
                 optional: false,
+                peer: false,
                 has_install_script: false,
                 reuse_existing: false,
                 link: false,

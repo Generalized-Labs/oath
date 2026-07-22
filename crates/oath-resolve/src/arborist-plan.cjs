@@ -37,6 +37,7 @@ async function main () {
     ignoreScripts: true,
     legacyPeerDeps: boolOption('legacy-peer-deps'),
     strictPeerDeps: boolOption('strict-peer-deps'),
+    preferDedupe: Boolean(request.prefer_dedupe) || boolOption('prefer-dedupe'),
     // npm 11 defaults install-links to false: local directory dependencies
     // remain links unless the project explicitly opts into packed installs.
     installLinks: boolOption('install-links', false)
@@ -76,6 +77,7 @@ async function main () {
       integrity: node.integrity ? String(node.integrity) : null,
       dev: Boolean(node.dev),
       optional: Boolean(node.optional),
+      peer: Boolean(node.peer),
       has_install_script: Boolean(node.package.scripts && (
         node.package.scripts.preinstall ||
         node.package.scripts.install ||
