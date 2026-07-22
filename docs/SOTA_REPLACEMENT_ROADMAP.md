@@ -128,8 +128,8 @@ security work, not headline timings from different semantics.
 
 ### P2: finish daily package-manager ergonomics
 
-Deliver the missing high-frequency commands and flags in order of partner usage,
-not npm's alphabetical command list. The initial tranche is `pack`, `outdated`,
+Maintain high-frequency commands and flags in order of partner usage,
+not npm's alphabetical command list. The completed local tranche includes `pack`, `outdated`,
 `ls`, `view`, workspace filters, production/omit modes, lockfile-only installs,
 cache management, config inspection, login/whoami, versioning, linking, and
 deduplication. Every command needs:
@@ -159,17 +159,18 @@ ten partners confirm a production workflow replacement.
    smoke tests.
 2. **Compatibility completion.** The required command surface, development
    linking, cache/config/auth commands, and transactional workspace selectors
-   across install, run, mutation, exec, pack, and publish are implemented. Extend the
-   Node 22/24 × three-OS differential evidence until the manifest has no gaps.
+   across install, run, mutation, exec, pack, and publish are implemented. The v2
+   manifest has no partial or missing implementation entries; complete the exact-head
+   Node 22/24 × three-OS differential qualification.
 3. **Registry beta hardening.** Complete RLS-bound request transactions, Redis
    rate limiting, isolated analysis/signing workers, KMS signing, and the
    single-region invite-beta deployment and restore drills.
 
 The earlier implementation order began with filters plus `pack`, `outdated`,
 `ls`, and `view`, chosen because they unblock real monorepo and migration
-workflows without widening the JavaScript-runtime boundary. Pack, view, and ls
-are complete; the remaining items stay fail-closed in
-`oath capabilities --json` and CompatibilityEvidence.
+workflows without widening the JavaScript-runtime boundary. The declared local
+command surface is complete; unsupported platform containment still stays
+fail-closed in `oath capabilities --json` and CompatibilityEvidence.
 
 These next slices remain ordered: close the declared CLI surface before CLI RC,
 then qualify the hosted Registry on its independent infrastructure timeline.

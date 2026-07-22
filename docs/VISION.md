@@ -17,8 +17,11 @@ risking the ecosystem.
 ## npm: what a better platform does
 - **Threshold revocation.** If a release has <100 installs or has been up <5h, the
   author can revoke it.
-- **Pay-to-audit every release.** Bring your own Anthropic key or a card; the platform
-  diffs every release and gives an AI "vibe check" on whether it's safe / intended.
+- **Free local assessment by default.** Oath's deterministic AST, capability,
+  integrity, and policy checks require no hosted model or API key. A future
+  model-assisted review layer must be provider-neutral: users choose OpenAI,
+  Anthropic, another compatible provider, or a local model. It remains optional
+  context and never replaces the fail-closed deterministic verdict.
 - **Real visibility & metadata** — on the site *and* in the CLI at install time:
   obfuscated vs readable, open-source or not, who published the last release,
   permissions, a risk score. The **is‑odd‑with‑a‑zero** problem: a malicious typosquat

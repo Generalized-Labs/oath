@@ -22,7 +22,7 @@ async function filesUnder(root) {
   return files.sort();
 }
 
-const manifest = JSON.parse(await readFile(new URL("../contracts/npm-compatibility-manifest-v1.json", import.meta.url), "utf8"));
+const manifest = JSON.parse(await readFile(new URL("../contracts/npm-compatibility-manifest-v2.json", import.meta.url), "utf8"));
 const reports = await Promise.all((await filesUnder(input)).map(async (path) => JSON.parse(await readFile(path, "utf8"))));
 const commands = reports.flatMap((report) => report.results.map((result) => ({
   case: result.id,
@@ -42,7 +42,10 @@ const nodeVersions = [...new Set(reports.map((report) => report.node_version))].
 const observedCommands = new Set(commands.filter((result) => result.equivalent).map((result) => result.command));
 const requiredCombinations = ["linux", "darwin", "win32"].flatMap((platform) => ["22", "24"].map((node) => `${platform}:${node}`));
 const observedCombinations = new Set(reports.map((report) => `${report.platform}:${String(report.node_version).replace(/^v/, "").split(".")[0]}`));
-const allRequiredCommands = manifest.ga_required_commands.every((command) => observedCommands.has(command));
+const requiredCommands = manifest.commands
+  .filter((command) => command.replacement_required)
+  .map((command) => command.name);
+const allRequiredCommands = requiredCommands.every((command) => observedCommands.has(command));
 const allRequiredCombinations = requiredCombinations.every((combination) => observedCombinations.has(combination));
 const npmVersions = [...new Set(reports.map((report) => report.reference_npm))];
 

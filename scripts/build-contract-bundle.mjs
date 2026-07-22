@@ -43,7 +43,10 @@ const evidenceSchemas = [
   ["registry-replication-event-v1.schema.json", 1],
   ["transparency-checkpoint-v3.schema.json", 3],
 ];
-const compatibilityManifest = "npm-compatibility-manifest-v1.json";
+const compatibilityManifests = [
+  "npm-compatibility-manifest-v1.json",
+  "npm-compatibility-manifest-v2.json",
+];
 
 function sha256(bytes) {
   return createHash("sha256").update(bytes).digest("hex");
@@ -113,7 +116,35 @@ for (const name of examples) {
   files.push(await copy(`contracts/examples/${name}`, `examples/${name}`));
 }
 
-files.push(await copy(`contracts/${compatibilityManifest}`, `manifests/${compatibilityManifest}`));
+for (const compatibilityManifest of compatibilityManifests) {
+  const manifest = JSON.parse(await readFile(join(root, "contracts", compatibilityManifest), "utf8"));
+  if (compatibilityManifest.endsWith("v2.json")) {
+    if (manifest.schema_version !== 2 || !Array.isArray(manifest.commands) || !manifest.commands.length) {
+      throw new Error(`${compatibilityManifest}: invalid command-surface manifest`);
+    }
+    const implementation = new Set(manifest.status_definitions?.implementation ?? []);
+    const evidence = new Set(manifest.status_definitions?.evidence ?? []);
+    const commandNames = manifest.commands.map(command => command.name);
+    if (new Set(commandNames).size !== commandNames.length) {
+      throw new Error(`${compatibilityManifest}: duplicate command names`);
+    }
+    for (const command of manifest.commands) {
+      if (!implementation.has(command.implementation) || !evidence.has(command.evidence)) {
+        throw new Error(`${compatibilityManifest}: invalid status for ${command.name}`);
+      }
+      const surfaceIds = (command.surfaces ?? []).map(surface => surface.id);
+      if (!surfaceIds.length || new Set(surfaceIds).size !== surfaceIds.length) {
+        throw new Error(`${compatibilityManifest}: invalid surfaces for ${command.name}`);
+      }
+      for (const surface of command.surfaces) {
+        if (!implementation.has(surface.implementation) || !evidence.has(surface.evidence)) {
+          throw new Error(`${compatibilityManifest}: invalid status for ${surface.id}`);
+        }
+      }
+    }
+  }
+  files.push(await copy(`contracts/${compatibilityManifest}`, `manifests/${compatibilityManifest}`));
+}
 
 files.push(await copy("contracts/oath-contracts.ts", "types/oath-contracts.ts"));
 for (const [source, destination] of [
